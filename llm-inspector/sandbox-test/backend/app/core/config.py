@@ -1,0 +1,75 @@
+"""
+Configuration — reads from environment variables or .env file.
+No external dependencies.
+"""
+import os
+import pathlib
+
+def _load_env_file():
+    """Load .env file if present."""
+    env_path = pathlib.Path(__file__).parent.parent.parent.parent / ".env"
+    if env_path.exists():
+        with open(env_path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+_load_env_file()
+
+
+class Settings:
+    # App
+    APP_ENV: str = os.getenv("APP_ENV", "development")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    HOST: str = os.getenv("HOST", "0.0.0.0")
+    PORT: int = int(os.getenv("PORT", "8000"))
+    CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+
+    # Database (SQLite for portability; swap DATABASE_URL for PostgreSQL)
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///./llm_inspector.db"
+    )
+
+    # Security
+    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")  # 32-byte base64; generated if missing
+    API_KEY_TTL_HOURS: int = int(os.getenv("API_KEY_TTL_HOURS", "72"))
+
+    # Request behaviour
+    DEFAULT_REQUEST_TIMEOUT_SEC: int = int(os.getenv("DEFAULT_REQUEST_TIMEOUT_SEC", "60"))
+    MAX_STREAM_CHUNKS: int = int(os.getenv("MAX_STREAM_CHUNKS", "512"))
+    INTER_REQUEST_DELAY_MS: int = int(os.getenv("INTER_REQUEST_DELAY_MS", "500"))
+
+    # Data retention
+    RAW_RESPONSE_TTL_DAYS: int = int(os.getenv("RAW_RESPONSE_TTL_DAYS", "7"))
+    STREAM_CHUNKS_TTL_DAYS: int = int(os.getenv("STREAM_CHUNKS_TTL_DAYS", "3"))
+
+    # Task backend (in-process thread pool when Celery unavailable)
+    USE_CELERY: bool = os.getenv("USE_CELERY", "false").lower() == "true"
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # Predetection
+    PREDETECT_CONFIDENCE_THRESHOLD: float = float(
+        os.getenv("PREDETECT_CONFIDENCE_THRESHOLD", "0.85")
+    )
+
+    def _ensure_encryption_key(self) -> bytes:
+        """Return 32-byte AES key, auto-generating one if not set."""
+        import base64, secrets
+        if self.ENCRYPTION_KEY:
+            raw = base64.b64decode(self.ENCRYPTION_KEY)
+            assert len(raw) == 32, "ENCRYPTION_KEY must decode to exactly 32 bytes"
+            return raw
+        # Dev fallback: generate deterministic key from hostname (NOT for production)
+        import hashlib, socket
+        seed = socket.gethostname().encode() + b"llm-inspector-dev-key"
+        return hashlib.sha256(seed).digest()
+
+    @property
+    def aes_key(self) -> bytes:
+        return self._ensure_encryption_key()
+
+
+settings = Settings()

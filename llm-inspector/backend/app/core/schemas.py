@@ -1,0 +1,206 @@
+"""
+Shared data structures — plain dataclasses, no Pydantic needed.
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any
+
+
+# ── LLM Adapter IO ────────────────────────────────────────────────────────────
+
+@dataclass
+class Message:
+    role: str    # "system" | "user" | "assistant"
+    content: str
+
+    def to_dict(self) -> dict:
+        return {"role": self.role, "content": self.content}
+
+
+@dataclass
+class LLMRequest:
+    model: str
+    messages: list[Message]
+    temperature: float = 0.0
+    max_tokens: int = 5
+    stream: bool = False
+    response_format: dict | None = None
+    tools: list[dict] | None = None
+    timeout_sec: int = 60
+    extra_params: dict = field(default_factory=dict)
+
+    def to_payload(self) -> dict:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [m.to_dict() for m in self.messages],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self.stream:
+            payload["stream"] = True
+        if self.response_format:
+            payload["response_format"] = self.response_format
+        if self.tools:
+            payload["tools"] = self.tools
+        payload.update(self.extra_params)
+        return payload
+
+
+@dataclass
+class LLMResponse:
+    content: str | None = None
+    raw_json: dict | None = None
+    status_code: int | None = None
+    headers: dict = field(default_factory=dict)
+    latency_ms: int | None = None
+    first_token_ms: int | None = None
+    finish_reason: str | None = None
+    usage_prompt_tokens: int | None = None
+    usage_completion_tokens: int | None = None
+    usage_total_tokens: int | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error_type is None and self.status_code == 200
+
+
+@dataclass
+class StreamChunk:
+    index: int
+    arrived_at_ms: int
+    raw_line: str
+    delta_text: str | None = None
+    finish_reason: str | None = None
+
+
+@dataclass
+class StreamCaptureResult:
+    chunks: list[StreamChunk] = field(default_factory=list)
+    combined_text: str = ""
+    latency_ms: int = 0
+    first_token_ms: int | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    truncated: bool = False
+
+
+# ── Test Case ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class TestCase:
+    id: str
+    category: str
+    name: str
+    user_prompt: str
+    expected_type: str
+    judge_method: str
+    system_prompt: str | None = None
+    params: dict = field(default_factory=dict)
+    max_tokens: int = 5
+    n_samples: int = 1
+    temperature: float = 0.0
+    weight: float = 1.0
+    enabled: bool = True
+    suite_version: str = "v1"
+    note: str = ""
+
+
+@dataclass
+class SampleResult:
+    sample_index: int
+    response: LLMResponse
+    judge_passed: bool | None = None
+    judge_detail: dict = field(default_factory=dict)
+
+
+@dataclass
+class CaseResult:
+    case: TestCase
+    samples: list[SampleResult] = field(default_factory=list)
+
+    @property
+    def pass_rate(self) -> float:
+        judged = [s for s in self.samples if s.judge_passed is not None]
+        if not judged:
+            return 0.0
+        return sum(1 for s in judged if s.judge_passed) / len(judged)
+
+    @property
+    def mean_latency_ms(self) -> float | None:
+        lats = [s.response.latency_ms for s in self.samples if s.response.latency_ms]
+        return sum(lats) / len(lats) if lats else None
+
+
+# ── Pre-Detection ─────────────────────────────────────────────────────────────
+
+@dataclass
+class LayerResult:
+    layer: str
+    confidence: float
+    identified_as: str | None
+    evidence: list[str] = field(default_factory=list)
+    tokens_used: int = 0
+
+
+@dataclass
+class PreDetectionResult:
+    success: bool
+    identified_as: str | None
+    confidence: float
+    layer_stopped: str | None
+    layer_results: list[LayerResult] = field(default_factory=list)
+    total_tokens_used: int = 0
+    should_proceed_to_testing: bool = True
+
+    def to_dict(self) -> dict:
+        return {
+            "success": self.success,
+            "identified_as": self.identified_as,
+            "confidence": round(self.confidence, 3),
+            "layer_stopped": self.layer_stopped,
+            "total_tokens_used": self.total_tokens_used,
+            "should_proceed_to_testing": self.should_proceed_to_testing,
+            "layer_results": [
+                {
+                    "layer": r.layer,
+                    "confidence": round(r.confidence, 3),
+                    "identified_as": r.identified_as,
+                    "evidence": r.evidence,
+                    "tokens_used": r.tokens_used,
+                }
+                for r in self.layer_results
+            ],
+        }
+
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Scores:
+    protocol_score: float = 0.0
+    instruction_score: float = 0.0
+    system_obedience_score: float = 0.0
+    param_compliance_score: float = 0.0
+
+
+@dataclass
+class SimilarityResult:
+    benchmark_name: str
+    similarity_score: float
+    ci_95_low: float
+    ci_95_high: float
+    rank: int
+
+
+@dataclass
+class RiskAssessment:
+    level: str          # "low" | "medium" | "high" | "very_high"
+    label: str
+    reasons: list[str] = field(default_factory=list)
+    disclaimer: str = (
+        "风险评级仅反映行为相似程度，不构成底层来源的确定性证明。"
+        " / Risk level reflects behavioural similarity only and does not constitute "
+        "definitive proof of the underlying model's origin."
+    )

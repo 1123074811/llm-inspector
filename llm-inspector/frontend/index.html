@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>LLM Inspector</title>
+<style>
+:root{
+  --bg:#faf9f6;--bg2:#f2f0ea;--card:#fff;
+  --ink:#1a1a1a;--ink2:#3d3d3a;--ink3:#6b6b66;--ink4:#9b9b94;
+  --rule:#e2e0d8;--rule2:#cccac0;
+  --accent:#c8401a;--accent-bg:#fdf0ea;--accent-border:#f0c8a8;
+  --blue:#1a4a8a;--blue-bg:#eef3fa;
+  --green:#1a6040;--green-bg:#eaf5ee;
+  --amber:#7a4a00;--amber-bg:#fdf5e0;
+  --red:#8a1a1a;--red-bg:#faeaea;
+  --mono:'Courier New',monospace;
+  --radius:8px;--radius-lg:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  font-size:14px;line-height:1.6;color:var(--ink);background:var(--bg);min-height:100vh}
+
+/* NAV */
+nav{background:var(--ink);padding:0 32px;display:flex;align-items:center;gap:24px;height:52px;position:sticky;top:0;z-index:100}
+.nav-brand{color:#f5f3ee;font-weight:700;font-size:15px;cursor:pointer;letter-spacing:-.3px}
+.nav-brand span{color:#e8a068}
+.nav-link{color:#a8a49c;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:color .15s}
+.nav-link:hover,.nav-link.active{color:#f5f3ee}
+.nav-spacer{flex:1}
+.nav-status{font-family:var(--mono);font-size:10px;color:#5a5650;letter-spacing:.08em}
+
+/* LAYOUT */
+.page{display:none;max-width:880px;margin:0 auto;padding:32px 32px 80px}
+.page.active{display:block}
+
+/* TYPOGRAPHY */
+h1{font-size:26px;font-weight:700;color:var(--ink);margin-bottom:6px}
+h2{font-size:18px;font-weight:600;color:var(--ink);margin-bottom:12px}
+h3{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.subtitle{font-size:14px;color:var(--ink3);margin-bottom:28px}
+
+/* CARDS */
+.card{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-lg);padding:20px 24px;margin-bottom:16px}
+.card-label{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink4);text-transform:uppercase;margin-bottom:6px}
+
+/* FORM */
+.form-group{margin-bottom:18px}
+.form-group label{display:block;font-size:13px;font-weight:500;color:var(--ink2);margin-bottom:6px}
+.form-group input,.form-group select{width:100%;padding:9px 12px;border:1px solid var(--rule2);border-radius:var(--radius);font-size:13px;color:var(--ink);background:var(--card);outline:none;transition:border-color .15s}
+.form-group input:focus,.form-group select:focus{border-color:var(--ink3)}
+.form-hint{font-size:11px;color:var(--ink4);margin-top:4px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border:1px solid var(--rule2);border-radius:var(--radius);font-size:13px;font-weight:500;cursor:pointer;background:var(--card);color:var(--ink2);transition:all .15s}
+.btn:hover{background:var(--bg2);border-color:var(--ink4)}
+.btn.primary{background:var(--ink);color:#f5f3ee;border-color:var(--ink)}
+.btn.primary:hover{background:#333}
+.btn.danger{background:var(--red-bg);color:var(--red);border-color:#f0b8b8}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* BADGES */
+.badge{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:3px;font-weight:500;border:1px solid;vertical-align:middle}
+.badge-green{background:var(--green-bg);color:var(--green);border-color:#a0d8b8}
+.badge-red{background:var(--red-bg);color:var(--red);border-color:#f0b8b8}
+.badge-amber{background:var(--amber-bg);color:var(--amber);border-color:#e8d088}
+.badge-blue{background:var(--blue-bg);color:var(--blue);border-color:#a0c0e8}
+.badge-gray{background:var(--bg2);color:var(--ink3);border-color:var(--rule2)}
+
+/* STATUS */
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.dot-queued{background:#9b9b94}.dot-running,.dot-pre_detecting{background:#e8a068;animation:pulse 1.5s infinite}
+.dot-completed{background:#1D9E75}.dot-failed{background:#E24B4A}.dot-partial_failed{background:#EF9F27}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* SCORE CARDS */
+.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+.score-card{background:var(--bg2);border-radius:var(--radius);padding:16px;text-align:center}
+.score-card .score{font-family:var(--mono);font-size:26px;font-weight:300;color:var(--ink)}
+.score-card .score-label{font-size:11px;color:var(--ink4);margin-top:4px;line-height:1.3}
+
+/* PROGRESS BAR */
+.progress-bar{height:6px;background:var(--bg2);border-radius:3px;overflow:hidden;margin:8px 0}
+.progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+
+/* SIMILARITY BARS */
+.sim-row{display:flex;align-items:center;gap:12px;margin:8px 0}
+.sim-name{font-size:12px;color:var(--ink2);min-width:160px;font-family:var(--mono)}
+.sim-bar-wrap{flex:1;height:20px;background:var(--bg2);border-radius:4px;position:relative;overflow:hidden}
+.sim-bar{height:100%;border-radius:4px;transition:width .5s;position:relative}
+.sim-ci{position:absolute;top:0;height:100%;opacity:.3;border-radius:2px}
+.sim-score{font-family:var(--mono);font-size:12px;color:var(--ink2);min-width:44px;text-align:right}
+
+/* RISK BLOCK */
+.risk-block{border-radius:var(--radius-lg);padding:20px 24px;margin:16px 0}
+.risk-block.low{background:var(--green-bg);border:1px solid #a0d8b8}
+.risk-block.medium{background:var(--amber-bg);border:1px solid #e8d088}
+.risk-block.high,.risk-block.very_high{background:var(--red-bg);border:1px solid #f0b8b8}
+.risk-level{font-size:28px;font-weight:700;margin-bottom:8px}
+.risk-level.low{color:var(--green)}.risk-level.medium{color:var(--amber)}
+.risk-level.high,.risk-level.very_high{color:var(--red)}
+.risk-disclaimer{font-size:11px;color:var(--ink4);margin-top:12px;padding-top:12px;border-top:1px solid rgba(0,0,0,.08);line-height:1.6}
+
+/* EVIDENCE LIST */
+.evidence-list{list-style:none;padding:0}
+.evidence-list li{font-size:12px;color:var(--ink3);padding:4px 0;border-bottom:1px solid var(--rule);display:flex;gap:8px}
+.evidence-list li::before{content:'→';color:var(--accent);flex-shrink:0}
+.evidence-list li:last-child{border:none}
+
+/* CASE RESULTS */
+.case-item{border:1px solid var(--rule);border-radius:var(--radius);margin-bottom:8px;overflow:hidden}
+.case-header{padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;background:var(--card);transition:background .15s}
+.case-header:hover{background:var(--bg2)}
+.case-body{display:none;padding:12px 16px;border-top:1px solid var(--rule);background:var(--bg)}
+.case-body.open{display:block}
+.sample-output{font-family:var(--mono);font-size:11px;background:#1a1a1a;color:#d4d0c8;padding:10px 12px;border-radius:4px;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;margin:6px 0}
+
+/* RUNS LIST */
+.run-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--rule);cursor:pointer;transition:background .1s}
+.run-row:hover{background:var(--bg2);margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:6px}
+.run-row:last-child{border:none}
+.run-model{font-weight:500;font-size:13px;color:var(--ink);flex:1}
+.run-url{font-size:11px;color:var(--ink4);font-family:var(--mono);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-time{font-size:11px;color:var(--ink4)}
+
+/* PREDETECT RESULT CARD */
+.predetect-card{background:var(--blue-bg);border:1px solid #a0c0e8;border-radius:var(--radius-lg);padding:16px 20px;margin-bottom:16px}
+.predetect-id{font-size:20px;font-weight:700;color:var(--blue);margin-bottom:4px}
+.predetect-conf{font-size:12px;color:var(--blue);opacity:.8}
+
+/* LOADING */
+.loading{text-align:center;padding:40px;color:var(--ink4)}
+.spinner{display:inline-block;width:24px;height:24px;border:2px solid var(--rule2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin-bottom:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* EMPTY */
+.empty{text-align:center;padding:60px 20px;color:var(--ink4)}
+.empty-icon{font-size:40px;margin-bottom:12px;opacity:.4}
+
+/* TABLE */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{font-size:10px;font-weight:600;color:var(--ink4);text-transform:uppercase;letter-spacing:.07em;padding:7px 12px;border-bottom:2px solid var(--rule2);text-align:left}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);color:var(--ink2);vertical-align:middle}
+tr:nth-child(even) td{background:var(--bg)}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-brand" onclick="showPage('home')">LLM <span>Inspector</span></div>
+  <div class="nav-link active" id="nav-home" onclick="showPage('home')">新建测试</div>
+  <div class="nav-link" id="nav-runs" onclick="showPage('runs')">历史记录</div>
+  <div class="nav-link" id="nav-benchmarks" onclick="showPage('benchmarks')">基准模型</div>
+  <div class="nav-spacer"></div>
+  <div class="nav-status" id="nav-status">ready</div>
+</nav>
+
+<!-- ═══════════════════════ PAGE: HOME ═══════════════════════ -->
+<div class="page active" id="page-home">
+  <div style="margin-bottom:32px">
+    <h1>新建检测任务</h1>
+    <p class="subtitle">输入目标 API 信息，系统将自动进行预检测识别，必要时执行完整能力测试。</p>
+  </div>
+
+  <div class="card">
+    <div class="form-group">
+      <label>Base URL</label>
+      <input type="text" id="f-url" placeholder="https://api.example.com/v1"
+             oninput="validateUrl(this)">
+      <div class="form-hint" id="url-hint">仅支持 http/https，不允许内网地址</div>
+    </div>
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="password" id="f-key" placeholder="sk-...">
+      <div class="form-hint">密钥在服务端使用 AES-256-GCM 加密存储，72小时后自动清除</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Model Name</label>
+        <input type="text" id="f-model" placeholder="gpt-4o / custom-chat-v1">
+      </div>
+      <div class="form-group">
+        <label>测试模式</label>
+        <select id="f-mode">
+          <option value="quick">快速 Quick（~8题，置信度触发）</option>
+          <option value="standard" selected>标准 Standard（~19题）</option>
+          <option value="full">完整 Full（全量+多次采样）</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;margin-top:8px">
+      <button class="btn primary" id="submit-btn" onclick="submitRun()">
+        开始检测
+      </button>
+      <span id="submit-hint" style="font-size:12px;color:var(--ink4)"></span>
+    </div>
+  </div>
+
+  <div class="card" style="background:var(--bg2);border-style:dashed">
+    <div class="card-label">检测流程说明</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">① 预检测（0-200 token）</div>
+        <div style="font-size:11px;color:var(--ink4)">HTTP头分析 → 自我报告 → 身份探针 → 知识截止 → 格式偏见。约60%情况在此阶段直接识别。</div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">② 能力测试（~$0.01-0.05）</div>
+        <div style="font-size:11px;color:var(--ink4)">指令遵循、System权重、参数生效、风格采集。置信度达标时提前终止。</div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">③ 分析报告</div>
+        <div style="font-size:11px;color:var(--ink4)">特征提取 → 4维评分 → 相似度排名（含置信区间）→ 风险等级评估。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ PAGE: TASK DETAIL ═══════════════════════ -->
+<div class="page" id="page-task">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+    <button class="btn" onclick="showPage('runs')" style="padding:6px 12px;font-size:12px">← 返回</button>
+    <h1 style="margin:0;font-size:20px" id="task-title">任务详情</h1>
+    <span id="task-status-badge"></span>
+  </div>
+
+  <div id="task-content">
+    <div class="loading"><div class="spinner"></div><div>加载中...</div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ PAGE: RUNS LIST ═══════════════════════ -->
+<div class="page" id="page-runs">
+  <div style="margin-bottom:24px">
+    <h1>历史检测记录</h1>
+    <p class="subtitle">点击记录查看详情或报告</p>
+  </div>
+  <div class="card">
+    <div id="runs-list"><div class="loading"><div class="spinner"></div><div>加载中...</div></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ PAGE: BENCHMARKS ═══════════════════════ -->
+<div class="page" id="page-benchmarks">
+  <div style="margin-bottom:24px">
+    <h1>基准模型库</h1>
+    <p class="subtitle">相似度比较使用以下基准模型的行为特征 profile</p>
+  </div>
+  <div id="benchmarks-content">
+    <div class="loading"><div class="spinner"></div><div>加载中...</div></div>
+  </div>
+</div>
+
+<script>
+const API = '';  // Same origin
+let _pollTimer = null;
+let _currentRunId = null;
+
+// ── Page routing ───────────────────────────────────────────────────────────
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+
+  const pageMap = {home:'page-home', runs:'page-runs', benchmarks:'page-benchmarks', task:'page-task'};
+  const navMap  = {home:'nav-home', runs:'nav-runs', benchmarks:'nav-benchmarks'};
+
+  const pageEl = document.getElementById(pageMap[name]);
+  if (pageEl) pageEl.classList.add('active');
+  const navEl = document.getElementById(navMap[name]);
+  if (navEl) navEl.classList.add('active');
+
+  if (name === 'runs')       loadRuns();
+  if (name === 'benchmarks') loadBenchmarks();
+  if (_pollTimer && name !== 'task') { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = {error: text}; }
+  return { ok: r.ok, status: r.status, data };
+}
+
+// ── Form validation ────────────────────────────────────────────────────────
+
+function validateUrl(input) {
+  const v = input.value.trim();
+  const hint = document.getElementById('url-hint');
+  const blocked = /localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\./i;
+  if (v && blocked.test(v)) {
+    hint.style.color = 'var(--red)';
+    hint.textContent = '不允许内网/本地地址（SSRF防护）';
+    input.style.borderColor = 'var(--red)';
+  } else if (v && !v.startsWith('http')) {
+    hint.style.color = 'var(--amber)';
+    hint.textContent = '必须以 http:// 或 https:// 开头';
+    input.style.borderColor = 'var(--amber)';
+  } else {
+    hint.style.color = 'var(--ink4)';
+    hint.textContent = '仅支持 http/https，不允许内网地址';
+    input.style.borderColor = '';
+  }
+}
+
+// ── Submit run ─────────────────────────────────────────────────────────────
+
+async function submitRun() {
+  const url   = document.getElementById('f-url').value.trim();
+  const key   = document.getElementById('f-key').value.trim();
+  const model = document.getElementById('f-model').value.trim();
+  const mode  = document.getElementById('f-mode').value;
+  const hint  = document.getElementById('submit-hint');
+  const btn   = document.getElementById('submit-btn');
+
+  if (!url || !key || !model) { hint.textContent = '请填写所有必填项'; return; }
+  if (!url.startsWith('http')) { hint.textContent = 'URL 必须以 http:// 或 https:// 开头'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+  hint.textContent = '';
+
+  const {ok, data} = await api('POST', '/api/v1/runs', {
+    base_url: url, api_key: key, model, test_mode: mode
+  });
+
+  btn.disabled = false;
+  btn.textContent = '开始检测';
+
+  if (!ok) {
+    hint.textContent = '错误: ' + (data.error || '提交失败');
+    hint.style.color = 'var(--red)';
+    return;
+  }
+
+  // Clear form
+  document.getElementById('f-key').value = '';
+
+  // Navigate to task page
+  openTask(data.run_id);
+}
+
+// ── Task detail page ───────────────────────────────────────────────────────
+
+function openTask(runId) {
+  _currentRunId = runId;
+  showPage('task');
+  document.getElementById('task-title').textContent = 'Run: ' + runId.slice(0,8) + '...';
+  document.getElementById('task-status-badge').innerHTML = '';
+  document.getElementById('task-content').innerHTML =
+    '<div class="loading"><div class="spinner"></div><div>检测进行中，请稍候...</div></div>';
+
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => pollTask(runId), 2000);
+  pollTask(runId);
+}
+
+async function pollTask(runId) {
+  const {ok, data} = await api('GET', '/api/v1/runs/' + runId);
+  if (!ok) return;
+
+  const status = data.status;
+  document.getElementById('task-status-badge').innerHTML = renderStatusBadge(status);
+  setNavStatus(status);
+
+  renderTaskProgress(data);
+
+  if (['completed','partial_failed','failed'].includes(status)) {
+    clearInterval(_pollTimer); _pollTimer = null;
+    if (status !== 'failed') loadReport(runId);
+  }
+}
+
+function renderStatusBadge(status) {
+  const labels = {
+    queued:'排队中', pre_detecting:'预检测中', pre_detected:'预检测完成',
+    running:'测试执行中', completed:'已完成', partial_failed:'部分失败', failed:'失败'
+  };
+  const cls = {completed:'badge-green', failed:'badge-red', partial_failed:'badge-amber'};
+  const c = cls[status] || 'badge-blue';
+  return `<span class="badge ${c}">${labels[status]||status}</span>`;
+}
+
+function renderTaskProgress(data) {
+  const prog = data.progress || {};
+  const pct = prog.total ? Math.round(prog.completed / prog.total * 100) : 0;
+
+  let html = `
+    <div class="card">
+      <div class="card-label">检测目标</div>
+      <div style="font-size:13px;color:var(--ink2);margin-bottom:4px">
+        <strong>${escHtml(data.model)}</strong>
+        <span style="color:var(--ink4);margin-left:8px;font-family:var(--mono);font-size:11px">${escHtml(data.base_url)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--ink4)">模式: ${data.test_mode} · 创建: ${fmtTime(data.created_at)}</div>
+    </div>`;
+
+  // Predetect result
+  const pre = data.predetect_result;
+  if (pre) {
+    html += renderPredetectCard(pre);
+  }
+
+  // Progress
+  if (prog.total > 0) {
+    html += `
+      <div class="card">
+        <div class="card-label">测试进度</div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:4px">
+          <span>已完成 ${prog.completed} / ${prog.total} 题</span>
+          <span>${pct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+      </div>`;
+  }
+
+  // Error
+  if (data.error_message) {
+    html += `<div class="card" style="border-color:#f0b8b8;background:var(--red-bg)">
+      <div style="color:var(--red);font-size:13px">错误: ${escHtml(data.error_message)}</div></div>`;
+  }
+
+  html += '<div id="report-section"></div>';
+  document.getElementById('task-content').innerHTML = html;
+}
+
+function renderPredetectCard(pre) {
+  if (!pre.success && !pre.identified_as) return '';
+  const conf = Math.round((pre.confidence || 0) * 100);
+  const layers = pre.layer_results || [];
+  const stopLayer = pre.layer_stopped || '全部';
+
+  let evidenceHtml = '';
+  if (layers.length) {
+    const allEvidence = layers.flatMap(l => l.evidence || []);
+    evidenceHtml = `<ul class="evidence-list" style="margin-top:8px">
+      ${allEvidence.slice(0, 6).map(e => `<li>${escHtml(e)}</li>`).join('')}
+    </ul>`;
+  }
+
+  return `
+    <div class="predetect-card">
+      <div class="card-label" style="color:var(--blue);opacity:.7">预检测结果 · Layer ${escHtml(String(stopLayer))}</div>
+      <div class="predetect-id">${pre.identified_as ? escHtml(pre.identified_as) : '未识别'}</div>
+      <div class="predetect-conf">置信度 ${conf}% · 消耗约 ${pre.total_tokens_used || 0} tokens</div>
+      ${evidenceHtml}
+      ${pre.should_proceed_to_testing === false
+        ? '<div style="margin-top:8px;font-size:11px;color:var(--blue);font-weight:600">✓ 置信度充足，已跳过完整能力测试</div>'
+        : ''}
+    </div>`;
+}
+
+async function loadReport(runId) {
+  const {ok, data} = await api('GET', '/api/v1/runs/' + runId + '/report');
+  if (!ok) return;
+  const el = document.getElementById('report-section');
+  if (el) el.innerHTML = renderReport(data);
+}
+
+function renderReport(r) {
+  if (!r) return '';
+  const scores = r.scores || {};
+  const sim    = r.similarity || [];
+  const risk   = r.risk || {};
+  const cases  = r.case_results || [];
+
+  let html = '';
+
+  // Scores
+  html += `
+    <div class="card">
+      <h2>评分</h2>
+      <div class="score-grid">
+        ${scoreCard(scores.protocol_score, '协议兼容')}
+        ${scoreCard(scores.instruction_score, '指令遵循')}
+        ${scoreCard(scores.system_obedience_score, 'System 权重')}
+        ${scoreCard(scores.param_compliance_score, '参数生效')}
+      </div>
+    </div>`;
+
+  // Risk
+  if (risk.level) {
+    html += `
+      <div class="risk-block ${risk.level}">
+        <div class="card-label">套壳风险评级</div>
+        <div class="risk-level ${risk.level}">${escHtml(risk.label||risk.level)}</div>
+        <ul class="evidence-list">
+          ${(risk.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
+        </ul>
+        <div class="risk-disclaimer">${escHtml(risk.disclaimer||'')}</div>
+      </div>`;
+  }
+
+  // Similarity
+  if (sim.length) {
+    const topScore = sim[0].score;
+    html += `
+      <div class="card">
+        <h2>相似度排名</h2>
+        ${sim.map(s => {
+          const pct = Math.round(s.score * 100);
+          const ciLo = Math.round((s.ci_95_low||0)*100);
+          const ciHi = Math.round((s.ci_95_high||0)*100);
+          const barColor = s.score > 0.75 ? '#E24B4A' : s.score > 0.55 ? '#EF9F27' : '#1D9E75';
+          return `
+            <div class="sim-row">
+              <div class="sim-name">${escHtml(s.benchmark)}</div>
+              <div class="sim-bar-wrap">
+                <div class="sim-bar" style="width:${pct}%;background:${barColor}"></div>
+                <div class="sim-ci" style="left:${ciLo}%;width:${ciHi-ciLo}%;background:${barColor}"></div>
+              </div>
+              <div class="sim-score">${pct}%</div>
+              <div style="font-size:10px;color:var(--ink4);min-width:80px">[${ciLo}–${ciHi}%]</div>
+            </div>`;
+        }).join('')}
+        <div style="font-size:11px;color:var(--ink4);margin-top:8px">[ ] 为 95% 置信区间</div>
+      </div>`;
+  }
+
+  // Case results
+  if (cases.length) {
+    html += '<div class="card"><h2>题目详情</h2>';
+    html += cases.map(c => renderCaseItem(c)).join('');
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function scoreCard(val, label) {
+  const v = val != null ? Math.round(val) : '–';
+  return `<div class="score-card"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
+}
+
+function renderCaseItem(c) {
+  const passRate = Math.round((c.pass_rate||0)*100);
+  const badgeCls = c.pass_rate >= 0.8 ? 'badge-green' : c.pass_rate >= 0.5 ? 'badge-amber' : 'badge-red';
+  const samples = c.samples || [];
+  const tid = 'case-' + c.case_id;
+
+  const samplesHtml = samples.map(s => `
+    <div style="margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:center;font-size:11px;color:var(--ink4);margin-bottom:4px">
+        <span>Sample ${s.sample_index}</span>
+        <span>${s.latency_ms ? s.latency_ms + 'ms' : ''}</span>
+        ${s.passed === true ? '<span style="color:var(--green)">✓ 通过</span>'
+          : s.passed === false ? '<span style="color:var(--red)">✗ 未通过</span>' : ''}
+        ${s.error_type ? `<span style="color:var(--red)">${escHtml(s.error_type)}</span>` : ''}
+      </div>
+      ${s.output ? `<div class="sample-output">${escHtml(s.output)}</div>` : ''}
+    </div>`).join('');
+
+  return `
+    <div class="case-item">
+      <div class="case-header" onclick="toggleCase('${tid}')">
+        <span class="badge ${badgeCls}">${passRate}%</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--ink4)">${escHtml(c.case_id)}</span>
+        <span style="font-size:12px;color:var(--ink2)">${escHtml(c.name)}</span>
+        <span style="font-size:11px;color:var(--ink4);margin-left:auto">${c.mean_latency_ms ? Math.round(c.mean_latency_ms)+'ms avg' : ''}</span>
+      </div>
+      <div class="case-body" id="${tid}">${samplesHtml}</div>
+    </div>`;
+}
+
+function toggleCase(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+// ── Runs list ──────────────────────────────────────────────────────────────
+
+async function loadRuns() {
+  document.getElementById('runs-list').innerHTML =
+    '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+  const {ok, data} = await api('GET', '/api/v1/runs?limit=50');
+  if (!ok) { document.getElementById('runs-list').innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+  if (!data.length) {
+    document.getElementById('runs-list').innerHTML =
+      '<div class="empty"><div class="empty-icon">○</div><div>暂无检测记录</div></div>';
+    return;
+  }
+
+  const html = data.map(r => {
+    const statusDot = `<span class="status-dot dot-${r.status}"></span>`;
+    const pre = r.predetect_identified ? '<span class="badge badge-blue" style="margin-left:6px">已识别</span>' : '';
+    return `
+      <div class="run-row" onclick="openTask('${r.run_id}')">
+        ${statusDot}
+        <div class="run-model">${escHtml(r.model)}${pre}</div>
+        <div class="run-url">${escHtml(r.base_url)}</div>
+        <div>${renderStatusBadge(r.status)}</div>
+        <div class="run-time">${fmtTime(r.created_at)}</div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('runs-list').innerHTML = html;
+}
+
+// ── Benchmarks ─────────────────────────────────────────────────────────────
+
+async function loadBenchmarks() {
+  const {ok, data} = await api('GET', '/api/v1/benchmarks');
+  if (!ok) { document.getElementById('benchmarks-content').innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+  if (!data.length) {
+    document.getElementById('benchmarks-content').innerHTML =
+      '<div class="empty"><div class="empty-icon">○</div><div>暂无基准模型</div></div>';
+    return;
+  }
+
+  const html = `
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>模型名称</th>
+          <th>题库版本</th>
+          <th>采样次数</th>
+          <th>生成时间</th>
+        </tr></thead>
+        <tbody>
+          ${data.map(b => `<tr>
+            <td><strong>${escHtml(b.name)}</strong></td>
+            <td><span class="badge badge-gray">${escHtml(b.suite_version)}</span></td>
+            <td>${b.sample_count}</td>
+            <td>${fmtTime(b.generated_at)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="background:var(--bg2);border-style:dashed">
+      <div class="card-label">说明</div>
+      <p style="font-size:12px;color:var(--ink3);margin:0">
+        基准模型 profile 为系统内置的行为特征向量，相似度基于标准化余弦距离计算，附带 Bootstrap 95% 置信区间。
+        相似度高不代表一定为该底座，仅作为参考指标。
+      </p>
+    </div>`;
+
+  document.getElementById('benchmarks-content').innerHTML = html;
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function fmtTime(iso) {
+  if (!iso) return '–';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',
+      hour:'2-digit',minute:'2-digit'});
+  } catch { return iso.slice(0,16); }
+}
+
+function setNavStatus(status) {
+  const el = document.getElementById('nav-status');
+  if (el) el.textContent = status;
+}
+
+// Init
+showPage('home');
+</script>
+</body>
+</html>

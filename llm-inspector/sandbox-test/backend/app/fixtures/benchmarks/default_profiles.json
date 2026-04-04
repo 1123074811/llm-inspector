@@ -1,0 +1,119 @@
+{
+  "benchmarks": [
+    {
+      "name": "gpt-4o",
+      "suite_version": "v1",
+      "sample_count": 3,
+      "feature_vector": {
+        "protocol_success_rate": 1.0,
+        "instruction_pass_rate": 0.88,
+        "exact_match_rate": 0.90,
+        "json_valid_rate": 0.92,
+        "line_count_follow_rate": 0.85,
+        "format_follow_rate": 0.82,
+        "system_obedience_rate": 0.78,
+        "param_compliance_rate": 0.90,
+        "temperature_param_effective": 1.0,
+        "refusal_rate": 0.70,
+        "disclaimer_rate": 0.55,
+        "avg_markdown_score": 2.8,
+        "avg_response_length": 320,
+        "has_usage_fields": 1.0,
+        "has_finish_reason": 1.0,
+        "alt_suggestion_rate": 0.65
+      }
+    },
+    {
+      "name": "gpt-4o-mini",
+      "suite_version": "v1",
+      "sample_count": 3,
+      "feature_vector": {
+        "protocol_success_rate": 1.0,
+        "instruction_pass_rate": 0.82,
+        "exact_match_rate": 0.85,
+        "json_valid_rate": 0.88,
+        "line_count_follow_rate": 0.80,
+        "format_follow_rate": 0.78,
+        "system_obedience_rate": 0.72,
+        "param_compliance_rate": 0.88,
+        "temperature_param_effective": 1.0,
+        "refusal_rate": 0.65,
+        "disclaimer_rate": 0.50,
+        "avg_markdown_score": 2.5,
+        "avg_response_length": 280,
+        "has_usage_fields": 1.0,
+        "has_finish_reason": 1.0,
+        "alt_suggestion_rate": 0.60
+      }
+    },
+    {
+      "name": "claude-3-5-sonnet",
+      "suite_version": "v1",
+      "sample_count": 3,
+      "feature_vector": {
+        "protocol_success_rate": 1.0,
+        "instruction_pass_rate": 0.90,
+        "exact_match_rate": 0.92,
+        "json_valid_rate": 0.94,
+        "line_count_follow_rate": 0.90,
+        "format_follow_rate": 0.88,
+        "system_obedience_rate": 0.85,
+        "param_compliance_rate": 0.88,
+        "temperature_param_effective": 1.0,
+        "refusal_rate": 0.60,
+        "disclaimer_rate": 0.40,
+        "avg_markdown_score": 2.2,
+        "avg_response_length": 290,
+        "has_usage_fields": 1.0,
+        "has_finish_reason": 1.0,
+        "alt_suggestion_rate": 0.55
+      }
+    },
+    {
+      "name": "deepseek-v3",
+      "suite_version": "v1",
+      "sample_count": 3,
+      "feature_vector": {
+        "protocol_success_rate": 1.0,
+        "instruction_pass_rate": 0.84,
+        "exact_match_rate": 0.86,
+        "json_valid_rate": 0.89,
+        "line_count_follow_rate": 0.82,
+        "format_follow_rate": 0.80,
+        "system_obedience_rate": 0.75,
+        "param_compliance_rate": 0.85,
+        "temperature_param_effective": 1.0,
+        "refusal_rate": 0.55,
+        "disclaimer_rate": 0.35,
+        "avg_markdown_score": 2.4,
+        "avg_response_length": 350,
+        "has_usage_fields": 1.0,
+        "has_finish_reason": 1.0,
+        "alt_suggestion_rate": 0.50
+      }
+    },
+    {
+      "name": "qwen2.5-72b",
+      "suite_version": "v1",
+      "sample_count": 3,
+      "feature_vector": {
+        "protocol_success_rate": 1.0,
+        "instruction_pass_rate": 0.80,
+        "exact_match_rate": 0.82,
+        "json_valid_rate": 0.85,
+        "line_count_follow_rate": 0.78,
+        "format_follow_rate": 0.76,
+        "system_obedience_rate": 0.70,
+        "param_compliance_rate": 0.82,
+        "temperature_param_effective": 1.0,
+        "refusal_rate": 0.50,
+        "disclaimer_rate": 0.45,
+        "avg_markdown_score": 2.0,
+        "avg_response_length": 380,
+        "has_usage_fields": 1.0,
+        "has_finish_reason": 1.0,
+        "alt_suggestion_rate": 0.45
+      }
+    }
+  ]
+}

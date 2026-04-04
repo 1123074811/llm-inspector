@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables (contains secrets)
+.env
+!.env.example
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# PID files
+*.pid
+
+# Claude Code
+.claude/
