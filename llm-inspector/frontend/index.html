@@ -33,6 +33,7 @@ nav{background:var(--ink);padding:0 32px;display:flex;align-items:center;gap:24p
 /* LAYOUT */
 .page{display:none;max-width:880px;margin:0 auto;padding:32px 32px 80px}
 .page.active{display:block}
+#page-task{max-width:min(96vw,1600px)}
 
 /* TYPOGRAPHY */
 h1{font-size:26px;font-weight:700;color:var(--ink);margin-bottom:6px}
@@ -141,9 +142,67 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th{font-size:10px;font-weight:600;color:var(--ink4);text-transform:uppercase;letter-spacing:.07em;padding:7px 12px;border-bottom:2px solid var(--rule2);text-align:left}
 td{padding:9px 12px;border-bottom:1px solid var(--rule);color:var(--ink2);vertical-align:middle}
 tr:nth-child(even) td{background:var(--bg)}
+
+/* METRIC BARS */
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric-card{background:var(--bg2);border:1px solid var(--rule);border-radius:var(--radius);padding:10px}
+.metric-title{font-size:11px;color:var(--ink4);margin-bottom:8px;font-family:var(--mono)}
+.metric-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.metric-name{font-size:11px;color:var(--ink3);min-width:74px;max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.metric-track{flex:1;height:10px;background:#e7e4dc;border-radius:999px;overflow:hidden}
+.metric-fill{height:100%;background:var(--blue);border-radius:999px}
+.metric-val{font-size:11px;color:var(--ink2);min-width:36px;text-align:right;font-family:var(--mono)}
+
+/* A/B SIGNIFICANCE */
+.ab-row{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--rule);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff}
+.ab-left{display:flex;flex-direction:column;gap:3px}
+.ab-metric{font-size:12px;font-weight:600;color:var(--ink2)}
+.ab-meta{font-size:11px;color:var(--ink4);font-family:var(--mono)}
+.ab-delta{font-family:var(--mono);font-size:13px;font-weight:700}
+.ab-up{color:var(--green)}
+.ab-down{color:var(--red)}
+.ab-neutral{color:var(--ink3)}
+
+/* PROCESS EXPERIENCE */
+.hero-glow{position:fixed;inset:-20% -10% auto -10%;height:280px;background:radial-gradient(ellipse at 30% 20%,rgba(200,64,26,.12),transparent 60%),radial-gradient(ellipse at 70% 30%,rgba(26,74,138,.10),transparent 65%);pointer-events:none;z-index:0;filter:blur(20px)}
+body>*{position:relative;z-index:1}
+
+.stage-card{background:linear-gradient(180deg,#fff,#f9f7f2);border:1px solid var(--rule);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.stage-title{font-size:13px;font-weight:700;letter-spacing:.02em}
+.stage-sub{font-size:11px;color:var(--ink4)}
+.stage-track{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.stage-item{border:1px solid var(--rule);background:#fff;border-radius:10px;padding:10px;min-height:72px;transition:all .25s}
+.stage-item .k{font-size:10px;color:var(--ink4);font-family:var(--mono);margin-bottom:4px}
+.stage-item .v{font-size:12px;color:var(--ink2);font-weight:600}
+.stage-item.active{border-color:#e8a068;box-shadow:0 0 0 2px rgba(232,160,104,.18);transform:translateY(-1px)}
+.stage-item.done{border-color:#9fd2b9;background:#f3fbf7}
+.stage-item.done .v{color:#1a6040}
+
+.live-console{margin-top:12px;border-radius:10px;overflow:hidden;border:1px solid #2b2b2b}
+.console-head{background:#141414;color:#a6a6a6;font-family:var(--mono);font-size:10px;padding:7px 10px;display:flex;justify-content:space-between}
+.console-body{background:#0b0b0b;color:#d6d2c9;font-family:var(--mono);font-size:11px;min-height:88px;max-height:180px;overflow:auto;padding:10px 12px;line-height:1.55}
+.console-line{white-space:pre-wrap;word-break:break-word}
+.console-line.sep{color:#8c877d;letter-spacing:.02em}
+.console-line.meta{color:#b9b39f}
+.console-line.typing::after{content:'▋';animation:blink 1s steps(1,end) infinite;color:#e8a068}
+.console-line.del{opacity:.6;text-decoration:line-through;text-decoration-color:#a86868}
+.log-filter{display:flex;gap:6px;align-items:center;padding:8px 10px;border-top:1px solid #2b2b2b;background:#101010}
+.log-filter .chip{font-size:10px;font-family:var(--mono);padding:3px 8px;border-radius:999px;border:1px solid #3a3a3a;background:#161616;color:#a9a9a9;cursor:pointer;user-select:none}
+.log-filter .chip.active{border-color:#e8a068;color:#f0d7be;background:#261c12}
+@keyframes blink{50%{opacity:0}}
+
+/* TASK SPLIT LAYOUT */
+.task-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.task-right{position:sticky;top:72px}
+@media (max-width: 1100px){
+  .task-split{grid-template-columns:1fr}
+  .task-right{position:static}
+}
 </style>
 </head>
 <body>
+<div class="hero-glow"></div>
 
 <nav>
   <div class="nav-brand" onclick="showPage('home')">LLM <span>Inspector</span></div>
@@ -220,6 +279,7 @@ tr:nth-child(even) td{background:var(--bg)}
     <button class="btn" onclick="showPage('runs')" style="padding:6px 12px;font-size:12px">← 返回</button>
     <h1 style="margin:0;font-size:20px" id="task-title">任务详情</h1>
     <span id="task-status-badge"></span>
+    <div style="margin-left:auto;display:flex;gap:8px" id="task-actions"></div>
   </div>
 
   <div id="task-content">
@@ -253,6 +313,11 @@ tr:nth-child(even) td{background:var(--bg)}
 const API = '';  // Same origin
 let _pollTimer = null;
 let _currentRunId = null;
+let _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued' };
+let _consoleLines = [];
+let _typingTimer = null;
+let _logPinnedToBottom = true;
+let _logFilter = 'all';
 
 // ── Page routing ───────────────────────────────────────────────────────────
 
@@ -324,7 +389,7 @@ async function submitRun() {
   hint.textContent = '';
 
   const {ok, data} = await api('POST', '/api/v1/runs', {
-    base_url: url, api_key: key, model, test_mode: mode
+    base_url: url, api_key: key, model, test_mode: mode, suite_version: 'v2'
   });
 
   btn.disabled = false;
@@ -347,6 +412,8 @@ async function submitRun() {
 
 function openTask(runId) {
   _currentRunId = runId;
+  _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued' };
+  _consoleLines = [{ text: '初始化任务上下文...', type: 'normal' }];
   showPage('task');
   document.getElementById('task-title').textContent = 'Run: ' + runId.slice(0,8) + '...';
   document.getElementById('task-status-badge').innerHTML = '';
@@ -359,14 +426,21 @@ function openTask(runId) {
 }
 
 async function pollTask(runId) {
-  const {ok, data} = await api('GET', '/api/v1/runs/' + runId);
-  if (!ok) return;
+  const [runRes, respRes] = await Promise.all([
+    api('GET', '/api/v1/runs/' + runId),
+    api('GET', '/api/v1/runs/' + runId + '/responses'),
+  ]);
+  if (!runRes.ok) return;
+
+  const data = runRes.data;
+  const responses = respRes.ok ? respRes.data : [];
 
   const status = data.status;
   document.getElementById('task-status-badge').innerHTML = renderStatusBadge(status);
+  renderTaskActions(runId, status);
   setNavStatus(status);
 
-  renderTaskProgress(data);
+  renderTaskProgress(data, responses);
 
   if (['completed','partial_failed','failed'].includes(status)) {
     clearInterval(_pollTimer); _pollTimer = null;
@@ -384,47 +458,326 @@ function renderStatusBadge(status) {
   return `<span class="badge ${c}">${labels[status]||status}</span>`;
 }
 
-function renderTaskProgress(data) {
+function renderTaskActions(runId, status) {
+  const el = document.getElementById('task-actions');
+  if (!el) return;
+
+  const canCancel = ['queued','pre_detecting','running'].includes(status);
+  const canRetry = ['failed','partial_failed'].includes(status);
+
+  let html = '';
+  if (canCancel) {
+    html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" onclick="cancelRun('${runId}')">停止任务</button>`;
+  }
+  if (canRetry) {
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="retryRun('${runId}')">从失败处重试</button>`;
+  }
+  el.innerHTML = html;
+}
+
+async function cancelRun(runId) {
+  if (!confirm('确认停止当前任务？已发出的请求可能仍会完成，但会尽快停止后续请求。')) return;
+  const {ok, data} = await api('POST', `/api/v1/runs/${runId}/cancel`);
+  if (!ok) {
+    alert('停止失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  setNavStatus('cancelling');
+  pollTask(runId);
+}
+
+async function retryRun(runId) {
+  const {ok, data} = await api('POST', `/api/v1/runs/${runId}/retry`);
+  if (!ok) {
+    alert('重试失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  openTask(data.run_id || runId);
+}
+
+function renderTaskProgress(data, responses = []) {
   const prog = data.progress || {};
   const pct = prog.total ? Math.round(prog.completed / prog.total * 100) : 0;
 
-  let html = `
-    <div class="card">
-      <div class="card-label">检测目标</div>
-      <div style="font-size:13px;color:var(--ink2);margin-bottom:4px">
-        <strong>${escHtml(data.model)}</strong>
-        <span style="color:var(--ink4);margin-left:8px;font-family:var(--mono);font-size:11px">${escHtml(data.base_url)}</span>
-      </div>
-      <div style="font-size:11px;color:var(--ink4)">模式: ${data.test_mode} · 创建: ${fmtTime(data.created_at)}</div>
-    </div>`;
+  animateProcessConsole(prog, data.status, data.predetect_result, responses);
 
-  // Predetect result
   const pre = data.predetect_result;
-  if (pre) {
-    html += renderPredetectCard(pre);
-  }
 
-  // Progress
-  if (prog.total > 0) {
-    html += `
-      <div class="card">
-        <div class="card-label">测试进度</div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:4px">
-          <span>已完成 ${prog.completed} / ${prog.total} 题</span>
-          <span>${pct}%</span>
+  const preHtml = pre ? renderPredetectCard(pre) : '';
+  const progressHtml = prog.total > 0 ? `
+    <div class="card">
+      <div class="card-label">测试进度</div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:4px">
+        <span>已完成 ${prog.completed} / ${prog.total} 题</span>
+        <span>${pct}%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+    </div>` : '';
+
+  const errorHtml = data.error_message ? `<div class="card" style="border-color:#f0b8b8;background:var(--red-bg)">
+      <div style="color:var(--red);font-size:13px">错误: ${escHtml(data.error_message)}</div></div>` : '';
+
+  let html = `
+    <div class="task-split">
+      <div id="task-main-col">
+        <div class="card">
+          <div class="card-label">检测目标</div>
+          <div style="font-size:13px;color:var(--ink2);margin-bottom:4px">
+            <strong>${escHtml(data.model)}</strong>
+            <span style="color:var(--ink4);margin-left:8px;font-family:var(--mono);font-size:11px">${escHtml(data.base_url)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--ink4)">模式: ${data.test_mode} · 创建: ${fmtTime(data.created_at)}</div>
         </div>
-        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-      </div>`;
-  }
 
-  // Error
-  if (data.error_message) {
-    html += `<div class="card" style="border-color:#f0b8b8;background:var(--red-bg)">
-      <div style="color:var(--red);font-size:13px">错误: ${escHtml(data.error_message)}</div></div>`;
-  }
-
-  html += '<div id="report-section"></div>';
+        ${renderStageExperience(data, prog, pct, {includeConsole:false})}
+        ${preHtml}
+        ${progressHtml}
+        ${errorHtml}
+        <div id="report-section"></div>
+      </div>
+      <aside class="task-right" id="task-log-col">
+        ${renderLogPanel(data)}
+      </aside>
+    </div>`;
   document.getElementById('task-content').innerHTML = html;
+  bindLogScrollBehavior();
+}
+
+function renderLogPanel(data) {
+  return `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="console-head" style="position:sticky;top:0;z-index:1"><span>RUNNER LOG</span><span>${escHtml(data.status || 'running')}</span></div>
+      <div class="log-filter" id="log-filter-bar">
+        <button class="chip ${_logFilter === 'all' ? 'active' : ''}" onclick="setLogFilter('all')">全部</button>
+        <button class="chip ${_logFilter === 'prompt' ? 'active' : ''}" onclick="setLogFilter('prompt')">仅看提示词</button>
+        <button class="chip ${_logFilter === 'error' ? 'active' : ''}" onclick="setLogFilter('error')">仅看 error</button>
+      </div>
+      <div class="console-body" id="live-console-body" style="min-height:420px;max-height:80vh">${renderConsoleLines()}</div>
+      <div style="padding:8px 10px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink4)">
+        提示：滚动查看历史日志时，不会自动打断当前位置。
+      </div>
+    </div>`;
+}
+
+function bindLogScrollBehavior() {
+  const box = document.getElementById('live-console-body');
+  if (!box || box.dataset.bound === '1') return;
+  box.dataset.bound = '1';
+  box.addEventListener('scroll', () => {
+    const threshold = 24;
+    const distanceToBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+    _logPinnedToBottom = distanceToBottom <= threshold;
+  });
+}
+
+function updateLogPanel() {
+  const box = document.getElementById('live-console-body');
+  if (!box) return;
+  const shouldStick = _logPinnedToBottom;
+  const prevTop = box.scrollTop;
+  box.innerHTML = renderConsoleLines();
+  if (shouldStick) {
+    box.scrollTop = box.scrollHeight;
+  } else {
+    box.scrollTop = prevTop;
+  }
+}
+
+function setLogFilter(mode) {
+  _logFilter = mode;
+  const bar = document.getElementById('log-filter-bar');
+  if (bar) {
+    bar.querySelectorAll('.chip').forEach(chip => chip.classList.remove('active'));
+    const map = { all: 0, prompt: 1, error: 2 };
+    const idx = map[mode] ?? 0;
+    const target = bar.querySelectorAll('.chip')[idx];
+    if (target) target.classList.add('active');
+  }
+  updateLogPanel();
+}
+
+function matchLogFilter(line) {
+  if (_logFilter === 'all') return true;
+  const text = String(line?.text || '').toLowerCase();
+  if (_logFilter === 'prompt') return text.includes('[提示词]');
+  if (_logFilter === 'error') {
+    return text.includes('[结果] 错误') || text.includes(' error') || text.includes('failed') || line?.type === 'del';
+  }
+  return true;
+}
+
+function renderStageExperience(data, prog, pct, opts = {includeConsole:true}) {
+  const stage = stageFromStatus(data.status, prog, data.predetect_result);
+  const stageNames = ['排队', '预检测', '能力测试', '分析报告'];
+
+  const stageItems = stageNames.map((name, idx) => {
+    const state = idx < stage ? 'done' : idx === stage ? 'active' : '';
+    const texts = [
+      `任务已提交${data.created_at ? ' · ' + fmtTime(data.created_at) : ''}`,
+      data.predetect_result?.identified_as ? `识别: ${data.predetect_result.identified_as}` : '执行指纹探测',
+      prog.total ? `${prog.completed}/${prog.total} 用例` : '等待执行',
+      ['completed','partial_failed'].includes(data.status) ? '报告已生成' : '等待汇总',
+    ];
+    return `<div class="stage-item ${state}">
+      <div class="k">STEP ${idx + 1}</div>
+      <div class="v">${name}</div>
+      <div class="stage-sub" style="margin-top:6px">${escHtml(texts[idx])}</div>
+    </div>`;
+  }).join('');
+
+  const consoleBlock = opts.includeConsole ? `
+      <div class="live-console">
+        <div class="console-head"><span>RUNNER LOG</span><span>${escHtml(data.status || 'running')}</span></div>
+        <div class="console-body" id="live-console-body">${renderConsoleLines()}</div>
+      </div>` : '';
+
+  return `
+    <div class="stage-card">
+      <div class="stage-head">
+        <div>
+          <div class="stage-title">检测过程可视化</div>
+          <div class="stage-sub">当前阶段：${escHtml(stageNames[stage] || '分析报告')} · 进度 ${pct}%</div>
+        </div>
+        <div>${renderStatusBadge(data.status)}</div>
+      </div>
+      <div class="stage-track">${stageItems}</div>
+      ${consoleBlock}
+    </div>`;
+}
+
+function stageFromStatus(status, prog, pre) {
+  if (status === 'queued') return 0;
+  if (status === 'pre_detecting' || status === 'pre_detected') return 1;
+  if (status === 'running' || ((prog?.completed || 0) > 0 && !['completed','partial_failed','failed'].includes(status))) return 2;
+  if (['completed','partial_failed','failed'].includes(status)) return 3;
+  if (pre?.identified_as) return 1;
+  return 0;
+}
+
+function animateProcessConsole(prog, status, pre, responses = []) {
+  const prev = _lastProgressSnapshot;
+  const currCompleted = prog?.completed || 0;
+  const currTotal = prog?.total || 0;
+
+  if (status !== prev.phase) {
+    const phaseLabel = {
+      queued: '排队中',
+      pre_detecting: '预检测中',
+      pre_detected: '预检测完成',
+      running: '能力测试中',
+      completed: '已完成',
+      partial_failed: '部分失败',
+      failed: '失败',
+    };
+    pushConsoleSeparator('阶段切换');
+    pushConsole(`[阶段] ${phaseLabel[status] || status}`, 'meta');
+  }
+
+  if (status === 'pre_detecting') {
+    pushConsoleTyping('[预检测] 正在进行预检测：header / self-report / identity probe ...');
+  }
+
+  if (pre?.identified_as && !prev.predetectLogged) {
+    pushConsoleSeparator('预检测结果');
+    pushConsole(`[预检测] 识别模型: ${pre.identified_as}`);
+    pushConsole(`[预检测] 置信度: ${(pre.confidence * 100).toFixed(0)}%`, 'meta');
+    _lastProgressSnapshot.predetectLogged = true;
+  }
+
+  const seen = prev.responseSeen || {};
+  const ordered = [...responses].sort((a, b) => {
+    if (a.case_id === b.case_id) return (a.sample_index || 0) - (b.sample_index || 0);
+    return String(a.case_id || '').localeCompare(String(b.case_id || ''));
+  });
+
+  for (const r of ordered) {
+    const key = `${r.case_id}#${r.sample_index}`;
+    if (seen[key]) continue;
+
+    const prompt = r.request_preview?.user_prompt || '';
+    const temp = r.request_preview?.temperature;
+    const maxT = r.request_preview?.max_tokens;
+    const ans = r.response_text || '';
+
+    pushConsoleSeparator(`CASE ${r.case_id || '-'} · sample=${r.sample_index ?? '-'}`);
+
+    if (prompt) {
+      pushConsole(`[提示词] ${prompt}`);
+    } else {
+      pushConsole(`[提示词] (无预览内容)`, 'meta');
+    }
+
+    if (temp != null || maxT != null) {
+      pushConsole(`[参数] temperature=${temp ?? '-'} · max_tokens=${maxT ?? '-'}`, 'meta');
+    }
+
+    if (ans) {
+      pushConsole(`[回答] ${ans}`);
+    }
+
+    if (r.error_type) {
+      pushConsole(`[结果] 错误: ${r.error_type}`, 'del');
+    } else if (r.judge_passed === true) {
+      pushConsole('[结果] 判定: 通过');
+    } else if (r.judge_passed === false) {
+      pushConsole('[结果] 判定: 未通过');
+    }
+
+    seen[key] = true;
+  }
+
+  if (currCompleted < (prev.completed || 0)) {
+    pushConsoleDelete(`[回滚] 进度 ${(prev.completed || 0)} -> ${currCompleted}`);
+  }
+
+  if (['completed','partial_failed','failed'].includes(status) && status !== prev.phase) {
+    pushConsoleSeparator('结束');
+    pushConsole('[总结] 流程结束，正在汇总分析报告。');
+  }
+
+  _lastProgressSnapshot = {
+    completed: currCompleted,
+    total: currTotal,
+    phase: status,
+    predetectLogged: _lastProgressSnapshot.predetectLogged,
+    responseSeen: seen,
+  };
+}
+
+function pushConsole(line, type = 'normal') {
+  _consoleLines.push({ text: line, type });
+  if (_consoleLines.length > 160) _consoleLines.shift();
+  updateLogPanel();
+}
+
+function pushConsoleSeparator(title = '') {
+  const bar = '─'.repeat(20);
+  const text = title ? `${bar} ${title} ${bar}` : `${bar}${bar}`;
+  pushConsole(text, 'sep');
+}
+
+function pushConsoleDelete(line) {
+  pushConsole(line, 'del');
+}
+
+function pushConsoleTyping(line) {
+  if (_typingTimer) return;
+  _typingTimer = setTimeout(() => {
+    pushConsole(line, 'typing');
+    updateLogPanel();
+    _typingTimer = null;
+  }, 260);
+}
+
+function renderConsoleLines() {
+  if (!_consoleLines.length) {
+    return '<div class="console-line">等待任务开始...</div>';
+  }
+  const visible = _consoleLines.filter(matchLogFilter);
+  if (!visible.length) {
+    return '<div class="console-line meta">当前过滤条件下暂无日志</div>';
+  }
+  return visible.map(l => `<div class="console-line ${l.type === 'typing' ? 'typing' : ''} ${l.type === 'del' ? 'del' : ''} ${l.type === 'sep' ? 'sep' : ''} ${l.type === 'meta' ? 'meta' : ''}">${escHtml(l.text)}</div>`).join('');
 }
 
 function renderPredetectCard(pre) {
@@ -465,14 +818,67 @@ function renderReport(r) {
   const scores = r.scores || {};
   const sim    = r.similarity || [];
   const risk   = r.risk || {};
+  const scorecard = r.scorecard || null;
+  const verdict = r.verdict || null;
   const cases  = r.case_results || [];
+  const dimensions = r.dimensions || {};
+  const tagBreakdown = r.tag_breakdown || {};
+  const failureAttribution = r.failure_attribution || {};
+  const abSignificance = r.ab_significance || (r.details && r.details.ab_significance) || [];
 
   let html = '';
+
+  if (scorecard) {
+    const b = scorecard.breakdown || {};
+    html += `
+      <div class="card">
+        <h2>跑分报告卡（v2）</h2>
+        <div class="score-grid">
+          ${scoreCard(scorecard.total_score, '总分 Total')}
+          ${scoreCard(scorecard.capability_score, '能力分 Capability')}
+          ${scoreCard(scorecard.authenticity_score, '真实性 Authenticity')}
+          ${scoreCard(scorecard.performance_score, '性能分 Performance')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
+          <div class="score-card" style="text-align:left">
+            <div class="card-label">能力细分</div>
+            <div style="font-size:12px;color:var(--ink3)">推理能力: ${Math.round(b.reasoning||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">指令遵循: ${Math.round(b.instruction||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">编程能力: ${Math.round(b.coding||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">安全性: ${Math.round(b.safety||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">协议兼容: ${Math.round(b.protocol||0)}</div>
+          </div>
+          <div class="score-card" style="text-align:left">
+            <div class="card-label">真实性信号</div>
+            <div style="font-size:12px;color:var(--ink3)">一致性: ${Math.round(b.consistency||0)}</div>
+          </div>
+          <div class="score-card" style="text-align:left">
+            <div class="card-label">性能信号</div>
+            <div style="font-size:12px;color:var(--ink3)">响应速度: ${Math.round(b.speed||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">稳定性: ${Math.round(b.stability||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">成本效率: ${Math.round(b.cost_efficiency||0)}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (verdict && verdict.level) {
+    const cls = verdict.level === 'trusted' ? 'low' : verdict.level === 'suspicious' ? 'medium' : 'high';
+    html += `
+      <div class="risk-block ${cls}">
+        <div class="card-label">真实性结论 / Trust Verdict</div>
+        <div class="risk-level ${cls}">${escHtml(verdict.label || verdict.level)}</div>
+        <ul class="evidence-list">
+          ${(verdict.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
+        </ul>
+        <div class="risk-disclaimer">${escHtml(verdict.disclaimer||'')}</div>
+      </div>`;
+  }
 
   // Scores
   html += `
     <div class="card">
-      <h2>评分</h2>
+      <h2>评分（兼容 v1）</h2>
       <div class="score-grid">
         ${scoreCard(scores.protocol_score, '协议兼容')}
         ${scoreCard(scores.instruction_score, '指令遵循')}
@@ -494,9 +900,20 @@ function renderReport(r) {
       </div>`;
   }
 
+  if (Object.keys(dimensions).length || Object.keys(tagBreakdown).length || Object.keys(failureAttribution).length) {
+    html += `
+      <div class="card">
+        <h2>多维诊断看板</h2>
+        <div class="metric-grid">
+          ${renderMetricCard('维度分布', dimensions, true)}
+          ${renderMetricCard('标签分布', tagBreakdown, true)}
+          ${renderMetricCard('失败归因', failureAttribution, false)}
+        </div>
+      </div>`;
+  }
+
   // Similarity
   if (sim.length) {
-    const topScore = sim[0].score;
     html += `
       <div class="card">
         <h2>相似度排名</h2>
@@ -510,13 +927,21 @@ function renderReport(r) {
               <div class="sim-name">${escHtml(s.benchmark)}</div>
               <div class="sim-bar-wrap">
                 <div class="sim-bar" style="width:${pct}%;background:${barColor}"></div>
-                <div class="sim-ci" style="left:${ciLo}%;width:${ciHi-ciLo}%;background:${barColor}"></div>
+                <div class="sim-ci" style="left:${ciLo}%;width:${Math.max(1, ciHi-ciLo)}%;background:${barColor}"></div>
               </div>
               <div class="sim-score">${pct}%</div>
               <div style="font-size:10px;color:var(--ink4);min-width:80px">[${ciLo}–${ciHi}%]</div>
             </div>`;
         }).join('')}
         <div style="font-size:11px;color:var(--ink4);margin-top:8px">[ ] 为 95% 置信区间</div>
+      </div>`;
+  }
+
+  if (abSignificance.length) {
+    html += `
+      <div class="card">
+        <h2>A/B 统计显著性</h2>
+        ${abSignificance.map(renderAbRow).join('')}
       </div>`;
   }
 
@@ -533,6 +958,64 @@ function renderReport(r) {
 function scoreCard(val, label) {
   const v = val != null ? Math.round(val) : '–';
   return `<div class="score-card"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
+}
+
+const _zhLabels = {
+  // 维度名称
+  instruction: '指令遵循', protocol: '协议兼容', performance: '性能表现',
+  reasoning: '推理能力', coding: '编程能力', consistency: '一致性',
+  system: '系统提示', param: '参数控制', style: '风格特征', refusal: '安全拒答',
+  // 失败归因
+  format_violation: '格式违规', reasoning_failure: '推理失败',
+  error_response: '错误响应', safety_violation: '安全违规', unknown: '未知原因',
+  // 标签（常见）
+  exact_match: '精确匹配', json_schema: 'JSON格式', regex_match: '正则匹配',
+  line_count: '行数控制', temperature: '温度参数', markdown: 'Markdown',
+};
+function zhLabel(key) { return _zhLabels[key] || key; }
+
+function renderMetricCard(title, obj, asPercent) {
+  const keys = Object.keys(obj || {});
+  if (!keys.length) {
+    return `<div class="metric-card"><div class="metric-title">${escHtml(title)}</div><div style="font-size:11px;color:var(--ink4)">暂无数据</div></div>`;
+  }
+  const rows = keys
+    .map(k => ({ k, v: Number(obj[k] || 0) }))
+    .sort((a, b) => b.v - a.v)
+    .slice(0, 8)
+    .map(({k, v}) => {
+      const pct = Math.max(0, Math.min(100, Math.round(v * 100)));
+      const label = asPercent ? `${pct}%` : `${pct}%`;
+      const displayName = zhLabel(k);
+      return `<div class="metric-row">
+        <div class="metric-name" title="${escHtml(k)}">${escHtml(displayName)}</div>
+        <div class="metric-track"><div class="metric-fill" style="width:${pct}%"></div></div>
+        <div class="metric-val">${label}</div>
+      </div>`;
+    }).join('');
+
+  return `<div class="metric-card"><div class="metric-title">${escHtml(title)}</div>${rows}</div>`;
+}
+
+function renderAbRow(item) {
+  const delta = Number(item.delta || 0);
+  const sig = !!item.significant;
+  const cls = delta > 0 ? 'ab-up' : delta < 0 ? 'ab-down' : 'ab-neutral';
+  const sign = delta > 0 ? '+' : '';
+  const sigBadge = sig
+    ? (delta >= 0 ? '<span class="badge badge-green">显著提升</span>' : '<span class="badge badge-red">显著退化</span>')
+    : '<span class="badge badge-gray">不显著</span>';
+
+  return `<div class="ab-row">
+    <div class="ab-left">
+      <div class="ab-metric">${escHtml(item.metric || 'metric')}</div>
+      <div class="ab-meta">95% CI [${Number(item.ci_95_low||0).toFixed(4)}, ${Number(item.ci_95_high||0).toFixed(4)}] · p=${Number(item.p_value||1).toFixed(6)}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="ab-delta ${cls}">${sign}${delta.toFixed(4)}</div>
+      ${sigBadge}
+    </div>
+  </div>`;
 }
 
 function renderCaseItem(c) {

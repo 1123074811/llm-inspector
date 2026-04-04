@@ -40,7 +40,7 @@ class Settings:
     # Request behaviour
     DEFAULT_REQUEST_TIMEOUT_SEC: int = int(os.getenv("DEFAULT_REQUEST_TIMEOUT_SEC", "60"))
     MAX_STREAM_CHUNKS: int = int(os.getenv("MAX_STREAM_CHUNKS", "512"))
-    INTER_REQUEST_DELAY_MS: int = int(os.getenv("INTER_REQUEST_DELAY_MS", "500"))
+    INTER_REQUEST_DELAY_MS: int = int(os.getenv("INTER_REQUEST_DELAY_MS", "150"))
 
     # Data retention
     RAW_RESPONSE_TTL_DAYS: int = int(os.getenv("RAW_RESPONSE_TTL_DAYS", "7"))
@@ -54,6 +54,14 @@ class Settings:
     PREDETECT_CONFIDENCE_THRESHOLD: float = float(
         os.getenv("PREDETECT_CONFIDENCE_THRESHOLD", "0.85")
     )
+
+    # Adaptive suite controls (token-cost vs confidence)
+    SENTINEL_SIZE: int = int(os.getenv("SENTINEL_SIZE", "10"))
+    CORE_SIZE: int = int(os.getenv("CORE_SIZE", "12"))
+    EXPANSION_SIZE: int = int(os.getenv("EXPANSION_SIZE", "10"))
+    ARBITRATION_MAX: int = int(os.getenv("ARBITRATION_MAX", "6"))
+    DEFAULT_MAX_TOKENS_CAP: int = int(os.getenv("DEFAULT_MAX_TOKENS_CAP", "120"))
+    LONG_FORM_MAX_TOKENS_CAP: int = int(os.getenv("LONG_FORM_MAX_TOKENS_CAP", "250"))
 
     def _ensure_encryption_key(self) -> bytes:
         """Return 32-byte AES key, auto-generating one if not set."""

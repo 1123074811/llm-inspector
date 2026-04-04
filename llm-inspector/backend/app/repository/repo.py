@@ -86,10 +86,58 @@ def list_runs(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def set_run_cancel_requested(run_id: str, requested: bool = True) -> None:
+    run = get_run(run_id)
+    if not run:
+        return
+    metadata = run.get("metadata") or {}
+    metadata["cancel_requested"] = bool(requested)
+    conn = get_conn()
+    conn.execute(
+        "UPDATE test_runs SET metadata=? WHERE id=?",
+        (json_col(metadata), run_id),
+    )
+    conn.commit()
+
+
+def is_run_cancel_requested(run_id: str) -> bool:
+    run = get_run(run_id)
+    if not run:
+        return False
+    metadata = run.get("metadata") or {}
+    return bool(metadata.get("cancel_requested", False))
+
+
+def mark_run_retry(run_id: str) -> None:
+    run = get_run(run_id)
+    if not run:
+        return
+    metadata = run.get("metadata") or {}
+    metadata["cancel_requested"] = False
+    metadata["resume_from_existing"] = True
+    conn = get_conn()
+    conn.execute(
+        """UPDATE test_runs
+           SET status=?, started_at=NULL, completed_at=NULL,
+               error_message=NULL, metadata=?
+           WHERE id=?""",
+        ("queued", json_col(metadata), run_id),
+    )
+    conn.commit()
+
+
 # ── Test Cases ────────────────────────────────────────────────────────────────
 
 def upsert_test_case(case: dict) -> None:
     conn = get_conn()
+    params = dict(case.get("params", {}))
+    params.setdefault("_meta", {})
+    params["_meta"].update({
+        "dimension": case.get("dimension"),
+        "tags": case.get("tags", []),
+        "judge_rubric": case.get("judge_rubric", {}),
+    })
+
     conn.execute(
         """INSERT OR REPLACE INTO test_cases
            (id, category, name, system_prompt, user_prompt,
@@ -100,7 +148,7 @@ def upsert_test_case(case: dict) -> None:
             case["id"], case["category"], case["name"],
             case.get("system_prompt"), case["user_prompt"],
             case["expected_type"], case["judge_method"],
-            json_col(case.get("params", {})),
+            json_col(params),
             case.get("max_tokens", 5), case.get("n_samples", 1),
             case.get("temperature", 0.0), case.get("weight", 1.0),
             1 if case.get("enabled", True) else 0,
@@ -112,10 +160,25 @@ def upsert_test_case(case: dict) -> None:
 
 def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[dict]:
     conn = get_conn()
+
+    # Primary query for requested suite version
     rows = conn.execute(
         "SELECT * FROM test_cases WHERE suite_version=? AND enabled=1",
         (suite_version,),
     ).fetchall()
+
+    # Fallback chain to avoid hard failure when requested suite has not been seeded yet
+    if not rows and suite_version != "v2":
+        rows = conn.execute(
+            "SELECT * FROM test_cases WHERE suite_version='v2' AND enabled=1"
+        ).fetchall()
+
+    # Final fallback: any enabled cases
+    if not rows:
+        rows = conn.execute(
+            "SELECT * FROM test_cases WHERE enabled=1"
+        ).fetchall()
+
     cases = []
     for row in rows:
         c = dict(row)
@@ -165,6 +228,51 @@ def save_response(run_id: str, case_id: str, sample_index: int,
     )
     conn.commit()
     return resp_id
+
+
+def save_response_batch(rows_data: list[dict]) -> list[str]:
+    """Batch insert test_responses rows in one transaction."""
+    if not rows_data:
+        return []
+    conn = get_conn()
+    ids: list[str] = []
+    ts = now_iso()
+    for item in rows_data:
+        resp_id = new_id()
+        ids.append(resp_id)
+        resp_data = item["resp_data"]
+        conn.execute(
+            """INSERT INTO test_responses
+               (id, run_id, case_id, sample_index, request_payload,
+                response_text, raw_response, raw_headers,
+                status_code, latency_ms, first_token_ms, finish_reason,
+                usage_prompt_tokens, usage_completion_tokens, usage_total_tokens,
+                error_type, error_message, judge_passed, judge_detail, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                resp_id, item["run_id"], item["case_id"], item["sample_index"],
+                json_col(resp_data.get("request")),
+                resp_data.get("response_text"),
+                json_col(resp_data.get("raw_response")),
+                json_col(resp_data.get("raw_headers")),
+                resp_data.get("status_code"),
+                resp_data.get("latency_ms"),
+                resp_data.get("first_token_ms"),
+                resp_data.get("finish_reason"),
+                resp_data.get("usage_prompt_tokens"),
+                resp_data.get("usage_completion_tokens"),
+                resp_data.get("usage_total_tokens"),
+                resp_data.get("error_type"),
+                resp_data.get("error_message"),
+                1 if resp_data.get("judge_passed") else (
+                    0 if resp_data.get("judge_passed") is False else None
+                ),
+                json_col(resp_data.get("judge_detail", {})),
+                ts,
+            ),
+        )
+    conn.commit()
+    return ids
 
 
 def get_responses(run_id: str) -> list[dict]:
@@ -287,3 +395,124 @@ def get_report(run_id: str) -> dict | None:
     d["details"] = from_json_col(d.get("details"))
     d["summary"] = from_json_col(d.get("summary"))
     return d
+
+
+# ── Score Breakdown ──────────────────────────────────────────────────────────
+
+def save_score_breakdown(run_id: str, dimension: str, score: float,
+                         max_score: float = 100.0, details: dict | None = None) -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO score_breakdown
+           (id, run_id, dimension, score, max_score, details, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (new_id(), run_id, dimension, score, max_score,
+         json_col(details) if details else None, now_iso()),
+    )
+    conn.commit()
+
+
+def save_score_breakdowns(run_id: str, breakdowns: dict[str, float]) -> None:
+    for dimension, score in breakdowns.items():
+        save_score_breakdown(run_id, dimension, score)
+
+
+def get_score_breakdown(run_id: str) -> dict[str, float]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT dimension, score FROM score_breakdown WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    return {row["dimension"]: row["score"] for row in rows}
+
+
+# ── Compare Runs ─────────────────────────────────────────────────────────────
+
+def create_compare_run(golden_run_id: str, candidate_run_id: str) -> str:
+    cid = new_id()
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO compare_runs
+           (id, golden_run_id, candidate_run_id, status, created_at)
+           VALUES (?,?,?,?,?)""",
+        (cid, golden_run_id, candidate_run_id, "queued", now_iso()),
+    )
+    conn.commit()
+    return cid
+
+
+def get_compare_run(compare_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM compare_runs WHERE id=?", (compare_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["details"] = from_json_col(d.get("details"))
+    return d
+
+
+def update_compare_run(compare_id: str, **kwargs) -> None:
+    sets = []
+    vals: list = []
+    for k, v in kwargs.items():
+        sets.append(f"{k}=?")
+        vals.append(json_col(v) if isinstance(v, dict) else v)
+    vals.append(compare_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE compare_runs SET {','.join(sets)} WHERE id=?", vals)
+    conn.commit()
+
+
+def list_compare_runs(limit: int = 20) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM compare_runs ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Model Scores History ─────────────────────────────────────────────────────
+
+def save_score_history(model_name: str, base_url: str, run_id: str,
+                       total: float, capability: float,
+                       authenticity: float, performance: float) -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO model_scores_history
+           (id, model_name, base_url, run_id, total_score,
+            capability, authenticity, performance, recorded_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (new_id(), model_name, base_url, run_id,
+         total, capability, authenticity, performance, now_iso()),
+    )
+    conn.commit()
+
+
+def get_model_trend(model_name: str, limit: int = 20) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT * FROM model_scores_history
+           WHERE model_name=? ORDER BY recorded_at DESC LIMIT ?""",
+        (model_name, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_leaderboard(sort_by: str = "total_score", limit: int = 50) -> list[dict]:
+    """Return latest score for each model, sorted by specified field."""
+    valid_sorts = {"total_score", "capability", "authenticity", "performance"}
+    if sort_by not in valid_sorts:
+        sort_by = "total_score"
+    conn = get_conn()
+    rows = conn.execute(
+        f"""SELECT h.* FROM model_scores_history h
+            INNER JOIN (
+                SELECT model_name, MAX(recorded_at) as latest
+                FROM model_scores_history GROUP BY model_name
+            ) g ON h.model_name = g.model_name AND h.recorded_at = g.latest
+            ORDER BY h.{sort_by} DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]

@@ -20,21 +20,31 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
     text = response_text.strip()
 
     if method == "exact_match":
-        return _exact_match(text, params)
+        passed, detail = _exact_match(text, params)
     elif method == "regex_match":
-        return _regex_match(text, params)
+        passed, detail = _regex_match(text, params)
     elif method == "json_schema":
-        return _json_schema(text, params)
+        passed, detail = _json_schema(text, params)
     elif method == "line_count":
-        return _line_count(text, params)
+        passed, detail = _line_count(text, params)
     elif method == "refusal_detect":
-        return _refusal_detect(text, params)
+        passed, detail = _refusal_detect(text, params)
     elif method == "heuristic_style":
-        return _heuristic_style(text, params)
+        passed, detail = _heuristic_style(text, params)
+    elif method == "code_execution":
+        passed, detail = _code_execution(text, params)
+    elif method == "identity_consistency":
+        passed, detail = _identity_consistency(text, params)
     elif method == "any_text":
-        return True, {"length": len(text)}
+        passed, detail = True, {"length": len(text)}
     else:
-        return None, {"error": f"unknown judge method: {method}"}
+        passed, detail = None, {"error": f"unknown judge method: {method}"}
+
+    rubric = (params.get("_meta", {}) or {}).get("judge_rubric") or {}
+    if rubric:
+        detail["judge_rubric"] = rubric
+        detail["judge_explanation"] = _build_judge_explanation(method, passed, detail, rubric)
+    return passed, detail
 
 
 # ── Individual judges ─────────────────────────────────────────────────────────
@@ -225,3 +235,161 @@ def _heuristic_style(text: str, params: dict) -> tuple[None, dict]:
         features["list_style"] = "none"
 
     return None, features
+
+
+# ── Code Execution Judge ─────────────────────────────────────────────────────
+
+def _code_execution(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    Extract code from response, execute test cases in a sandboxed subprocess.
+    Only supports Python. Timeout enforced.
+    """
+    import subprocess
+    import tempfile
+    import os
+
+    language = params.get("language", "python")
+    test_cases = params.get("test_cases", [])
+
+    if language != "python":
+        return False, {"error": f"unsupported language: {language}"}
+
+    if not test_cases:
+        return False, {"error": "no test cases provided"}
+
+    # Extract code — strip markdown fences if present
+    code = re.sub(r'^```(?:python)?\s*', '', text.strip(), flags=re.IGNORECASE)
+    code = re.sub(r'\s*```$', '', code.strip())
+
+    passed_count = 0
+    total = len(test_cases)
+    results = []
+
+    for tc in test_cases:
+        call_expr = tc["call"]
+        expected = tc["expected"]
+        # Build test script
+        test_script = f"""{code}
+
+_result = {call_expr}
+print(repr(_result))
+"""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.py', delete=False, encoding='utf-8'
+            ) as f:
+                f.write(test_script)
+                tmp_path = f.name
+
+            proc = subprocess.run(
+                ["python", tmp_path],
+                capture_output=True, text=True, timeout=5,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            os.unlink(tmp_path)
+
+            if proc.returncode == 0:
+                actual_repr = proc.stdout.strip()
+                expected_repr = repr(expected)
+                tc_passed = actual_repr == expected_repr
+                if tc_passed:
+                    passed_count += 1
+                results.append({
+                    "call": call_expr, "expected": expected_repr,
+                    "actual": actual_repr, "passed": tc_passed,
+                })
+            else:
+                results.append({
+                    "call": call_expr, "error": proc.stderr[:200], "passed": False,
+                })
+        except subprocess.TimeoutExpired:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            results.append({"call": call_expr, "error": "timeout", "passed": False})
+        except Exception as e:
+            results.append({"call": call_expr, "error": str(e)[:200], "passed": False})
+
+    all_passed = passed_count == total
+    return all_passed, {
+        "passed_count": passed_count,
+        "total": total,
+        "pass_rate": passed_count / total if total else 0,
+        "results": results,
+    }
+
+
+# ── Identity Consistency Judge ───────────────────────────────────────────────
+
+def _identity_consistency(text: str, params: dict) -> tuple[bool | None, dict]:
+    """
+    Check response consistency for identity/antispoof probes.
+    - If expected_answer is given: check if response matches.
+    - If extract_identity is True: extract model identity keywords.
+    """
+    detail: dict = {"response_length": len(text)}
+
+    expected = params.get("expected_answer")
+    if expected:
+        clean = text.strip().strip('"').strip("'").strip('.')
+        match = expected.lower() in clean.lower()
+        detail["expected"] = expected
+        detail["got"] = clean[:100]
+        detail["match"] = match
+        return match, detail
+
+    if params.get("extract_identity"):
+        text_lower = text.lower()
+        identity_signals = {
+            "gpt-4o": ["gpt-4o"],
+            "gpt-4": ["gpt-4", "gpt4"],
+            "gpt-3.5": ["gpt-3.5", "gpt-3.5-turbo"],
+            "gpt-5": ["gpt-5", "gpt5"],
+            "claude": ["claude"],
+            "gemini": ["gemini"],
+            "llama": ["llama", "meta"],
+            "deepseek": ["deepseek"],
+            "qwen": ["qwen", "tongyi"],
+            "glm": ["glm", "chatglm"],
+            "mistral": ["mistral"],
+            "yi": ["yi-"],
+        }
+        detected = []
+        for model_family, keywords in identity_signals.items():
+            if any(kw in text_lower for kw in keywords):
+                detected.append(model_family)
+        detail["detected_identities"] = detected
+
+        if params.get("detect_contradiction"):
+            detail["system_override_response"] = text[:300]
+            detail["leaked_identity"] = detected
+
+        return None, detail
+
+    return None, detail
+
+
+def _build_judge_explanation(
+    method: str,
+    passed: bool | None,
+    detail: dict,
+    rubric: dict,
+) -> str:
+    criteria = rubric.get("criteria") or []
+    fail_condition = rubric.get("fail_condition") or ""
+    pass_label = "PASS" if passed is True else ("FAIL" if passed is False else "INFO")
+    parts = [f"[{pass_label}] {rubric.get('name', method)}"]
+    if criteria:
+        parts.append("criteria=" + "; ".join(str(c) for c in criteria[:4]))
+    if fail_condition and passed is False:
+        parts.append(f"fail_condition={fail_condition}")
+
+    if method == "json_schema" and detail.get("schema_errors"):
+        parts.append("schema_errors=" + " | ".join(detail.get("schema_errors", [])[:3]))
+    if method == "regex_match":
+        parts.append(f"pattern_found={detail.get('found')}")
+    if method == "line_count":
+        parts.append(f"line_count={detail.get('actual_lines')}/{detail.get('expected_lines')}")
+
+    return " ; ".join(parts)

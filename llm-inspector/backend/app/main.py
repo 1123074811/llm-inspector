@@ -16,7 +16,7 @@ from app.core.db import init_db
 from app.core.logging import setup_logging, get_logger
 from app.core.security import validate_and_sanitize_url, get_key_manager
 from app.tasks.seeder import seed_all
-from app.tasks.worker import submit_run, active_count
+from app.tasks.worker import submit_run, submit_compare, active_count
 from app.repository import repo
 
 logger = get_logger(__name__)
@@ -35,11 +35,23 @@ def _error(msg: str, status: int = 400) -> tuple[int, bytes, str]:
 # ── Route handlers ─────────────────────────────────────────────────────────────
 
 def handle_health(_path, _qs, _body) -> tuple:
+    db_state = "ok"
+    case_stats: dict[str, int] = {}
+    try:
+        conn = repo.get_conn()
+        rows = conn.execute(
+            "SELECT suite_version, COUNT(*) as n FROM test_cases GROUP BY suite_version"
+        ).fetchall()
+        case_stats = {row["suite_version"]: row["n"] for row in rows}
+    except Exception:
+        db_state = "degraded"
+
     return _json({
         "status": "ok",
-        "db": "ok",
+        "db": db_state,
         "workers_active": active_count(),
         "version": "1.0.0",
+        "test_cases": case_stats,
     })
 
 
@@ -67,13 +79,17 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     if test_mode not in ("quick", "standard", "full"):
         test_mode = "standard"
 
+    suite_version = body.get("suite_version", "v2")
+    if suite_version not in ("v1", "v2"):
+        suite_version = "v2"
+
     run_id = repo.create_run(
         base_url=clean_url,
         api_key_encrypted=encrypted,
         api_key_hash=key_hash,
         model_name=body["model"],
         test_mode=test_mode,
-        suite_version=body.get("suite_version", "v1"),
+        suite_version=suite_version,
     )
 
     # Submit to background worker
@@ -147,6 +163,20 @@ def handle_get_responses(path, _qs, _body) -> tuple:
     # Strip large raw_response to keep payload small
     slim = []
     for r in responses:
+        req = r.get("request_payload") or {}
+        preview = {}
+        if isinstance(req, dict):
+            msgs = req.get("messages") or []
+            user_msg = ""
+            for m in msgs:
+                if isinstance(m, dict) and m.get("role") == "user":
+                    user_msg = str(m.get("content") or "")
+            preview = {
+                "temperature": req.get("temperature"),
+                "max_tokens": req.get("max_tokens"),
+                "user_prompt": user_msg[:160],
+            }
+
         slim.append({
             "id": r["id"],
             "case_id": r["case_id"],
@@ -156,6 +186,7 @@ def handle_get_responses(path, _qs, _body) -> tuple:
             "latency_ms": r.get("latency_ms"),
             "judge_passed": r.get("judge_passed"),
             "error_type": r.get("error_type"),
+            "request_preview": preview,
         })
     return _json(slim)
 
@@ -187,8 +218,9 @@ def handle_list_runs(_path, qs, _body) -> tuple:
     ])
 
 
-def handle_benchmarks(_path, _qs, _body) -> tuple:
-    benchmarks = repo.get_benchmarks("v1")
+def handle_benchmarks(_path, qs, _body) -> tuple:
+    suite_version = qs.get("suite_version", ["v1"])[0]
+    benchmarks = repo.get_benchmarks(suite_version)
     return _json([
         {
             "name": b["benchmark_name"],
@@ -198,6 +230,91 @@ def handle_benchmarks(_path, _qs, _body) -> tuple:
         }
         for b in benchmarks
     ])
+
+
+def handle_create_compare_run(_path, _qs, body: dict) -> tuple:
+    golden_run_id = body.get("golden_run_id")
+    candidate_run_id = body.get("candidate_run_id")
+    if not golden_run_id or not candidate_run_id:
+        return _error("Missing required field: golden_run_id/candidate_run_id")
+
+    golden = repo.get_run(golden_run_id)
+    candidate = repo.get_run(candidate_run_id)
+    if not golden or not candidate:
+        return _error("Run not found", 404)
+
+    if golden.get("status") not in ("completed", "partial_failed"):
+        return _error("golden_run is not completed", 400)
+    if candidate.get("status") not in ("completed", "partial_failed"):
+        return _error("candidate_run is not completed", 400)
+
+    compare_id = repo.create_compare_run(golden_run_id, candidate_run_id)
+    submit_compare(compare_id)
+    return _json({"compare_id": compare_id, "status": "queued"}, 201)
+
+
+def handle_get_compare_run(path, _qs, _body) -> tuple:
+    compare_id = _extract_id(path, r"/api/v1/compare-runs/([^/]+)$")
+    if not compare_id:
+        return _error("Invalid compare ID", 400)
+
+    row = repo.get_compare_run(compare_id)
+    if not row:
+        return _error("Compare run not found", 404)
+
+    return _json({
+        "compare_id": row["id"],
+        "golden_run_id": row["golden_run_id"],
+        "candidate_run_id": row["candidate_run_id"],
+        "status": row["status"],
+        "created_at": row.get("created_at"),
+        "completed_at": row.get("completed_at"),
+        "details": row.get("details"),
+    })
+
+
+def handle_list_compare_runs(_path, qs, _body) -> tuple:
+    limit = int(qs.get("limit", ["20"])[0])
+    rows = repo.list_compare_runs(min(limit, 100))
+    return _json(rows)
+
+
+def handle_get_scorecard(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/scorecard$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+
+    report_row = repo.get_report(run_id)
+    if not report_row:
+        return _error("Report not found", 404)
+
+    details = report_row.get("details") or {}
+    scorecard = details.get("scorecard")
+    verdict = details.get("verdict")
+    if not scorecard:
+        return _error("Scorecard not found", 404)
+
+    return _json({
+        "run_id": run_id,
+        "scorecard": scorecard,
+        "verdict": verdict,
+        "breakdown": repo.get_score_breakdown(run_id),
+    })
+
+
+def handle_model_trend(path, qs, _body) -> tuple:
+    model_name = _extract_id(path, r"/api/v1/models/([^/]+)/trend$")
+    if not model_name:
+        return _error("Invalid model name", 400)
+    model_name = urllib.parse.unquote(model_name)
+    limit = int(qs.get("limit", ["20"])[0])
+    return _json(repo.get_model_trend(model_name, min(limit, 200)))
+
+
+def handle_leaderboard(_path, qs, _body) -> tuple:
+    sort_by = qs.get("sort_by", ["total_score"])[0]
+    limit = int(qs.get("limit", ["50"])[0])
+    return _json(repo.get_leaderboard(sort_by=sort_by, limit=min(limit, 200)))
 
 
 def handle_static(path) -> tuple:
@@ -228,15 +345,50 @@ def handle_static(path) -> tuple:
 
 # ── Router ─────────────────────────────────────────────────────────────────────
 
+def handle_cancel_run(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/cancel$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+    run = repo.get_run(run_id)
+    if not run:
+        return _error("Run not found", 404)
+    if run.get("status") not in ("queued", "pre_detecting", "running"):
+        return _error("Run is not cancellable in current status", 400)
+    repo.set_run_cancel_requested(run_id, True)
+    return _json({"run_id": run_id, "status": "cancelling"})
+
+
+def handle_retry_run(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/retry$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+    run = repo.get_run(run_id)
+    if not run:
+        return _error("Run not found", 404)
+    if run.get("status") not in ("failed", "partial_failed"):
+        return _error("Only failed/partial_failed runs can be retried", 400)
+    repo.mark_run_retry(run_id)
+    submit_run(run_id)
+    return _json({"run_id": run_id, "status": "queued", "resume": True})
+
+
 ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/health$",                  handle_health),
     ("GET",    r"^/api/v1/runs$",                    handle_list_runs),
     ("POST",   r"^/api/v1/runs$",                    handle_create_run),
     ("GET",    r"^/api/v1/runs/[^/]+$",              handle_get_run),
     ("DELETE", r"^/api/v1/runs/[^/]+$",              handle_delete_run),
+    ("POST",   r"^/api/v1/runs/[^/]+/cancel$",       handle_cancel_run),
+    ("POST",   r"^/api/v1/runs/[^/]+/retry$",        handle_retry_run),
     ("GET",    r"^/api/v1/runs/[^/]+/report$",       handle_get_report),
     ("GET",    r"^/api/v1/runs/[^/]+/responses$",    handle_get_responses),
+    ("GET",    r"^/api/v1/runs/[^/]+/scorecard$",    handle_get_scorecard),
     ("GET",    r"^/api/v1/benchmarks$",              handle_benchmarks),
+    ("POST",   r"^/api/v1/compare-runs$",            handle_create_compare_run),
+    ("GET",    r"^/api/v1/compare-runs$",            handle_list_compare_runs),
+    ("GET",    r"^/api/v1/compare-runs/[^/]+$",      handle_get_compare_run),
+    ("GET",    r"^/api/v1/models/[^/]+/trend$",      handle_model_trend),
+    ("GET",    r"^/api/v1/leaderboard$",             handle_leaderboard),
 ]
 
 

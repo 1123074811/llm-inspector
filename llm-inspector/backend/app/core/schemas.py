@@ -97,6 +97,9 @@ class TestCase:
     expected_type: str
     judge_method: str
     system_prompt: str | None = None
+    dimension: str | None = None
+    tags: list[str] = field(default_factory=list)
+    judge_rubric: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
     max_tokens: int = 5
     n_samples: int = 1
@@ -186,12 +189,104 @@ class Scores:
 
 
 @dataclass
+class ScoreCard:
+    """v2 scoring: three-dimensional scorecard."""
+    # Top-level scores (0-100)
+    total_score: float = 0.0
+    capability_score: float = 0.0
+    authenticity_score: float = 0.0
+    performance_score: float = 0.0
+    # Capability sub-scores
+    reasoning_score: float = 0.0
+    instruction_score: float = 0.0
+    coding_score: float = 0.0
+    safety_score: float = 0.0
+    protocol_score: float = 0.0
+    # Authenticity sub-scores
+    similarity_to_claimed: float = 0.0
+    predetect_confidence: float = 0.0
+    consistency_score: float = 0.0
+    temperature_effectiveness: float = 0.0
+    usage_fingerprint_match: float = 0.0
+    # Performance sub-scores
+    speed_score: float = 0.0
+    stability_score: float = 0.0
+    cost_efficiency: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "total_score": round(self.total_score, 1),
+            "capability_score": round(self.capability_score, 1),
+            "authenticity_score": round(self.authenticity_score, 1),
+            "performance_score": round(self.performance_score, 1),
+            "breakdown": {
+                "reasoning": round(self.reasoning_score, 1),
+                "instruction": round(self.instruction_score, 1),
+                "coding": round(self.coding_score, 1),
+                "safety": round(self.safety_score, 1),
+                "protocol": round(self.protocol_score, 1),
+                "consistency": round(self.consistency_score, 1),
+                "speed": round(self.speed_score, 1),
+                "stability": round(self.stability_score, 1),
+                "cost_efficiency": round(self.cost_efficiency, 1),
+            },
+        }
+
+
+@dataclass
+class TrustVerdict:
+    """v2 verdict replacing RiskAssessment."""
+    level: str          # "trusted" | "suspicious" | "high_risk" | "fake"
+    label: str
+    total_score: float = 0.0
+    reasons: list[str] = field(default_factory=list)
+    disclaimer: str = (
+        "跑分结果基于行为特征对比，仅供参考，不构成确定性证明。"
+        " / Benchmark scores are based on behavioural comparison and "
+        "do not constitute definitive proof."
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "level": self.level,
+            "label": self.label,
+            "total_score": round(self.total_score, 1),
+            "reasons": self.reasons,
+            "disclaimer": self.disclaimer,
+        }
+
+
+@dataclass
 class SimilarityResult:
     benchmark_name: str
     similarity_score: float
     ci_95_low: float
     ci_95_high: float
     rank: int
+
+
+@dataclass
+class ABSignificance:
+    metric: str
+    golden_mean: float
+    candidate_mean: float
+    delta: float
+    ci_95_low: float
+    ci_95_high: float
+    p_value: float
+    significant: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "metric": self.metric,
+            "golden_mean": round(self.golden_mean, 4),
+            "candidate_mean": round(self.candidate_mean, 4),
+            "delta": round(self.delta, 4),
+            "ci_95_low": round(self.ci_95_low, 4),
+            "ci_95_high": round(self.ci_95_high, 4),
+            "p_value": round(self.p_value, 6),
+            "significant": self.significant,
+        }
 
 
 @dataclass

@@ -160,6 +160,47 @@ CREATE TABLE IF NOT EXISTS data_retention_schedule (
     purged_at           TEXT,
     PRIMARY KEY(table_name, field_name, run_id)
 );
+
+CREATE TABLE IF NOT EXISTS score_breakdown (
+    id          TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    dimension   TEXT NOT NULL,
+    score       REAL NOT NULL,
+    max_score   REAL NOT NULL DEFAULT 100.0,
+    details     TEXT,
+    created_at  TEXT NOT NULL,
+    UNIQUE(run_id, dimension)
+);
+
+CREATE TABLE IF NOT EXISTS compare_runs (
+    id                  TEXT PRIMARY KEY,
+    golden_run_id       TEXT NOT NULL REFERENCES test_runs(id),
+    candidate_run_id    TEXT NOT NULL REFERENCES test_runs(id),
+    status              TEXT NOT NULL DEFAULT 'queued',
+    delta_capability    REAL,
+    delta_authenticity  REAL,
+    delta_performance   REAL,
+    verdict             TEXT,
+    details             TEXT,
+    created_at          TEXT NOT NULL,
+    completed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_compare_status ON compare_runs(status);
+
+CREATE TABLE IF NOT EXISTS model_scores_history (
+    id              TEXT PRIMARY KEY,
+    model_name      TEXT NOT NULL,
+    base_url        TEXT NOT NULL,
+    run_id          TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    total_score     REAL,
+    capability      REAL,
+    authenticity    REAL,
+    performance     REAL,
+    recorded_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scores_model ON model_scores_history(model_name, recorded_at);
 """
 
 

@@ -287,3 +287,32 @@ def get_report(run_id: str) -> dict | None:
     d["details"] = from_json_col(d.get("details"))
     d["summary"] = from_json_col(d.get("summary"))
     return d
+
+
+# ── Score Breakdown ──────────────────────────────────────────────────────────
+
+def save_score_breakdown(run_id: str, dimension: str, score: float,
+                         max_score: float = 100.0, details: dict | None = None) -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO score_breakdown
+           (id, run_id, dimension, score, max_score, details, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (new_id(), run_id, dimension, score, max_score,
+         json_col(details) if details else None, now_iso()),
+    )
+    conn.commit()
+
+
+def save_score_breakdowns(run_id: str, breakdowns: dict[str, float]) -> None:
+    for dimension, score in breakdowns.items():
+        save_score_breakdown(run_id, dimension, score)
+
+
+def get_score_breakdown(run_id: str) -> dict[str, float]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT dimension, score FROM score_breakdown WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    return {row["dimension"]: row["score"] for row in rows}

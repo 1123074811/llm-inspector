@@ -36,6 +36,29 @@ def submit_run(run_id: str) -> None:
     logger.info("Run submitted to worker pool", run_id=run_id)
 
 
+def submit_compare(compare_id: str) -> None:
+    """Submit a compare pipeline task."""
+    from app.runner.orchestrator import run_compare_pipeline
+
+    task_key = f"compare:{compare_id}"
+
+    def _task():
+        with _lock:
+            _running[task_key] = True
+        try:
+            run_compare_pipeline(compare_id)
+        except Exception as e:
+            logger.error("Compare pipeline exception", compare_id=compare_id, error=str(e))
+            from app.repository import repo
+            repo.update_compare_run(compare_id, status="failed", details={"error": str(e)[:500]})
+        finally:
+            with _lock:
+                _running.pop(task_key, None)
+
+    _executor.submit(_task)
+    logger.info("Compare run submitted to worker pool", compare_id=compare_id)
+
+
 def is_running(run_id: str) -> bool:
     with _lock:
         return _running.get(run_id, False)

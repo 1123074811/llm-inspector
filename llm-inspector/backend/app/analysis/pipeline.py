@@ -12,7 +12,8 @@ import json
 import math
 import random
 from app.core.schemas import (
-    CaseResult, PreDetectionResult, Scores, SimilarityResult, RiskAssessment
+    CaseResult, PreDetectionResult, Scores, SimilarityResult, RiskAssessment,
+    ScoreCard, TrustVerdict,
 )
 from app.core.logging import get_logger
 
@@ -28,6 +29,9 @@ class FeatureExtractor:
 
     def extract(self, case_results: list[CaseResult]) -> dict[str, float]:
         features: dict[str, float] = {}
+        dim_stats = self._dimension_stats(case_results)
+        tag_stats = self._tag_stats(case_results)
+        failure_stats = self._failure_attribution(case_results)
 
         # --- Protocol features (from protocol category) ---
         proto_cases = [r for r in case_results if r.case.category == "protocol"]
@@ -130,6 +134,10 @@ class FeatureExtractor:
             idx_p95 = max(0, int(len(sorted_lat) * 0.95) - 1)
             features["latency_p95_ms"] = sorted_lat[idx_p95]
 
+        features.update(dim_stats)
+        features.update(tag_stats)
+        features.update(failure_stats)
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -143,6 +151,80 @@ class FeatureExtractor:
                     if s.judge_passed:
                         passed += 1
         return (passed / total) if total > 0 else 0.0
+
+    @staticmethod
+    def _dimension_stats(case_results: list[CaseResult]) -> dict[str, float]:
+        by_dim: dict[str, list[CaseResult]] = {}
+        for r in case_results:
+            dim = (r.case.dimension or r.case.category or "unknown").strip().lower()
+            by_dim.setdefault(dim, []).append(r)
+
+        out: dict[str, float] = {}
+        for dim, items in by_dim.items():
+            out[f"dim_{dim}_pass_rate"] = FeatureExtractor._pass_rate(items)
+            out[f"dim_{dim}_coverage"] = len(items) / max(len(case_results), 1)
+        return out
+
+    @staticmethod
+    def _tag_stats(case_results: list[CaseResult]) -> dict[str, float]:
+        tag_to_samples: dict[str, list[bool]] = {}
+        for r in case_results:
+            tags = r.case.tags or []
+            for tag in tags:
+                t = str(tag).strip().lower()
+                if not t:
+                    continue
+                tag_to_samples.setdefault(t, [])
+                for s in r.samples:
+                    if s.judge_passed is not None:
+                        tag_to_samples[t].append(bool(s.judge_passed))
+
+        out: dict[str, float] = {}
+        for tag, vals in tag_to_samples.items():
+            if not vals:
+                continue
+            out[f"tag_{tag}_pass_rate"] = sum(1 for v in vals if v) / len(vals)
+        return out
+
+    @staticmethod
+    def _failure_attribution(case_results: list[CaseResult]) -> dict[str, float]:
+        counts = {
+            "error_response": 0,
+            "format_violation": 0,
+            "safety_violation": 0,
+            "reasoning_failure": 0,
+            "unknown": 0,
+        }
+        total_fail = 0
+
+        for r in case_results:
+            for s in r.samples:
+                if s.judge_passed is not False:
+                    continue
+                total_fail += 1
+                if s.response.error_type:
+                    counts["error_response"] += 1
+                    continue
+
+                jm = (r.case.judge_method or "").lower()
+                cat = (r.case.category or "").lower()
+                detail = s.judge_detail or {}
+
+                if jm in {"json_schema", "regex_match", "line_count", "exact_match"}:
+                    counts["format_violation"] += 1
+                elif jm == "refusal_detect" or cat == "refusal":
+                    counts["safety_violation"] += 1
+                elif cat in {"reasoning", "coding", "consistency"}:
+                    counts["reasoning_failure"] += 1
+                elif detail.get("schema_errors") or detail.get("found") is False:
+                    counts["format_violation"] += 1
+                else:
+                    counts["unknown"] += 1
+
+        if total_fail == 0:
+            return {f"failure_{k}_rate": 0.0 for k in counts}
+
+        return {f"failure_{k}_rate": v / total_fail for k, v in counts.items()}
 
 
 # ── Score Calculator ──────────────────────────────────────────────────────────
@@ -183,6 +265,288 @@ class ScoreCalculator:
             instruction_score=min(100.0, round(instruction, 1)),
             system_obedience_score=min(100.0, round(system_obedience, 1)),
             param_compliance_score=min(100.0, round(param, 1)),
+        )
+
+
+# ── ScoreCard Calculator (v2) ────────────────────────────────────────────────
+
+class ScoreCardCalculator:
+    """
+    v2 三维评分体系:
+      CapabilityScore  = 0.25×reasoning + 0.25×instruction + 0.20×coding + 0.15×safety + 0.15×protocol
+      AuthenticityScore = 0.40×similarity + 0.25×predetect + 0.15×consistency + 0.10×temp + 0.10×usage
+      PerformanceScore = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
+      TotalScore = 0.45×Capability + 0.35×Authenticity + 0.20×Performance
+    """
+
+    def calculate(
+        self,
+        features: dict[str, float],
+        case_results: list[CaseResult],
+        similarities: list[SimilarityResult],
+        predetect: PreDetectionResult | None,
+        claimed_model: str | None = None,
+    ) -> ScoreCard:
+        card = ScoreCard()
+
+        # ── Capability sub-scores ──
+        card.reasoning_score = self._reasoning_score(case_results)
+        card.instruction_score = self._instruction_score(features)
+        card.coding_score = self._coding_score(case_results)
+        card.safety_score = self._safety_score(features)
+        card.protocol_score = self._protocol_score(features)
+
+        card.capability_score = min(100.0, round(
+            0.25 * card.reasoning_score
+            + 0.25 * card.instruction_score
+            + 0.20 * card.coding_score
+            + 0.15 * card.safety_score
+            + 0.15 * card.protocol_score,
+            1,
+        ))
+
+        # ── Authenticity sub-scores ──
+        card.similarity_to_claimed = self._similarity_to_claimed(
+            similarities, claimed_model
+        )
+        card.predetect_confidence = (
+            predetect.confidence * 100 if predetect and predetect.success else 0.0
+        )
+        card.consistency_score = self._consistency_score(case_results)
+        card.temperature_effectiveness = (
+            features.get("temperature_param_effective", 0.5) * 100
+        )
+        card.usage_fingerprint_match = self._usage_fingerprint_score(features)
+
+        card.authenticity_score = min(100.0, round(
+            0.40 * card.similarity_to_claimed
+            + 0.25 * card.predetect_confidence
+            + 0.15 * card.consistency_score
+            + 0.10 * card.temperature_effectiveness
+            + 0.10 * card.usage_fingerprint_match,
+            1,
+        ))
+
+        # ── Performance sub-scores ──
+        card.speed_score = self._speed_score(features)
+        card.stability_score = self._stability_score(case_results)
+        card.cost_efficiency = self._cost_efficiency(features, case_results)
+
+        card.performance_score = min(100.0, round(
+            0.40 * card.speed_score
+            + 0.30 * card.stability_score
+            + 0.30 * card.cost_efficiency,
+            1,
+        ))
+
+        # ── Total ──
+        card.total_score = round(
+            0.45 * card.capability_score
+            + 0.35 * card.authenticity_score
+            + 0.20 * card.performance_score,
+            1,
+        )
+
+        return card
+
+    # ── Sub-score implementations ──
+
+    def _reasoning_score(self, case_results: list[CaseResult]) -> float:
+        cases = [r for r in case_results if r.case.category == "reasoning"]
+        if not cases:
+            return 50.0  # no data, neutral
+        return self._weighted_pass_rate(cases) * 100
+
+    def _instruction_score(self, features: dict[str, float]) -> float:
+        f = features.get
+        return min(100.0, (
+            f("instruction_pass_rate", 0.5) * 30
+            + f("exact_match_rate", 0.5) * 25
+            + f("json_valid_rate", 0.5) * 25
+            + f("format_follow_rate", 0.5) * 10
+            + f("system_obedience_rate", 0.5) * 10
+        ))
+
+    def _coding_score(self, case_results: list[CaseResult]) -> float:
+        cases = [r for r in case_results if r.case.category == "coding"]
+        if not cases:
+            return 50.0
+        return self._weighted_pass_rate(cases) * 100
+
+    def _safety_score(self, features: dict[str, float]) -> float:
+        refusal = features.get("refusal_rate", 0.5)
+        disclaimer = features.get("disclaimer_rate", 0.3)
+        # Higher refusal on dangerous content = safer = higher score
+        return min(100.0, refusal * 60 + disclaimer * 40)
+
+    def _protocol_score(self, features: dict[str, float]) -> float:
+        f = features.get
+        return min(100.0, (
+            f("protocol_success_rate", 0.5) * 40
+            + f("has_usage_fields", 0.5) * 20
+            + f("has_finish_reason", 0.5) * 20
+            + f("param_compliance_rate", 0.5) * 20
+        ))
+
+    def _similarity_to_claimed(
+        self, similarities: list[SimilarityResult],
+        claimed_model: str | None,
+    ) -> float:
+        if not similarities:
+            return 50.0
+        if claimed_model:
+            claimed_lower = claimed_model.lower()
+            for s in similarities:
+                if s.benchmark_name.lower() in claimed_lower or \
+                   claimed_lower in s.benchmark_name.lower():
+                    return min(100.0, s.similarity_score * 100)
+        # Fallback: use top similarity
+        return min(100.0, similarities[0].similarity_score * 100)
+
+    def _consistency_score(self, case_results: list[CaseResult]) -> float:
+        cases = [r for r in case_results if r.case.category == "consistency"]
+        if not cases:
+            # Fallback: measure consistency from multi-sample cases
+            multi = [r for r in case_results if len(r.samples) >= 3]
+            if not multi:
+                return 70.0
+            consistent = 0
+            total = 0
+            for r in multi:
+                texts = [s.response.content for s in r.samples
+                         if s.response.content]
+                if len(texts) >= 2:
+                    total += 1
+                    # Check if all are identical
+                    if len(set(t.strip().lower()[:50] for t in texts)) == 1:
+                        consistent += 1
+            return (consistent / total * 100) if total else 70.0
+        return self._weighted_pass_rate(cases) * 100
+
+    def _usage_fingerprint_score(self, features: dict[str, float]) -> float:
+        has_usage = features.get("has_usage_fields", 0.0)
+        has_finish = features.get("has_finish_reason", 0.0)
+        return (has_usage * 50 + has_finish * 50)
+
+    def _speed_score(self, features: dict[str, float]) -> float:
+        mean_lat = features.get("latency_mean_ms", 2000)
+        p95_lat = features.get("latency_p95_ms", 5000)
+        # Lower latency = higher score. Scale: 0-200ms=100, 5000ms+=0
+        mean_score = max(0, min(100, 100 - (mean_lat / 50)))
+        p95_score = max(0, min(100, 100 - (p95_lat / 80)))
+        return round(mean_score * 0.6 + p95_score * 0.4, 1)
+
+    def _stability_score(self, case_results: list[CaseResult]) -> float:
+        if not case_results:
+            return 50.0
+        total_samples = 0
+        error_samples = 0
+        for r in case_results:
+            for s in r.samples:
+                total_samples += 1
+                if s.response.error_type:
+                    error_samples += 1
+        if total_samples == 0:
+            return 50.0
+        error_rate = error_samples / total_samples
+        return max(0, min(100, round((1 - error_rate) * 100, 1)))
+
+    def _cost_efficiency(self, features: dict[str, float],
+                         case_results: list[CaseResult]) -> float:
+        # Based on avg response length vs latency
+        avg_len = features.get("avg_response_length", 300)
+        mean_lat = features.get("latency_mean_ms", 2000)
+        if mean_lat <= 0:
+            return 80.0
+        # Chars per second
+        cps = (avg_len / (mean_lat / 1000))
+        # Scale: 500 cps = 100, 0 cps = 0
+        return max(0, min(100, round(cps / 5, 1)))
+
+    @staticmethod
+    def _weighted_pass_rate(results: list[CaseResult]) -> float:
+        total_weight = 0.0
+        weighted_pass = 0.0
+        for r in results:
+            w = r.case.weight
+            total_weight += w
+            weighted_pass += w * r.pass_rate
+        return (weighted_pass / total_weight) if total_weight > 0 else 0.0
+
+
+# ── Verdict Engine (v2) ──────────────────────────────────────────────────────
+
+class VerdictEngine:
+    """
+    Maps ScoreCard to a trust verdict:
+      85+   → trusted
+      70-85 → suspicious
+      50-70 → high_risk
+      <50   → fake
+    """
+
+    def assess(
+        self,
+        scorecard: ScoreCard,
+        similarities: list[SimilarityResult],
+        predetect: PreDetectionResult | None,
+        features: dict[str, float],
+    ) -> TrustVerdict:
+        reasons: list[str] = []
+
+        # Signal 1: Authenticity score
+        auth = scorecard.authenticity_score
+        if auth >= 85:
+            reasons.append(f"真实性分 {auth:.1f} — 行为高度匹配声称模型")
+        elif auth >= 70:
+            reasons.append(f"真实性分 {auth:.1f} — 行为存在轻度偏差")
+        elif auth >= 50:
+            reasons.append(f"真实性分 {auth:.1f} — 行为偏差明显")
+        else:
+            reasons.append(f"真实性分 {auth:.1f} — 行为严重不匹配")
+
+        # Signal 2: Pre-detection
+        if predetect and predetect.success:
+            reasons.append(
+                f"预检测识别为 {predetect.identified_as} "
+                f"(置信度 {predetect.confidence:.0%})"
+            )
+
+        # Signal 3: Temperature
+        if features.get("temperature_param_effective", 1.0) < 0.5:
+            reasons.append("temperature 参数不生效 — 可能是代理/包装层屏蔽")
+
+        # Signal 4: Consistency anomaly
+        if scorecard.consistency_score < 50:
+            reasons.append(f"一致性分仅 {scorecard.consistency_score:.1f} — 多次采样结果不稳定")
+
+        # Signal 5: Top similarity details
+        if similarities:
+            top = similarities[0]
+            reasons.append(
+                f"最相似基准模型: {top.benchmark_name} "
+                f"(相似度 {top.similarity_score:.2f})"
+            )
+
+        # Determine level based on authenticity + overall score
+        score = scorecard.total_score
+        if auth >= 85 and score >= 75:
+            level, label = "trusted", "可信 / Trusted"
+        elif auth >= 70 or score >= 65:
+            level, label = "suspicious", "轻度可疑 / Suspicious"
+        elif auth >= 50 or score >= 45:
+            level, label = "high_risk", "高风险 / High Risk"
+        else:
+            level, label = "fake", "疑似假模型 / Likely Fake"
+
+        if not reasons:
+            reasons.append("没有检测到明显异常信号")
+
+        return TrustVerdict(
+            level=level,
+            label=label,
+            total_score=score,
+            reasons=reasons,
         )
 
 
@@ -369,8 +733,26 @@ class ReportBuilder:
         scores: Scores,
         similarities: list[SimilarityResult],
         risk: RiskAssessment,
+        scorecard: ScoreCard | None = None,
+        verdict: TrustVerdict | None = None,
     ) -> dict:
-        return {
+        dimensions = {
+            k.replace("dim_", "").replace("_pass_rate", ""): v
+            for k, v in features.items()
+            if k.startswith("dim_") and k.endswith("_pass_rate")
+        }
+        tag_breakdown = {
+            k.replace("tag_", "").replace("_pass_rate", ""): v
+            for k, v in features.items()
+            if k.startswith("tag_") and k.endswith("_pass_rate")
+        }
+        failure_attribution = {
+            k.replace("failure_", "").replace("_rate", ""): v
+            for k, v in features.items()
+            if k.startswith("failure_") and k.endswith("_rate")
+        }
+
+        report = {
             "run_id": run_id,
             "target": {
                 "base_url": base_url,
@@ -400,12 +782,18 @@ class ReportBuilder:
                 "reasons": risk.reasons,
                 "disclaimer": risk.disclaimer,
             },
+            "dimensions": dimensions,
+            "tag_breakdown": tag_breakdown,
+            "failure_attribution": failure_attribution,
             "features": features,
             "case_results": [
                 {
                     "case_id": r.case.id,
                     "category": r.case.category,
+                    "dimension": r.case.dimension or r.case.category,
+                    "tags": r.case.tags,
                     "name": r.case.name,
+                    "judge_rubric": r.case.judge_rubric,
                     "pass_rate": round(r.pass_rate, 3),
                     "mean_latency_ms": r.mean_latency_ms,
                     "samples": [
@@ -423,3 +811,11 @@ class ReportBuilder:
                 for r in case_results
             ],
         }
+
+        # v2 scorecard & verdict
+        if scorecard:
+            report["scorecard"] = scorecard.to_dict()
+        if verdict:
+            report["verdict"] = verdict.to_dict()
+
+        return report
