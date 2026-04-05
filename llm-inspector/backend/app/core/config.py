@@ -63,6 +63,11 @@ class Settings:
     DEFAULT_MAX_TOKENS_CAP: int = int(os.getenv("DEFAULT_MAX_TOKENS_CAP", "120"))
     LONG_FORM_MAX_TOKENS_CAP: int = int(os.getenv("LONG_FORM_MAX_TOKENS_CAP", "250"))
 
+    # Token budget guards (per-run token spending limits)
+    TOKEN_BUDGET_QUICK: int = int(os.getenv("TOKEN_BUDGET_QUICK", "15000"))
+    TOKEN_BUDGET_STANDARD: int = int(os.getenv("TOKEN_BUDGET_STANDARD", "40000"))
+    TOKEN_BUDGET_FULL: int = int(os.getenv("TOKEN_BUDGET_FULL", "100000"))
+
     # Theta / relative scale
     THETA_METHOD: str = os.getenv("THETA_METHOD", "rasch_1pl")
     THETA_BOOTSTRAP_B: int = int(os.getenv("THETA_BOOTSTRAP_B", "200"))

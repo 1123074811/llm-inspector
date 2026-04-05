@@ -1,6 +1,6 @@
 """
 Seed the database with fixture data on first startup.
-- Test cases from suite_v1.json and suite_v2.json
+- Test cases from suite_v1.json, suite_v2.json, suite_extraction.json
 - Benchmark profiles from benchmarks/default_profiles.json
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ def seed_all() -> None:
 
 def _seed_test_cases() -> None:
     total = 0
-    for suite_file in ("suite_v1.json", "suite_v2.json"):
+    for suite_file in ("suite_v1.json", "suite_v2.json", "suite_extraction.json"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             logger.warning(f"{suite_file} not found, skipping")

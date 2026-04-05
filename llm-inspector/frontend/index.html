@@ -243,6 +243,7 @@ body>*{position:relative;z-index:1}
           <option value="quick">快速 Quick（~8题，置信度触发）</option>
           <option value="standard" selected>标准 Standard（~19题）</option>
           <option value="full">完整 Full（全量+多次采样）</option>
+          <option value="extraction">提取审计 Extraction（主动探针+身份审计）</option>
         </select>
       </div>
     </div>
@@ -933,9 +934,43 @@ async function loadReport(runId) {
   if (el) el.innerHTML = renderReport(data);
 }
 
+function renderNarrative(narrative) {
+  if (!narrative) return '';
+  const exec = narrative.executive_summary || '';
+  const proc = narrative.detection_process || '';
+  const dim = narrative.dimension_analysis || '';
+  const sim = narrative.similarity_narrative || '';
+  const risk = narrative.risk_narrative || '';
+  const recs = narrative.recommendations || [];
+  const conf = narrative.confidence_statement || '';
+
+  // Simple markdown-like rendering: **bold** and - lists
+  const md = s => escHtml(s)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n- /g, '\n&bull; ')
+    .replace(/\n/g, '<br>');
+
+  return `
+  <div class="card" style="border-left:4px solid var(--primary)">
+    <h2>📋 检测总结</h2>
+    <div style="font-size:14px;line-height:1.8;color:var(--ink2)">
+      ${exec ? `<div style="margin-bottom:12px">${md(exec)}</div>` : ''}
+      ${proc ? `<div style="margin-bottom:8px"><strong>检测过程：</strong>${md(proc)}</div>` : ''}
+      ${dim ? `<div style="margin-bottom:8px"><strong>维度分析：</strong>${md(dim)}</div>` : ''}
+      ${sim ? `<div style="margin-bottom:8px;background:var(--bg2);padding:8px;border-radius:6px">${md(sim)}</div>` : ''}
+      ${risk ? `<div style="margin-bottom:8px;background:var(--bg2);padding:8px;border-radius:6px">${md(risk)}</div>` : ''}
+      ${recs.length ? `
+        <div style="margin-bottom:8px"><strong>建议：</strong></div>
+        <ul style="margin:4px 0;padding-left:20px">${recs.map(r => `<li>${md(r)}</li>`).join('')}</ul>
+      ` : ''}
+      ${conf ? `<div style="font-size:12px;color:var(--ink4);font-style:italic;margin-top:6px">${md(conf)}</div>` : ''}
+    </div>
+  </div>`;
+}
+
 function renderReport(r) {
   if (!r) return '';
-  const scores = r.scores || {};
+  const narrative = r.narrative || null;
   const sim    = r.similarity || [];
   const risk   = r.risk || {};
   const scorecard = r.scorecard || null;
@@ -949,6 +984,10 @@ function renderReport(r) {
   const abSignificance = r.ab_significance || (r.details && r.details.ab_significance) || [];
 
   let html = '';
+
+  if (narrative) {
+    html += renderNarrative(narrative);
+  }
 
   if (theta) {
     const dims = theta.dimensions || [];
@@ -1099,6 +1138,12 @@ function renderReport(r) {
     html += '</div>';
   }
 
+  // Extraction Audit
+  const extAudit = r.extraction_audit || null;
+  if (extAudit) {
+    html += renderExtractionAudit(extAudit, r.proxy_latency_analysis);
+  }
+
   return html;
 }
 
@@ -1125,7 +1170,120 @@ const _zhLabels = {
   constraint_reasoning: '约束推理', token_control: 'Token 控制', char_count: '字符统计',
   forbidden_chars: '禁用词检查', python: 'Python', code_execution: '代码执行',
   function_correctness: '函数正确性',
+  // extraction dimensions
+  identity_stress: '身份压力', prompt_extraction: '提示词提取',
+  behavioral_fingerprint: '行为指纹', extraction: '提取审计',
 };
+
+function renderExtractionAudit(audit, proxyAnalysis) {
+  const severityColor = {
+    CRITICAL: 'var(--red)', HIGH: 'var(--amber)', MEDIUM: '#996600', NONE: 'var(--green)'
+  };
+  const sev = audit.overall_severity || 'NONE';
+  const sevClr = severityColor[sev] || 'var(--ink3)';
+  const sevCls = sev === 'CRITICAL' || sev === 'HIGH' ? 'high' : sev === 'MEDIUM' ? 'medium' : 'low';
+
+  let html = `
+    <div class="card" style="border-left:4px solid ${sevClr}">
+      <h2 style="color:${sevClr}">🔍 提取审计报告 Extraction Audit</h2>
+      <div class="risk-block ${sevCls}" style="margin-bottom:16px">
+        <div class="risk-level ${sevCls}" style="font-size:18px">
+          综合严重等级: ${sev}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        <div class="score-card">
+          <div class="score" style="color:${audit.real_model_exposed?'var(--red)':'var(--green)'}">
+            ${audit.real_model_exposed ? '⚠️ 是' : '✓ 否'}
+          </div>
+          <div class="score-label">真实模型暴露</div>
+        </div>
+        <div class="score-card">
+          <div class="score" style="color:${audit.prompt_leaked?'var(--red)':'var(--green)'}">
+            ${audit.prompt_leaked ? '⚠️ 是' : '✓ 否'}
+          </div>
+          <div class="score-label">提示词泄露</div>
+        </div>
+        <div class="score-card">
+          <div class="score" style="color:${audit.language_bias_detected?'var(--amber)':'var(--green)'}">
+            ${audit.language_bias_detected ? '⚠️ 是' : '✓ 否'}
+          </div>
+          <div class="score-label">语言偏向异常</div>
+        </div>
+      </div>`;
+
+  if (audit.real_model_names && audit.real_model_names.length) {
+    html += `<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+      <strong style="color:var(--red)">🚨 检测到真实底层模型:</strong>
+      <span style="font-size:16px;font-weight:700;color:var(--red);margin-left:8px">${audit.real_model_names.map(escHtml).join(', ')}</span>
+    </div>`;
+  }
+
+  if (audit.forbidden_words_leaked && audit.forbidden_words_leaked.length) {
+    html += `<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+      <strong style="color:var(--red)">禁词列表泄露:</strong>
+      <span style="color:var(--red)">${audit.forbidden_words_leaked.map(escHtml).join(', ')}</span>
+    </div>`;
+  }
+
+  if (audit.file_paths_leaked && audit.file_paths_leaked.length) {
+    html += `<div style="background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+      <strong style="color:var(--amber)">文件路径泄露:</strong>
+      <code style="font-size:11px">${audit.file_paths_leaked.map(escHtml).join(', ')}</code>
+    </div>`;
+  }
+
+  if (audit.spec_contradictions && audit.spec_contradictions.length) {
+    html += `<div style="background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+      <strong style="color:var(--amber)">规格矛盾:</strong>
+      ${audit.spec_contradictions.map(sc =>
+        `<div style="font-size:12px;margin-top:4px">
+          用例 ${escHtml(sc.case)}: 报告值 ${sc.reported}，期望值 ${sc.expected}，
+          实际匹配 <strong>${escHtml(sc.actual_match || '?')}</strong>
+        </div>`
+      ).join('')}
+    </div>`;
+  }
+
+  if (audit.evidence_chain && audit.evidence_chain.length) {
+    html += `<div style="margin-top:12px">
+      <h3>证据链 Evidence Chain</h3>
+      <div style="background:var(--bg2);border-radius:var(--radius);padding:12px;max-height:300px;overflow-y:auto">
+        ${audit.evidence_chain.map(ev =>
+          `<div style="font-family:var(--mono);font-size:11px;padding:3px 0;color:${ev.includes('[CRITICAL]')?'var(--red)':ev.includes('[HIGH]')?'var(--amber)':'var(--ink3)'}">
+            ${escHtml(ev)}
+          </div>`
+        ).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Proxy Latency Analysis
+  if (proxyAnalysis && proxyAnalysis.status !== 'insufficient_samples') {
+    const pc = proxyAnalysis.proxy_confidence || 0;
+    const pcClr = pc > 0.7 ? 'var(--red)' : pc > 0.5 ? 'var(--amber)' : 'var(--green)';
+    html += `
+      <div style="margin-top:16px;border-top:1px solid var(--rule);padding-top:12px">
+        <h3>延迟代理分析 TTFT Analysis</h3>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+          ${scoreCard(Math.round(proxyAnalysis.ttft_mean_ms), 'TTFT 均值(ms)')}
+          ${scoreCard(proxyAnalysis.ttft_p50_ms, 'P50(ms)')}
+          ${scoreCard(proxyAnalysis.ttft_p95_ms, 'P95(ms)')}
+          <div class="score-card">
+            <div class="score" style="color:${pcClr}">${Math.round(pc * 100)}%</div>
+            <div class="score-label">代理置信度</div>
+          </div>
+        </div>
+        ${proxyAnalysis.proxy_signals && proxyAnalysis.proxy_signals.length ?
+          `<div style="font-size:12px;color:var(--ink3)">
+            ${proxyAnalysis.proxy_signals.map(s => `<div>⚡ ${escHtml(s)}</div>`).join('')}
+          </div>` : ''}
+      </div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
 function zhLabel(key) { return _zhLabels[key] || key; }
 
 function renderMetricCard(title, obj, asPercent) {

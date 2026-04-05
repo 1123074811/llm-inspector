@@ -41,6 +41,28 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _constraint_reasoning(text, params)
     elif method == "text_constraints":
         passed, detail = _text_constraints(text, params)
+    elif method == "semantic_judge":
+        passed, detail = _semantic_judge(text, params)
+    elif method == "prompt_leak_detect":
+        passed, detail = _prompt_leak_detect(text, params)
+    elif method == "forbidden_word_extract":
+        passed, detail = _forbidden_word_extract(text, params)
+    elif method == "path_leak_detect":
+        passed, detail = _path_leak_detect(text, params)
+    elif method == "tool_config_leak_detect":
+        passed, detail = _tool_config_leak_detect(text, params)
+    elif method == "memory_leak_detect":
+        passed, detail = _memory_leak_detect(text, params)
+    elif method == "denial_pattern_detect":
+        passed, detail = _denial_pattern_detect(text, params)
+    elif method == "spec_contradiction_check":
+        passed, detail = _spec_contradiction_check(text, params)
+    elif method == "refusal_style_fingerprint":
+        passed, detail = _refusal_style_fingerprint(text, params)
+    elif method == "language_bias_detect":
+        passed, detail = _language_bias_detect(text, params)
+    elif method == "tokenizer_fingerprint":
+        passed, detail = _tokenizer_fingerprint(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 
@@ -268,6 +290,71 @@ def _refusal_detect(text: str, params: dict) -> tuple[bool | None, dict]:
     }
 
 
+def _semantic_judge(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    Rule-based semantic judge for complex reasoning cases.
+    Uses rubric and reference_answer params for validation.
+    This is a local judge — no external LLM call required.
+    """
+    rubric = params.get("rubric", "")
+    reference = params.get("reference_answer", "")
+    required_keywords: list[str] = params.get("required_keywords", [])
+    forbidden_patterns: list[str] = params.get("forbidden_patterns", [])
+
+    lower_text = text.lower()
+
+    # Keyword coverage
+    keyword_hits = [kw for kw in required_keywords if kw.lower() in lower_text]
+    keyword_coverage = len(keyword_hits) / max(len(required_keywords), 1) if required_keywords else 1.0
+
+    # Forbidden pattern detection
+    forbidden_hits = []
+    for pat in forbidden_patterns:
+        try:
+            if re.search(pat, text, re.IGNORECASE | re.MULTILINE):
+                forbidden_hits.append(pat)
+        except re.error:
+            pass
+
+    # Reference answer length similarity (if reference provided)
+    reference_score = 0.0
+    if reference:
+        ref_words = set(reference.lower().split())
+        text_words = set(text.lower().split())
+        if ref_words:
+            jaccard = len(ref_words & text_words) / len(ref_words | text_words)
+            reference_score = jaccard
+
+    # Rubric scoring
+    rubric_keywords = rubric.lower().split() if rubric else []
+    rubric_coverage = 0.0
+    if rubric_keywords:
+        rubric_hits = sum(1 for kw in rubric_keywords if kw in lower_text)
+        rubric_coverage = rubric_hits / len(rubric_keywords)
+
+    # Combine signals
+    min_keyword_coverage = float(params.get("min_keyword_coverage", 0.6))
+    min_reference_score = float(params.get("min_reference_score", 0.0))
+    min_rubric_coverage = float(params.get("min_rubric_coverage", 0.5))
+
+    passed = (
+        keyword_coverage >= min_keyword_coverage
+        and reference_score >= min_reference_score
+        and rubric_coverage >= min_rubric_coverage
+        and len(forbidden_hits) == 0
+    )
+
+    return passed, {
+        "keyword_coverage": round(keyword_coverage, 3),
+        "keyword_hits": keyword_hits,
+        "reference_score": round(reference_score, 3),
+        "rubric_coverage": round(rubric_coverage, 3),
+        "forbidden_hits": forbidden_hits,
+        "passed": passed,
+        "note": "semantic_judge uses local rules, not an external LLM",
+    }
+
+
 def _heuristic_style(text: str, params: dict) -> tuple[None, dict]:
     """Extract style features — no pass/fail, pure feature collection."""
     extract_keys: list[str] = params.get("extract", [])
@@ -486,5 +573,244 @@ def _build_judge_explanation(
             "anti_pattern_hits="
             f"{len(detail.get('anti_pattern_hits', []))}"
         )
+    if method in ("prompt_leak_detect", "forbidden_word_extract", "path_leak_detect"):
+        parts.append(f"severity={detail.get('severity', 'NONE')}")
 
     return " ; ".join(parts)
+
+
+# ── Extraction & Fingerprint Judges ──────────────────────────────────────────
+
+def _prompt_leak_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    检测响应中是否包含 system prompt 泄露信号。
+    passed=True 表示检测到泄露（即伪装暴露）。
+    """
+    leak_indicators = params.get("leak_indicators", [])
+    real_model_names = params.get("real_model_names", [])
+
+    hits_indicators = [w for w in leak_indicators if w.lower() in text.lower()]
+    hits_models = [m for m in real_model_names if m.lower() in text.lower()]
+
+    if hits_models:
+        return True, {
+            "leak_type": "real_model_name_exposed",
+            "real_models_found": hits_models,
+            "severity": "CRITICAL",
+            "excerpt": text[:300],
+        }
+
+    if len(hits_indicators) >= 2:
+        return True, {
+            "leak_type": "identity_masking_instructions",
+            "keywords_found": hits_indicators,
+            "severity": "HIGH",
+            "excerpt": text[:300],
+        }
+
+    if hits_indicators:
+        return False, {
+            "leak_type": "weak_signal",
+            "keywords_found": hits_indicators,
+            "severity": "LOW",
+            "excerpt": text[:200],
+        }
+
+    return False, {"leak_type": "none", "text_length": len(text)}
+
+
+def _forbidden_word_extract(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    检测禁词列表泄露。
+    伪装模型被要求列出禁词时，会暴露真实模型名。
+    """
+    real_model_names = params.get("real_model_names", [])
+    found = [m for m in real_model_names if m.lower() in text.lower()]
+
+    passed = len(found) > 0
+    return passed, {
+        "real_models_in_forbidden_list": found,
+        "severity": "CRITICAL" if found else "NONE",
+        "full_text": text[:500],
+    }
+
+
+def _path_leak_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """检测文件系统路径泄露（暴露代理服务结构）"""
+    path_patterns = params.get("path_patterns", [])
+
+    paths_found = re.findall(r'/[\w./-]{5,}', text)
+    pattern_hits = [p for p in path_patterns if p.lower() in text.lower()]
+
+    passed = bool(paths_found or pattern_hits)
+    return passed, {
+        "paths_found": paths_found[:10],
+        "pattern_hits": pattern_hits,
+        "severity": "HIGH" if pattern_hits else ("MEDIUM" if paths_found else "NONE"),
+    }
+
+
+def _tool_config_leak_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """检测工具/技能配置泄露（暴露代理平台特征）"""
+    proxy_signatures = params.get("proxy_signatures", [])
+    agent_tools = params.get("agent_tools", [])
+
+    proxy_hits = [s for s in proxy_signatures if s.lower() in text.lower()]
+    tool_hits = [t for t in agent_tools if t.lower() in text.lower()]
+
+    passed = bool(proxy_hits) or len(tool_hits) >= 3
+    severity = "CRITICAL" if proxy_hits else ("HIGH" if len(tool_hits) >= 3 else "NONE")
+
+    return passed, {
+        "proxy_signatures_found": proxy_hits,
+        "agent_tools_found": tool_hits,
+        "severity": severity,
+        "excerpt": text[:500],
+    }
+
+
+def _memory_leak_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """检测记忆系统内容泄露"""
+    memory_indicators = params.get("memory_indicators", [])
+    path_patterns = params.get("path_patterns", [])
+
+    mem_hits = [m for m in memory_indicators if m.lower() in text.lower()]
+    path_hits = [p for p in path_patterns if p.lower() in text.lower()]
+    paths_found = re.findall(r'/[\w./-]{5,}', text)
+
+    passed = bool(mem_hits) or bool(path_hits)
+    return passed, {
+        "memory_indicators_found": mem_hits,
+        "path_patterns_found": path_hits,
+        "paths_found": paths_found[:10],
+        "severity": "HIGH" if mem_hits else ("MEDIUM" if path_hits else "NONE"),
+        "excerpt": text[:500],
+    }
+
+
+def _denial_pattern_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    否定压力测试判定。
+    检测模型在被否定身份时的反应模式。
+    passed=True 表示检测到伪装信号（模型确认了它不是声称的模型）。
+    """
+    spoofing_signals = params.get("spoofing_signal", [])
+    normal_signals = params.get("normal_signal", [])
+    text_lower = text.lower()
+
+    spoof_hits = [s for s in spoofing_signals if s.lower() in text_lower]
+    normal_hits = [s for s in normal_signals if s.lower() in text_lower]
+
+    # If spoofing signals and no normal signals → suspicious
+    is_suspicious = bool(spoof_hits) and not normal_hits
+
+    return is_suspicious, {
+        "spoofing_signal_hits": spoof_hits,
+        "normal_signal_hits": normal_hits,
+        "severity": "HIGH" if is_suspicious else "NONE",
+        "excerpt": text[:200],
+    }
+
+
+def _spec_contradiction_check(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    规格矛盾检测：模型自报规格与声称模型的已知规格不符。
+    passed=True 表示发现矛盾（即伪装信号）。
+    """
+    claimed_model = params.get("claimed_model", "")
+    known_specs = params.get("known_specs", {})
+
+    numbers = re.findall(r'\b(\d{4,})\b', text.replace(",", ""))
+    detail: dict = {"reported_numbers": numbers, "claimed_model": claimed_model}
+
+    if not numbers or not claimed_model or claimed_model not in known_specs:
+        return False, detail
+
+    claimed_ctx = known_specs.get(claimed_model, {}).get("context_window")
+    if not claimed_ctx:
+        return False, detail
+
+    for num_str in numbers:
+        reported = int(num_str)
+        if abs(reported - claimed_ctx) / max(claimed_ctx, 1) > 0.1:
+            for model, specs in known_specs.items():
+                if model == claimed_model:
+                    continue
+                model_ctx = specs.get("context_window", 0)
+                if model_ctx and abs(reported - model_ctx) / max(model_ctx, 1) < 0.1:
+                    detail["actual_model_match"] = model
+                    detail["reported_value"] = reported
+                    detail["expected_value"] = claimed_ctx
+                    return True, {**detail, "severity": "CRITICAL"}
+
+            detail["reported_value"] = reported
+            detail["expected_value"] = claimed_ctx
+            return True, {**detail, "severity": "HIGH"}
+
+    return False, detail
+
+
+def _refusal_style_fingerprint(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    拒绝风格指纹：通过拒绝措辞判断底层模型来源。
+    passed=True 表示检测到可疑风格。
+    """
+    claude_patterns = params.get("claude_refusal_patterns", [])
+    minimax_patterns = params.get("minimax_refusal_patterns", [])
+
+    claude_hits = [p for p in claude_patterns if p.lower() in text.lower()]
+    minimax_hits = [p for p in minimax_patterns if p.lower() in text.lower()]
+
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    chinese_ratio = chinese_chars / max(len(text), 1)
+
+    is_suspicious = bool(minimax_hits) or (chinese_ratio > 0.3 and not claude_hits)
+
+    return is_suspicious, {
+        "claude_pattern_hits": claude_hits,
+        "minimax_pattern_hits": minimax_hits,
+        "chinese_char_ratio": round(chinese_ratio, 3),
+        "suspected_origin": "MiniMax/Chinese-model" if is_suspicious else "Claude-like",
+        "severity": "HIGH" if minimax_hits else ("MEDIUM" if chinese_ratio > 0.3 else "NONE"),
+    }
+
+
+def _language_bias_detect(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    语言偏向检测：在纯英文 prompt 下检测非预期的中文输出。
+    passed=True 表示检测到异常中文倾向。
+    """
+    threshold = params.get("chinese_char_threshold", 0.05)
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    ratio = chinese_chars / max(len(text), 1)
+
+    passed = ratio > threshold
+    return passed, {
+        "chinese_char_count": chinese_chars,
+        "chinese_ratio": round(ratio, 4),
+        "threshold": threshold,
+        "severity": "MEDIUM" if passed else "NONE",
+    }
+
+
+def _tokenizer_fingerprint(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    Tokenizer 指纹：通过模型自报 token 数量推断 tokenizer 类型。
+    """
+    expected_by_tokenizer = params.get("expected_by_tokenizer", {})
+
+    numbers = re.findall(r'\b(\d+)\b', text)
+    if not numbers:
+        return False, {"error": "no number found in response"}
+
+    reported = int(numbers[0])
+    matches = []
+    for tokenizer, expected in expected_by_tokenizer.items():
+        if abs(reported - expected) <= 1:
+            matches.append(tokenizer)
+
+    return len(matches) > 0, {
+        "reported_token_count": reported,
+        "expected_by_tokenizer": expected_by_tokenizer,
+        "matching_tokenizers": matches,
+    }

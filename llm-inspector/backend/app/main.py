@@ -78,7 +78,7 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     encrypted, key_hash = km.encrypt(api_key)
 
     test_mode = body.get("test_mode", "standard")
-    if test_mode not in ("quick", "standard", "full"):
+    if test_mode not in ("quick", "standard", "full", "extraction"):
         test_mode = "standard"
 
     suite_version = body.get("suite_version", "v2")
@@ -488,6 +488,29 @@ def handle_get_scorecard(path, _qs, _body) -> tuple:
     })
 
 
+def handle_get_extraction_audit(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/extraction-audit$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+
+    report_row = repo.get_report(run_id)
+    if not report_row:
+        return _error("Report not found", 404)
+
+    details = report_row.get("details") or {}
+    extraction_audit = details.get("extraction_audit")
+    proxy_analysis = details.get("proxy_latency_analysis")
+
+    if not extraction_audit:
+        return _error("Extraction audit not available (run in extraction mode)", 404)
+
+    return _json({
+        "run_id": run_id,
+        "extraction_audit": extraction_audit,
+        "proxy_latency_analysis": proxy_analysis,
+    })
+
+
 def handle_model_trend(path, qs, _body) -> tuple:
     model_name = _extract_id(path, r"/api/v1/models/([^/]+)/trend$")
     if not model_name:
@@ -754,6 +777,7 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/runs/[^/]+/radar\.svg$",   handle_export_radar_svg),
     ("GET",    r"^/api/v1/runs/[^/]+/responses$",    handle_get_responses),
     ("GET",    r"^/api/v1/runs/[^/]+/scorecard$",    handle_get_scorecard),
+    ("GET",    r"^/api/v1/runs/[^/]+/extraction-audit$", handle_get_extraction_audit),
     ("GET",    r"^/api/v1/runs/[^/]+/theta-report$", handle_get_theta_report),
     ("GET",    r"^/api/v1/runs/[^/]+/pairwise$",     handle_get_pairwise),
     ("GET",    r"^/api/v1/benchmarks$",              handle_benchmarks),

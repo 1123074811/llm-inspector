@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pathlib
 import random
-import time
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from app.core.schemas import (
     TestCase, CaseResult, PreDetectionResult,
@@ -29,6 +29,48 @@ from app.repository import repo
 logger = get_logger(__name__)
 
 _FIXTURES_DIR = pathlib.Path(__file__).parent.parent / "fixtures"
+
+
+# ── Token Budget Guard ─────────────────────────────────────────────────────────
+
+class TokenBudgetGuard:
+    """
+    Tracks cumulative token consumption during a run and gates
+    low-value cases when the budget is exhausted.
+    """
+
+    def __init__(self, budget: int):
+        self._budget = budget
+        self._used = 0
+        self._lock = threading.Lock()
+
+    def consume(self, tokens: int) -> bool:
+        """Returns False when budget is exhausted."""
+        with self._lock:
+            self._used += tokens
+            return self._used <= self._budget
+
+    def record_result(self, result: CaseResult) -> int:
+        """Extract tokens from a CaseResult and add to running total. Returns tokens consumed."""
+        tokens = 0
+        for sample in result.samples:
+            u = sample.response.usage_total_tokens
+            if u:
+                tokens += u
+        self.consume(tokens)
+        return tokens
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self._budget - self._used)
+
+    @property
+    def budget(self) -> int:
+        return self._budget
+
+    @property
+    def used(self) -> int:
+        return self._used
 
 
 def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
@@ -118,6 +160,8 @@ def _save_case_result(run_id: str, result: CaseResult) -> None:
 def _mode_concurrency(test_mode: str) -> int:
     if test_mode == "quick":
         return 3
+    if test_mode == "extraction":
+        return 3  # extraction probes need sequential control
     if test_mode == "full":
         return 6
     return 5  # standard
@@ -128,6 +172,7 @@ def _case_value(c: TestCase) -> float:
     info_gain = {
         "antispoof": 1.4,
         "consistency": 1.3,
+        "extraction": 1.5,
         "reasoning": 1.2,
         "instruction": 1.1,
         "protocol": 1.0,
@@ -246,6 +291,17 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
         "identity_consistency": 250,  # model identity / consistency probes
         "heuristic_style":     350,   # style analysis, disclaimers, format
         "any_text":            250,   # general text responses
+        # Extraction judges — need generous limits for prompt leak content
+        "prompt_leak_detect":   2000,
+        "forbidden_word_extract": 500,
+        "path_leak_detect":     500,
+        "tool_config_leak_detect": 1000,
+        "memory_leak_detect":   1000,
+        "denial_pattern_detect": 200,
+        "spec_contradiction_check": 50,
+        "refusal_style_fingerprint": 300,
+        "language_bias_detect": 200,
+        "tokenizer_fingerprint": 20,
     }
 
     for c in ordered:
@@ -305,6 +361,10 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
 
     # Value-first ranking
     ordered.sort(key=lambda c: (_case_value(c), c.weight), reverse=True)
+
+    if test_mode == "extraction":
+        # Extraction mode: run all cases in single phase, no early stop
+        return ordered, []
 
     if test_mode == "quick":
         sentinel = [c for c in ordered if c.category in ("protocol", "instruction", "reasoning", "consistency", "antispoof", "system")]
@@ -399,7 +459,8 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
 def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                           test_mode: str, run_id: str, phase_label: str,
                           case_results: list[CaseResult], failed_count_ref: dict,
-                          backoff_state: dict) -> bool:
+                          backoff_state: dict,
+                          budget_guard: TokenBudgetGuard | None = None) -> bool:
     if not cases:
         return False
 
@@ -408,16 +469,25 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
     in_flight = {}
     lock = threading.Lock()
 
+    # Token budget thresholds: stop dispatching new work when < 5% budget remains
+    budget_threshold = (budget_guard.budget * 0.05) if budget_guard else 0
+
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=f"case-{phase_label}") as pool:
         while idx < len(cases) or in_flight:
             if repo.is_run_cancel_requested(run_id):
                 logger.warning("Run cancel requested", run_id=run_id, phase=phase_label)
                 return True
 
-            while idx < len(cases) and len(in_flight) < max_workers:
-                if repo.is_run_cancel_requested(run_id):
-                    logger.warning("Run cancel requested before submit", run_id=run_id, phase=phase_label)
-                    return True
+            if idx < len(cases):
+                # Check token budget before submitting
+                if budget_guard and budget_guard.remaining < budget_threshold:
+                    logger.info(
+                        "Token budget exhausted, skipping remaining phase cases",
+                        run_id=run_id, phase=phase_label,
+                        used=budget_guard.used, budget=budget_guard.budget,
+                    )
+                    break
+
                 case = cases[idx]
                 idx += 1
                 _adaptive_pause(backoff_state)
@@ -433,6 +503,9 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                     result = fut.result()
                     with lock:
                         case_results.append(result)
+                    # Track token consumption for budget guard
+                    if budget_guard:
+                        budget_guard.record_result(result)
                     _save_case_result(run_id, result)
                     _update_backoff(backoff_state, result=result)
                     logger.info(
@@ -441,6 +514,7 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                         case_id=case.id,
                         pass_rate=round(result.pass_rate, 2),
                         phase=phase_label,
+                        tokens_remaining=budget_guard.remaining if budget_guard else None,
                     )
                 except Exception as e:
                     failed_count_ref["count"] += 1
@@ -482,9 +556,12 @@ def run_pipeline(run_id: str) -> None:
     # ── Step 1: Pre-detection ────────────────────────────────────────────────
     repo.update_run_status(run_id, "pre_detecting")
     logger.info("Running pre-detection", run_id=run_id)
+    extraction_mode = test_mode == "extraction"
     try:
         pre_result: PreDetectionResult = PreDetectionPipeline().run(
-            adapter, run["model_name"]
+            adapter, run["model_name"],
+            extraction_mode=extraction_mode,
+            run_id=run_id,
         )
         repo.save_predetect_result(run_id, pre_result.to_dict())
         logger.info(
@@ -501,8 +578,8 @@ def run_pipeline(run_id: str) -> None:
             layer_stopped=None, should_proceed_to_testing=True,
         )
 
-    # If pre-detection is highly confident, skip full test
-    if not pre_result.should_proceed_to_testing:
+    # If pre-detection is highly confident AND not extraction mode, skip full test
+    if not pre_result.should_proceed_to_testing and not extraction_mode:
         logger.info("Pre-detection sufficient, skipping full test", run_id=run_id)
         _build_and_save_report(
             run_id, run, pre_result, [], {}, suite_version
@@ -519,7 +596,15 @@ def run_pipeline(run_id: str) -> None:
         return
 
     # ── Step 3: Load test cases + execute ────────────────────────────────────
-    cases = _load_suite(suite_version, test_mode)
+    if extraction_mode:
+        # In extraction mode, load extraction suite cases
+        cases = _load_suite("extraction", "extraction")
+        if not cases:
+            # Fallback: try loading from fixture file directly
+            logger.warning("No extraction cases in DB, loading from fixture")
+            cases = _load_suite("v2", test_mode)
+    else:
+        cases = _load_suite(suite_version, test_mode)
     if not cases:
         logger.warning("No test cases found", suite_version=suite_version)
         repo.update_run_status(run_id, "failed", error_message="No test cases loaded")
@@ -557,6 +642,14 @@ def run_pipeline(run_id: str) -> None:
     failed_count_ref = {"count": 0}
     backoff_state = {"delay_ms": settings.INTER_REQUEST_DELAY_MS}
 
+    # Token budget guard — initialized based on test mode
+    budget_map = {
+        "quick":      settings.TOKEN_BUDGET_QUICK,
+        "standard":   settings.TOKEN_BUDGET_STANDARD,
+        "full":       settings.TOKEN_BUDGET_FULL,
+        "extraction": settings.TOKEN_BUDGET_FULL,  # extraction needs generous budget
+    }
+    budget_guard = TokenBudgetGuard(budget_map.get(test_mode, settings.TOKEN_BUDGET_STANDARD))
     logger.info(
         "Executing test cases",
         run_id=run_id,
@@ -564,6 +657,7 @@ def run_pipeline(run_id: str) -> None:
         phase1=len(phase1_cases),
         phase2=len(phase2_cases),
         concurrency=_mode_concurrency(test_mode),
+        token_budget=budget_guard.budget,
     )
 
     cancelled = _run_cases_concurrent(
@@ -576,6 +670,7 @@ def run_pipeline(run_id: str) -> None:
         case_results=case_results,
         failed_count_ref=failed_count_ref,
         backoff_state=backoff_state,
+        budget_guard=budget_guard,
     )
 
     if cancelled:
@@ -619,6 +714,7 @@ def run_pipeline(run_id: str) -> None:
             case_results=case_results,
             failed_count_ref=failed_count_ref,
             backoff_state=backoff_state,
+            budget_guard=budget_guard,
         )
         if cancelled:
             repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
@@ -651,6 +747,7 @@ def run_pipeline(run_id: str) -> None:
                         case_results=case_results,
                         failed_count_ref=failed_count_ref,
                         backoff_state=backoff_state,
+                        budget_guard=budget_guard,
                     )
                     if cancelled:
                         repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
