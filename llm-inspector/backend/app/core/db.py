@@ -265,6 +265,19 @@ CREATE TABLE IF NOT EXISTS calibration_snapshots (
     created_at        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS calibration_replays (
+    id                TEXT PRIMARY KEY,
+    status            TEXT NOT NULL DEFAULT 'queued',
+    cases_json        TEXT NOT NULL,
+    result_json       TEXT,
+    error_message     TEXT,
+    created_at        TEXT NOT NULL,
+    started_at        TEXT,
+    completed_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_calibration_replays_status ON calibration_replays(status);
+
 CREATE TABLE IF NOT EXISTS llm_response_cache (
     cache_key         TEXT PRIMARY KEY,
     response_json     TEXT NOT NULL,

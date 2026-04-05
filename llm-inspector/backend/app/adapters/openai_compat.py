@@ -9,6 +9,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import hashlib
 from app.core.schemas import (
     LLMRequest, LLMResponse, StreamChunk, StreamCaptureResult
@@ -25,15 +26,61 @@ _SSL_CTX = ssl.create_default_context()
 
 
 class OpenAICompatibleAdapter:
-    """Adapter for any OpenAI-compatible /chat/completions endpoint."""
+    """Adapter for OpenAI-compatible /chat/completions endpoints.
+
+    Also supports Baidu Qianfan AK/SK bootstrap when base_url points to
+    qianfan.baidubce.com and api_key is provided as "<AK>:<SK>".
+    """
+
+    @staticmethod
+    def _normalize_api_key(api_key: str) -> str:
+        """Normalize user-supplied key to avoid common auth formatting mistakes."""
+        key = (api_key or "").strip()
+        # Users often paste "Bearer <token>" from docs/cURL.
+        # Adapter always injects Bearer, so strip a leading prefix to avoid
+        # sending "Authorization: Bearer Bearer ...".
+        if key.lower().startswith("bearer "):
+            key = key[7:].strip()
+        return key
+
+    @staticmethod
+    def _looks_like_qianfan_host(base_url: str) -> bool:
+        try:
+            host = (urllib.parse.urlparse(base_url).hostname or "").lower()
+        except Exception:
+            host = ""
+        return host.endswith("qianfan.baidubce.com")
+
+    @staticmethod
+    def _split_ak_sk(api_key: str) -> tuple[str, str] | None:
+        """Accept AK/SK in the form "AK:SK" for Qianfan token bootstrap."""
+        if ":" not in api_key:
+            return None
+        ak, sk = api_key.split(":", 1)
+        ak = ak.strip()
+        sk = sk.strip()
+        if not ak or not sk:
+            return None
+        return ak, sk
 
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
-        self._api_key = api_key
+        self._api_key = self._normalize_api_key(api_key)
         self._headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+
+        # Provider-specific bootstrap: Baidu Qianfan may require IAM token from AK/SK
+        self._qianfan_ak: str | None = None
+        self._qianfan_sk: str | None = None
+        self._qianfan_iam_token: str | None = None
+        self._qianfan_iam_token_expiry_monotonic: float = 0.0
+
+        if self._looks_like_qianfan_host(self.base_url):
+            pair = self._split_ak_sk(self._api_key)
+            if pair:
+                self._qianfan_ak, self._qianfan_sk = pair
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -42,7 +89,7 @@ class OpenAICompatibleAdapter:
         url = f"{self.base_url}/models"
         t0 = time.monotonic()
         try:
-            req = urllib.request.Request(url, headers=self._headers)
+            req = urllib.request.Request(url, headers=self._auth_headers())
             with urllib.request.urlopen(req, context=_SSL_CTX,
                                         timeout=settings.DEFAULT_REQUEST_TIMEOUT_SEC) as resp:
                 raw_body = resp.read()
@@ -75,7 +122,7 @@ class OpenAICompatibleAdapter:
         url = f"{self.base_url}/"
         t0 = time.monotonic()
         try:
-            req = urllib.request.Request(url, method="HEAD", headers=self._headers)
+            req = urllib.request.Request(url, method="HEAD", headers=self._auth_headers())
             with urllib.request.urlopen(req, context=_SSL_CTX, timeout=10) as resp:
                 return {"status_code": resp.status, "headers": dict(resp.headers),
                         "latency_ms": int((time.monotonic() - t0) * 1000)}
@@ -93,7 +140,7 @@ class OpenAICompatibleAdapter:
         payload = json.dumps({"model": "test"}).encode()  # missing messages
         try:
             req = urllib.request.Request(url, data=payload,
-                                         headers=self._headers, method="POST")
+                                         headers=self._auth_headers(), method="POST")
             with urllib.request.urlopen(req, context=_SSL_CTX, timeout=10) as resp:
                 raw_body = resp.read()
                 try:
@@ -150,6 +197,61 @@ class OpenAICompatibleAdapter:
         except Exception as e:
             logger.warning("Cache save error", error=str(e))
 
+    def _qianfan_fetch_iam_token(self) -> str | None:
+        """Fetch Baidu IAM access_token using AK/SK pair, cache for reuse."""
+        if not self._qianfan_ak or not self._qianfan_sk:
+            return None
+
+        now_mono = time.monotonic()
+        if self._qianfan_iam_token and now_mono < self._qianfan_iam_token_expiry_monotonic:
+            return self._qianfan_iam_token
+
+        token_url = (
+            "https://aip.baidubce.com/oauth/2.0/token"
+            f"?grant_type=client_credentials&client_id={urllib.parse.quote(self._qianfan_ak)}"
+            f"&client_secret={urllib.parse.quote(self._qianfan_sk)}"
+        )
+        try:
+            req = urllib.request.Request(token_url, method="POST")
+            with urllib.request.urlopen(
+                req, context=_SSL_CTX, timeout=settings.DEFAULT_REQUEST_TIMEOUT_SEC
+            ) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                body = json.loads(raw)
+                token = (body.get("access_token") or "").strip()
+                expires_in = int(body.get("expires_in", 2592000) or 2592000)
+                if not token:
+                    logger.warning("Qianfan IAM token fetch returned empty token", body=raw[:300])
+                    return None
+                # Refresh 5 min early to avoid near-expiry races
+                self._qianfan_iam_token = token
+                self._qianfan_iam_token_expiry_monotonic = now_mono + max(60, expires_in - 300)
+                logger.info("Qianfan IAM token bootstrap success")
+                return token
+        except Exception as e:
+            logger.warning("Qianfan IAM token bootstrap failed", error=str(e))
+            return None
+
+    def _auth_headers(self) -> dict:
+        """Resolve provider-specific auth header while preserving OpenAI-compatible default."""
+        # Default: OpenAI-compatible bearer with provided token
+        headers = dict(self._headers)
+
+        # Qianfan BCE v3 key mode: api_key starts with "bce-v3/..."
+        # The default _headers already sets "Authorization: Bearer {api_key}"
+        # which is exactly what Qianfan's OpenAI-compatible endpoint expects.
+        # No special handling needed — just use the default Bearer header.
+        if self._looks_like_qianfan_host(self.base_url) and self._api_key.lower().startswith("bce-v3/"):
+            return headers
+
+        # Qianfan AK/SK mode: api_key is "AK:SK" -> bootstrap IAM access_token.
+        if self._qianfan_ak and self._qianfan_sk:
+            token = self._qianfan_fetch_iam_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
+        return headers
+
     def chat(self, req: LLMRequest) -> LLMResponse:
         """Synchronous non-streaming chat completion with internal caching."""
         # 1. Check cache
@@ -165,7 +267,7 @@ class OpenAICompatibleAdapter:
         t0 = time.monotonic()
         try:
             http_req = urllib.request.Request(
-                url, data=payload, headers=self._headers, method="POST"
+                url, data=payload, headers=self._auth_headers(), method="POST"
             )
             with urllib.request.urlopen(
                 http_req, context=_SSL_CTX, timeout=req.timeout_sec
@@ -238,7 +340,7 @@ class OpenAICompatibleAdapter:
 
         try:
             http_req = urllib.request.Request(
-                url, data=payload, headers=self._headers, method="POST"
+                url, data=payload, headers=self._auth_headers(), method="POST"
             )
             with urllib.request.urlopen(
                 http_req, context=_SSL_CTX, timeout=req.timeout_sec

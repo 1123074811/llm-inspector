@@ -68,7 +68,21 @@ def validate_and_sanitize_url(url: str) -> str:
 
     # Rebuild clean URL: scheme + netloc + path only
     clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
-    return clean
+    return normalize_openai_compatible_base_url(clean)
+
+
+_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+
+
+def normalize_openai_compatible_base_url(url: str) -> str:
+    """
+    OpenAI-compatible adapters POST to ``{base_url}/chat/completions``.
+    Users sometimes paste the full endpoint; strip trailing ``/chat/completions``.
+    """
+    u = url.rstrip("/")
+    while u.endswith(_CHAT_COMPLETIONS_SUFFIX):
+        u = u[: -len(_CHAT_COMPLETIONS_SUFFIX)].rstrip("/")
+    return u
 
 
 def _reject_private_hostname(hostname: str) -> None:

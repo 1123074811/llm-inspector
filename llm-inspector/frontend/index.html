@@ -485,6 +485,10 @@ async function pollTask(runId) {
     clearInterval(_pollTimer); _pollTimer = null;
     if (status !== 'failed') loadReport(runId);
   }
+  // pre_detected: stop polling, wait for user action (continue/skip buttons)
+  if (status === 'pre_detected') {
+    clearInterval(_pollTimer); _pollTimer = null;
+  }
 }
 
 function renderStatusBadge(status) {
@@ -537,6 +541,30 @@ async function retryRun(runId) {
     return;
   }
   openTask(data.run_id || runId);
+}
+
+async function continueFullTest(runId) {
+  const {ok, data} = await api('POST', `/api/v1/runs/${runId}/continue`);
+  if (!ok) {
+    alert('继续测试失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  // Restart polling
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => pollTask(runId), 2000);
+  pollTask(runId);
+}
+
+async function skipTesting(runId) {
+  const {ok, data} = await api('POST', `/api/v1/runs/${runId}/skip-testing`);
+  if (!ok) {
+    alert('跳过失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  // Restart polling to catch completion
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => pollTask(runId), 2000);
+  pollTask(runId);
 }
 
 function downloadReportCsv(runId) {
@@ -601,12 +629,13 @@ async function applyIsomorphicCases() {
 function renderTaskProgress(data, responses = []) {
   const prog = data.progress || {};
   const pct = prog.total ? Math.round(prog.completed / prog.total * 100) : 0;
+  const scoringProfileVersion = data.scoring_profile_version || 'v1';
 
   animateProcessConsole(prog, data.status, data.predetect_result, responses);
 
   const pre = data.predetect_result;
 
-  const preHtml = pre ? renderPredetectCard(pre) : '';
+  const preHtml = pre ? renderPredetectCard(pre, data.run_id, data.status) : '';
   const progressHtml = prog.total > 0 ? `
     <div class="card">
       <div class="card-label">测试进度</div>
@@ -630,6 +659,7 @@ function renderTaskProgress(data, responses = []) {
             <span style="color:var(--ink4);margin-left:8px;font-family:var(--mono);font-size:11px">${escHtml(data.base_url)}</span>
           </div>
           <div style="font-size:11px;color:var(--ink4)">模式: ${data.test_mode} · 创建: ${fmtTime(data.created_at)}</div>
+        <div style="font-size:11px;color:var(--ink4);margin-top:2px">评分配置版本: ${escHtml(scoringProfileVersion)}</div>
         </div>
 
         ${renderStageExperience(data, prog, pct, {includeConsole:false})}
@@ -901,11 +931,32 @@ function renderConsoleLines() {
   return visible.map(l => `<div class="console-line ${l.type === 'typing' ? 'typing' : ''} ${l.type === 'del' ? 'del' : ''} ${l.type === 'sep' ? 'sep' : ''} ${l.type === 'meta' ? 'meta' : ''}">${escHtml(l.text)}</div>`).join('');
 }
 
-function renderPredetectCard(pre) {
+function renderPredetectCard(pre, runId, status) {
   if (!pre.success && !pre.identified_as) return '';
   const conf = Math.round((pre.confidence || 0) * 100);
   const layers = pre.layer_results || [];
   const stopLayer = pre.layer_stopped || '全部';
+  const routing = pre.routing_info || {};
+
+  // Routing detail section
+  let routingHtml = '';
+  if (routing.is_routed) {
+    routingHtml = `
+      <div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,.6);border-radius:8px;font-size:12px">
+        <div style="font-weight:600;color:var(--ink2);margin-bottom:4px">路由检测</div>
+        <div style="display:flex;gap:20px;flex-wrap:wrap">
+          <div><span style="color:var(--ink4)">声称模型：</span><code>${escHtml(routing.claimed_model || '?')}</code></div>
+          <div><span style="color:var(--ink4)">实际模型：</span><code style="color:var(--red);font-weight:600">${escHtml(routing.returned_model || '?')}</code></div>
+        </div>
+        ${routing.probe_latency_ms ? `<div style="margin-top:4px"><span style="color:var(--ink4)">探针延迟：</span>${routing.probe_latency_ms}ms</div>` : ''}
+      </div>`;
+  } else if (routing.returned_model) {
+    routingHtml = `
+      <div style="margin-top:8px;font-size:12px;color:var(--ink3)">
+        实际返回模型：<code>${escHtml(routing.returned_model)}</code>
+        ${routing.probe_latency_ms ? ` · 延迟 ${routing.probe_latency_ms}ms` : ''}
+      </div>`;
+  }
 
   let evidenceHtml = '';
   if (layers.length) {
@@ -915,15 +966,31 @@ function renderPredetectCard(pre) {
     </ul>`;
   }
 
+  // Action buttons: show when pre_detected and testing was skipped
+  let actionHtml = '';
+  if (status === 'pre_detected' && pre.should_proceed_to_testing === false) {
+    actionHtml = `
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+        <button class="btn primary" style="padding:8px 16px;font-size:13px" onclick="continueFullTest('${runId}')">
+          继续完整测试
+        </button>
+        <button class="btn" style="padding:8px 16px;font-size:13px" onclick="skipTesting('${runId}')">
+          跳过测试，直接出报告
+        </button>
+        <span style="font-size:11px;color:var(--ink4)">完整测试将获得详细评分、相似度对比等数据</span>
+      </div>`;
+  } else if (pre.should_proceed_to_testing === false && !['pre_detected'].includes(status)) {
+    actionHtml = '<div style="margin-top:8px;font-size:11px;color:var(--blue);font-weight:600">✓ 置信度充足，已跳过完整能力测试</div>';
+  }
+
   return `
     <div class="predetect-card">
       <div class="card-label" style="color:var(--blue);opacity:.7">预检测结果 · Layer ${escHtml(String(stopLayer))}</div>
       <div class="predetect-id">${pre.identified_as ? escHtml(pre.identified_as) : '未识别'}</div>
       <div class="predetect-conf">置信度 ${conf}% · 消耗约 ${pre.total_tokens_used || 0} tokens</div>
+      ${routingHtml}
       ${evidenceHtml}
-      ${pre.should_proceed_to_testing === false
-        ? '<div style="margin-top:8px;font-size:11px;color:var(--blue);font-weight:600">✓ 置信度充足，已跳过完整能力测试</div>'
-        : ''}
+      ${actionHtml}
     </div>`;
 }
 

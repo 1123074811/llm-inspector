@@ -30,6 +30,9 @@ CORE_FEATURE_KEYS: list[str] = [
     "temperature_param_effective",
     "refusal_rate",
     "disclaimer_rate",
+    "identity_consistency_pass_rate",
+    "antispoof_identity_detect_rate",
+    "antispoof_override_leak_rate",
     "avg_markdown_score",
     "avg_response_length",
     "adversarial_spoof_signal_rate",
@@ -38,6 +41,9 @@ CORE_FEATURE_KEYS: list[str] = [
 
 # Global fallback means (used when no vendor-level mean is available).
 GLOBAL_MEANS: dict[str, float] = {
+    "identity_consistency_pass_rate": 0.75,
+    "antispoof_identity_detect_rate": 0.35,
+    "antispoof_override_leak_rate": 0.20,
     "adversarial_spoof_signal_rate": 0.15,
     "latency_mean_ms": 1500.0,
 }
@@ -45,38 +51,65 @@ GLOBAL_MEANS: dict[str, float] = {
 # Vendor-level defaults for fields that may be absent.
 VENDOR_DEFAULTS: dict[str, dict[str, float]] = {
     "OpenAI": {
+        "identity_consistency_pass_rate": 0.80,
+        "antispoof_identity_detect_rate": 0.28,
+        "antispoof_override_leak_rate": 0.15,
         "adversarial_spoof_signal_rate": 0.08,
         "latency_mean_ms": 800.0,
     },
     "Anthropic": {
+        "identity_consistency_pass_rate": 0.82,
+        "antispoof_identity_detect_rate": 0.22,
+        "antispoof_override_leak_rate": 0.12,
         "adversarial_spoof_signal_rate": 0.05,
         "latency_mean_ms": 1200.0,
     },
     "Google": {
+        "identity_consistency_pass_rate": 0.76,
+        "antispoof_identity_detect_rate": 0.33,
+        "antispoof_override_leak_rate": 0.20,
         "adversarial_spoof_signal_rate": 0.12,
         "latency_mean_ms": 1100.0,
     },
     "DeepSeek": {
+        "identity_consistency_pass_rate": 0.74,
+        "antispoof_identity_detect_rate": 0.40,
+        "antispoof_override_leak_rate": 0.24,
         "adversarial_spoof_signal_rate": 0.10,
         "latency_mean_ms": 900.0,
     },
     "Alibaba": {
+        "identity_consistency_pass_rate": 0.74,
+        "antispoof_identity_detect_rate": 0.39,
+        "antispoof_override_leak_rate": 0.23,
         "adversarial_spoof_signal_rate": 0.10,
         "latency_mean_ms": 950.0,
     },
     "Zhipu": {
+        "identity_consistency_pass_rate": 0.73,
+        "antispoof_identity_detect_rate": 0.42,
+        "antispoof_override_leak_rate": 0.25,
         "adversarial_spoof_signal_rate": 0.12,
         "latency_mean_ms": 1300.0,
     },
     "Meta": {
+        "identity_consistency_pass_rate": 0.70,
+        "antispoof_identity_detect_rate": 0.50,
+        "antispoof_override_leak_rate": 0.32,
         "adversarial_spoof_signal_rate": 0.18,
         "latency_mean_ms": 2000.0,
     },
     "Mistral AI": {
+        "identity_consistency_pass_rate": 0.72,
+        "antispoof_identity_detect_rate": 0.46,
+        "antispoof_override_leak_rate": 0.28,
         "adversarial_spoof_signal_rate": 0.15,
         "latency_mean_ms": 1600.0,
     },
     "default": {
+        "identity_consistency_pass_rate": 0.75,
+        "antispoof_identity_detect_rate": 0.35,
+        "antispoof_override_leak_rate": 0.20,
         "adversarial_spoof_signal_rate": 0.15,
         "latency_mean_ms": 1500.0,
     },

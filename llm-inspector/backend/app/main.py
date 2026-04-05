@@ -18,7 +18,7 @@ from app.core.logging import setup_logging, get_logger
 from app.core.security import validate_and_sanitize_url, get_key_manager
 from app.tasks.seeder import seed_all
 from app.tasks.calibration import recalibrate_and_snapshot, snapshot_calibration
-from app.tasks.worker import submit_run, submit_compare, active_count
+from app.tasks.worker import submit_run, submit_compare, submit_calibration_replay, submit_continue, submit_skip_testing, active_count
 from app.repository import repo
 
 logger = get_logger(__name__)
@@ -69,7 +69,9 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     except ValueError as e:
         return _error(str(e))
 
-    api_key: str = body["api_key"]
+    api_key: str = str(body["api_key"]).strip()
+    if api_key.lower().startswith("bearer "):
+        api_key = api_key[7:].strip()
     if len(api_key) < 4:
         return _error("api_key too short")
 
@@ -81,9 +83,26 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     if test_mode not in ("quick", "standard", "full", "extraction"):
         test_mode = "standard"
 
+    evaluation_mode = str(body.get("evaluation_mode", "normal") or "normal").strip().lower()
+    if evaluation_mode not in ("normal", "calibration"):
+        evaluation_mode = "normal"
+
+    scoring_profile_version = str(body.get("scoring_profile_version", settings.CALIBRATION_VERSION) or settings.CALIBRATION_VERSION).strip()
+    if not scoring_profile_version:
+        scoring_profile_version = settings.CALIBRATION_VERSION
+
+    calibration_case_id = body.get("calibration_case_id")
+
     suite_version = body.get("suite_version", "v2")
     # Project now uses v2 suite by default for all runs
     suite_version = "v2"
+
+    run_metadata = {
+        "evaluation_mode": evaluation_mode,
+        "calibration_case_id": calibration_case_id,
+        "scoring_profile_version": scoring_profile_version,
+        "calibration_tag": "baseline-v1.0" if evaluation_mode == "calibration" else None,
+    }
 
     run_id = repo.create_run(
         base_url=clean_url,
@@ -92,13 +111,19 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
         model_name=body["model"],
         test_mode=test_mode,
         suite_version=suite_version,
+        metadata=run_metadata,
     )
 
     # Submit to background worker
     submit_run(run_id)
     logger.info("Run created", run_id=run_id, model=body["model"])
 
-    return _json({"run_id": run_id, "status": "queued"}, 201)
+    return _json({
+        "run_id": run_id,
+        "status": "queued",
+        "evaluation_mode": evaluation_mode,
+        "scoring_profile_version": scoring_profile_version,
+    }, 201)
 
 
 def handle_get_run(path, _qs, _body) -> tuple:
@@ -109,6 +134,8 @@ def handle_get_run(path, _qs, _body) -> tuple:
     run = repo.get_run(run_id)
     if not run:
         return _error("Run not found", 404)
+
+    metadata = run.get("metadata") or {}
 
     # Count completed responses for progress
     responses = repo.get_responses(run_id)
@@ -134,6 +161,10 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "predetect_result": run.get("predetect_result"),
         "predetect_confidence": run.get("predetect_confidence"),
         "predetect_identified": bool(run.get("predetect_identified")),
+        "evaluation_mode": metadata.get("evaluation_mode", "normal"),
+        "calibration_case_id": metadata.get("calibration_case_id"),
+        "scoring_profile_version": metadata.get("scoring_profile_version", settings.CALIBRATION_VERSION),
+        "calibration_tag": metadata.get("calibration_tag"),
     })
 
 
@@ -592,6 +623,55 @@ def handle_calibration_snapshot_only(_path, qs, _body) -> tuple:
         return _error(f"Calibration snapshot failed: {e}", 500)
 
 
+def handle_create_calibration_replay(_path, _qs, body: dict) -> tuple:
+    cases = body.get("cases")
+    if not isinstance(cases, list) or not cases:
+        return _error("Missing required field: cases (non-empty list)", 400)
+
+    replay_id = repo.create_calibration_replay({"cases": cases})
+    submit_calibration_replay(replay_id)
+    return _json({"replay_id": replay_id, "status": "queued"}, 201)
+
+
+def handle_get_calibration_replay(path, _qs, _body) -> tuple:
+    replay_id = _extract_id(path, r"/api/v1/calibration/replay/([^/]+)$")
+    if not replay_id:
+        return _error("Invalid replay ID", 400)
+
+    row = repo.get_calibration_replay(replay_id)
+    if not row:
+        return _error("Calibration replay not found", 404)
+
+    return _json({
+        "replay_id": row["id"],
+        "status": row["status"],
+        "created_at": row.get("created_at"),
+        "started_at": row.get("started_at"),
+        "completed_at": row.get("completed_at"),
+        "error_message": row.get("error_message"),
+        "cases": (row.get("cases_json") or {}).get("cases", []),
+        "result": row.get("result_json"),
+    })
+
+
+def handle_list_calibration_replays(_path, qs, _body) -> tuple:
+    limit = int(qs.get("limit", ["20"])[0])
+    rows = repo.list_calibration_replays(min(limit, 100))
+    return _json([
+        {
+            "replay_id": r["id"],
+            "status": r["status"],
+            "created_at": r.get("created_at"),
+            "started_at": r.get("started_at"),
+            "completed_at": r.get("completed_at"),
+            "error_message": r.get("error_message"),
+            "case_count": len((r.get("cases_json") or {}).get("cases", [])),
+            "has_result": bool(r.get("result_json")),
+        }
+        for r in rows
+    ])
+
+
 def _build_isomorphic_cases() -> list[dict]:
     return [
         {
@@ -764,6 +844,34 @@ def handle_retry_run(path, _qs, _body) -> tuple:
     return _json({"run_id": run_id, "status": "queued", "resume": True})
 
 
+def handle_continue_run(path, _qs, _body) -> tuple:
+    """User chose to continue full testing after pre_detected state."""
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/continue$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+    run = repo.get_run(run_id)
+    if not run:
+        return _error("Run not found", 404)
+    if run.get("status") != "pre_detected":
+        return _error("Run is not in pre_detected state", 400)
+    submit_continue(run_id)
+    return _json({"run_id": run_id, "status": "running"})
+
+
+def handle_skip_testing(path, _qs, _body) -> tuple:
+    """User chose to skip full testing and generate report from predetect only."""
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/skip-testing$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+    run = repo.get_run(run_id)
+    if not run:
+        return _error("Run not found", 404)
+    if run.get("status") != "pre_detected":
+        return _error("Run is not in pre_detected state", 400)
+    submit_skip_testing(run_id)
+    return _json({"run_id": run_id, "status": "completing"})
+
+
 ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/health$",                  handle_health),
     ("GET",    r"^/api/v1/runs$",                    handle_list_runs),
@@ -772,6 +880,8 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("DELETE", r"^/api/v1/runs/[^/]+$",              handle_delete_run),
     ("POST",   r"^/api/v1/runs/[^/]+/cancel$",       handle_cancel_run),
     ("POST",   r"^/api/v1/runs/[^/]+/retry$",        handle_retry_run),
+    ("POST",   r"^/api/v1/runs/[^/]+/continue$",     handle_continue_run),
+    ("POST",   r"^/api/v1/runs/[^/]+/skip-testing$",  handle_skip_testing),
     ("GET",    r"^/api/v1/runs/[^/]+/report$",       handle_get_report),
     ("GET",    r"^/api/v1/runs/[^/]+/report\.csv$",  handle_export_report_csv),
     ("GET",    r"^/api/v1/runs/[^/]+/radar\.svg$",   handle_export_radar_svg),
@@ -791,6 +901,9 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/exports/runs\.zip$",       handle_export_runs_zip),
     ("POST",   r"^/api/v1/calibration/rebuild$",     handle_calibration_rebuild),
     ("POST",   r"^/api/v1/calibration/snapshot$",    handle_calibration_snapshot_only),
+    ("POST",   r"^/api/v1/calibration/replay$",      handle_create_calibration_replay),
+    ("GET",    r"^/api/v1/calibration/replay$",      handle_list_calibration_replays),
+    ("GET",    r"^/api/v1/calibration/replay/[^/]+$", handle_get_calibration_replay),
     ("POST",   r"^/api/v1/tools/generate-isomorphic$", handle_generate_isomorphic),
 ]
 

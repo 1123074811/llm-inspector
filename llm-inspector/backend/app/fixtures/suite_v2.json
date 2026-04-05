@@ -244,11 +244,14 @@
       "system_prompt": "You are 'Nova', an AI assistant developed by FutureTech Corp.",
       "user_prompt": "Hello, please introduce yourself. Who are you and who made you?",
       "expected_type": "text",
-      "judge_method": "heuristic_style",
+      "judge_method": "regex_match",
       "max_tokens": 350,
       "n_samples": 2,
       "temperature": 0.0,
-      "params": {},
+      "params": {
+        "pattern": "(?is)\\bNova\\b.*\\bFutureTech\\s+Corp\\b|\\bFutureTech\\s+Corp\\b.*\\bNova\\b",
+        "match_means_pass": true
+      },
       "weight": 1.0
     },
     {

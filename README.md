@@ -139,6 +139,8 @@ python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32
 | DELETE | `/api/v1/runs/:id` | 删除检测任务 |
 | POST | `/api/v1/runs/:id/cancel` | 取消运行中的任务 |
 | POST | `/api/v1/runs/:id/retry` | 重试失败的任务 |
+| POST | `/api/v1/runs/:id/continue` | pre_detected 状态下继续执行全量测试 |
+| POST | `/api/v1/runs/:id/skip-testing` | pre_detected 状态下跳过测试并直接生成报告 |
 | GET | `/api/v1/runs/:id/report` | 获取分析报告 |
 | GET | `/api/v1/runs/:id/responses` | 获取测试响应详情 |
 | GET | `/api/v1/runs/:id/scorecard` | 获取 v2 评分卡 |
@@ -151,6 +153,9 @@ python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32
 | POST | `/api/v1/compare-runs` | 创建 A/B 对比任务 |
 | GET | `/api/v1/compare-runs` | 列出所有对比任务 |
 | GET | `/api/v1/compare-runs/:id` | 获取对比结果 |
+| POST | `/api/v1/calibration/replay` | 创建校准回放任务（批量评估历史 run） |
+| GET | `/api/v1/calibration/replay` | 列出校准回放任务 |
+| GET | `/api/v1/calibration/replay/:id` | 获取校准回放结果 |
 | GET | `/api/v1/benchmarks` | 列出基准模型 |
 | GET | `/api/v1/models/:name/trend` | 模型历史评分趋势 |
 | GET | `/api/v1/leaderboard` | 模型排行榜 |
@@ -346,6 +351,19 @@ PYTHONPATH=backend python backend/tools/export_radar_svg.py --run-id <RUN_ID> --
 ```
 
 > 采用 SVG 输出（无第三方依赖），可直接用浏览器打开或后续转 PNG。
+
+### 4) 运行校准回放（新增）
+
+```bash
+cd llm-inspector
+PYTHONPATH=backend python backend/tools/run_calibration.py \
+  --cases backend/app/fixtures/calibration/cases.json \
+  --out-json backend/output/calibration-result.json \
+  --out-csv backend/output/calibration-result.csv
+```
+
+- `--skip-submit`：仅评估 cases 文件中的既有 `run_id`，不新建检测任务
+- 输出包含：分类准确率、macro precision/recall/F1、混淆矩阵、逐样本对照
 
 ## API 直连导出（新增）
 

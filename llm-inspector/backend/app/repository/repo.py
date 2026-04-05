@@ -17,16 +17,17 @@ def create_run(
     model_name: str,
     test_mode: str = "standard",
     suite_version: str = "v1",
+    metadata: dict | None = None,
 ) -> str:
     run_id = new_id()
     conn = get_conn()
     conn.execute(
         """INSERT INTO test_runs
            (id, base_url, api_key_encrypted, api_key_hash,
-            model_name, test_mode, suite_version, status, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+            model_name, test_mode, suite_version, status, created_at, metadata)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (run_id, base_url, api_key_encrypted, api_key_hash,
-         model_name, test_mode, suite_version, "queued", now_iso()),
+         model_name, test_mode, suite_version, "queued", now_iso(), json_col(metadata or {})),
     )
     conn.commit()
     return run_id
@@ -706,3 +707,70 @@ def get_latest_calibration_snapshot() -> dict | None:
     d = dict(row)
     d["item_params_json"] = from_json_col(d.get("item_params_json")) or {}
     return d
+
+
+# ── Calibration Replay ───────────────────────────────────────────────────────
+
+def create_calibration_replay(cases_json: dict) -> str:
+    rid = new_id()
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO calibration_replays
+           (id, status, cases_json, created_at)
+           VALUES (?,?,?,?)""",
+        (rid, "queued", json_col(cases_json), now_iso()),
+    )
+    conn.commit()
+    return rid
+
+
+def get_calibration_replay(replay_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM calibration_replays WHERE id=?", (replay_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["cases_json"] = from_json_col(d.get("cases_json")) or {}
+    d["result_json"] = from_json_col(d.get("result_json"))
+    return d
+
+
+def list_calibration_replays(limit: int = 20) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM calibration_replays ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        d["cases_json"] = from_json_col(d.get("cases_json")) or {}
+        d["result_json"] = from_json_col(d.get("result_json"))
+        out.append(d)
+    return out
+
+
+def update_calibration_replay(replay_id: str, status: str, **kwargs) -> None:
+    sets = ["status=?"]
+    vals: list = [status]
+
+    if status == "running" and "started_at" not in kwargs:
+        sets.append("started_at=?")
+        vals.append(now_iso())
+    if status in ("completed", "failed") and "completed_at" not in kwargs:
+        sets.append("completed_at=?")
+        vals.append(now_iso())
+
+    for k, v in kwargs.items():
+        sets.append(f"{k}=?")
+        if k in ("result_json",):
+            vals.append(json_col(v) if v is not None else None)
+        else:
+            vals.append(v)
+
+    vals.append(replay_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE calibration_replays SET {','.join(sets)} WHERE id=?", vals)
+    conn.commit()

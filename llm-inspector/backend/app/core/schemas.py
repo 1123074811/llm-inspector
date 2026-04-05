@@ -156,6 +156,7 @@ class PreDetectionResult:
     layer_results: list[LayerResult] = field(default_factory=list)
     total_tokens_used: int = 0
     should_proceed_to_testing: bool = True
+    routing_info: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -165,6 +166,7 @@ class PreDetectionResult:
             "layer_stopped": self.layer_stopped,
             "total_tokens_used": self.total_tokens_used,
             "should_proceed_to_testing": self.should_proceed_to_testing,
+            "routing_info": self.routing_info,
             "layer_results": [
                 {
                     "layer": r.layer,

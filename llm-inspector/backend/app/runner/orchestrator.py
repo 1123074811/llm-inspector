@@ -578,22 +578,94 @@ def run_pipeline(run_id: str) -> None:
             layer_stopped=None, should_proceed_to_testing=True,
         )
 
-    # If pre-detection is highly confident AND not extraction mode, skip full test
+    # If pre-detection is highly confident AND not extraction mode,
+    # pause and let the user decide whether to continue full testing.
+    # The user can POST /api/v1/runs/{id}/continue or /skip-testing.
     if not pre_result.should_proceed_to_testing and not extraction_mode:
-        logger.info("Pre-detection sufficient, skipping full test", run_id=run_id)
-        _build_and_save_report(
-            run_id, run, pre_result, [], {}, suite_version
-        )
+        logger.info("Pre-detection sufficient, pausing for user decision", run_id=run_id)
+        repo.update_run_status(run_id, "pre_detected")
         return
 
     # ── Step 2: Connectivity check ───────────────────────────────────────────
     repo.update_run_status(run_id, "running")
     conn_check = adapter.list_models()
-    if conn_check.get("error") and not conn_check.get("status_code"):
-        msg = f"Cannot reach API: {conn_check.get('error')}"
+    conn_status = conn_check.get("status_code")
+    conn_error = conn_check.get("error")
+
+    # Hard fail: network-level error (no status_code means DNS/TCP failure)
+    if conn_error and not conn_status:
+        msg = (
+            f"无法连接到 API：{conn_error}。"
+            f"请检查 base_url 是否正确（当前：{run['base_url']}），"
+            f"网络是否可达，以及 API Key 是否有效。"
+        )
         repo.update_run_status(run_id, "failed", error_message=msg)
-        logger.error("Connectivity failed", run_id=run_id, error=msg)
+        logger.error("Connectivity failed (network)", run_id=run_id, error=msg)
         return
+
+    # Soft fail on /models (401/403/404): many providers (e.g. Baidu Qianfan
+    # Coding Plan) don't expose a /models endpoint but /chat/completions works.
+    # Fallback: send a minimal chat request with the actual model name.
+    if conn_status and conn_status in (401, 403, 404):
+        logger.info(
+            "list_models returned error, probing chat endpoint as fallback",
+            run_id=run_id,
+            models_status=conn_status,
+        )
+        from app.core.schemas import LLMRequest, Message
+        probe_req = LLMRequest(
+            model=run["model_name"],
+            messages=[Message(role="user", content="hi")],
+            max_tokens=1,
+            temperature=0.0,
+            timeout_sec=15,
+        )
+        probe_resp = adapter.chat(probe_req)
+
+        # Network-level failure on the chat endpoint
+        if probe_resp.error_type and not probe_resp.status_code:
+            msg = (
+                f"无法连接到 API chat 端点：{probe_resp.error_message}。"
+                f"请检查 base_url 是否正确（当前：{run['base_url']}），"
+                f"网络是否可达，以及 API Key 是否有效。"
+            )
+            repo.update_run_status(run_id, "failed", error_message=msg)
+            logger.error("Connectivity failed (chat probe network)", run_id=run_id, error=msg)
+            return
+
+        # Chat endpoint returns 401 → genuine auth failure
+        if probe_resp.status_code == 401:
+            msg = (
+                f"API 鉴权失败：API Key 无效或未授权（HTTP 401）。"
+                f"请检查 API Key 是否正确。base_url：{run['base_url']}"
+            )
+            repo.update_run_status(run_id, "failed", error_message=msg)
+            logger.error("Connectivity failed (auth 401)", run_id=run_id)
+            return
+
+        # Chat endpoint returns 404 → endpoint path is wrong
+        if probe_resp.status_code == 404:
+            msg = (
+                f"API 端点不存在（HTTP 404）。当前 base_url：{run['base_url']}，"
+                f"系统将请求发送到 {run['base_url']}/chat/completions。"
+                f"请确认该路径是否正确。例如百度千帆 Coding Plan 应填写 "
+                f"https://qianfan.baidubce.com/v2/coding"
+            )
+            repo.update_run_status(run_id, "failed", error_message=msg)
+            logger.error("Connectivity failed (404 on chat endpoint)", run_id=run_id)
+            return
+
+        # Any response (even 400/403/422/500) from the chat endpoint means it's
+        # reachable. 403 with the real model name could mean rate-limit, model
+        # access restriction, or parameter validation — not necessarily bad auth.
+        # Continue to testing; the high-error-rate guard will catch persistent failures.
+        logger.info(
+            "Chat endpoint probe: endpoint reachable",
+            run_id=run_id,
+            probe_status=probe_resp.status_code,
+            probe_ok=probe_resp.ok,
+            probe_error=probe_resp.error_type,
+        )
 
     # ── Step 3: Load test cases + execute ────────────────────────────────────
     if extraction_mode:
@@ -754,6 +826,44 @@ def run_pipeline(run_id: str) -> None:
                         logger.info("Pipeline cancelled", run_id=run_id)
                         return
 
+    # ── 检查：是否几乎所有请求均失败（说明是连接/配置问题而非模型问题）────────────
+    if case_results:
+        total_samples = sum(len(r.samples) for r in case_results)
+        error_samples = sum(
+            1 for r in case_results for s in r.samples if s.response.error_type
+        )
+        if total_samples > 0:
+            error_rate = error_samples / total_samples
+            if error_rate >= 0.9:
+                # 收集最常见的错误类型作为提示
+                error_types: dict[str, int] = {}
+                error_messages: list[str] = []
+                for r in case_results:
+                    for s in r.samples:
+                        et = s.response.error_type
+                        if et:
+                            error_types[et] = error_types.get(et, 0) + 1
+                        em = s.response.error_message
+                        if em and em not in error_messages:
+                            error_messages.append(em)
+                top_error = max(error_types, key=error_types.get) if error_types else "未知错误"
+                sample_msg = error_messages[0][:150] if error_messages else ""
+                diag_msg = (
+                    f"API 连接/配置失败：{error_rate:.0%} 的请求均出错（错误类型：{top_error}）。"
+                    f" 示例错误：{sample_msg}。"
+                    f" 请检查：① base_url 路径是否正确（如千帆需使用 /v2/chat/completions，"
+                    f"当前 base_url：{run['base_url']}）；② API Key 是否有效；③ 网络是否可达。"
+                    f" 本次结果不代表模型真实能力，请修正配置后重试。"
+                )
+                repo.update_run_status(run_id, "failed", error_message=diag_msg)
+                logger.error(
+                    "Pipeline aborted: near-total request failure indicates config error",
+                    run_id=run_id,
+                    error_rate=error_rate,
+                    top_error=top_error,
+                )
+                return
+
     # ── Steps 4-6: Analysis + report ─────────────────────────────────────────
     _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
 
@@ -771,6 +881,7 @@ def _build_and_save_report(
     suite_version: str,
     precomputed_similarities: list | None = None,
 ) -> dict:
+    run_metadata = run.get("metadata") or {}
     """Extract features, score, similarity, risk, build report."""
     # Feature extraction
     extractor = FeatureExtractor()
@@ -921,9 +1032,191 @@ def _build_and_save_report(
         verdict=verdict,
         theta_report=theta_report,
         pairwise=pairwise,
+        scoring_profile_version=run_metadata.get("scoring_profile_version", settings.CALIBRATION_VERSION),
+        calibration_tag=run_metadata.get("calibration_tag"),
     )
     repo.save_report(run_id, report)
     return report
+
+
+def continue_pipeline(run_id: str) -> None:
+    """Resume a pre_detected run: skip predetect, go straight to connectivity check + testing."""
+    logger.info("Continue pipeline (from pre_detected)", run_id=run_id)
+    run = repo.get_run(run_id)
+    if not run:
+        logger.error("Run not found", run_id=run_id)
+        return
+
+    km = get_key_manager()
+    try:
+        api_key = km.decrypt(run["api_key_encrypted"])
+    except Exception as e:
+        repo.update_run_status(run_id, "failed", error_message=f"Key decrypt failed: {e}")
+        return
+
+    adapter = OpenAICompatibleAdapter(run["base_url"], api_key)
+    suite_version = run.get("suite_version", "v1")
+    test_mode = run.get("test_mode", "standard")
+
+    # Reload predetect result
+    pre_dict = run.get("predetect_result") or {}
+    pre_result = PreDetectionResult(
+        success=pre_dict.get("success", False),
+        identified_as=pre_dict.get("identified_as"),
+        confidence=pre_dict.get("confidence", 0.0),
+        layer_stopped=pre_dict.get("layer_stopped"),
+        total_tokens_used=pre_dict.get("total_tokens_used", 0),
+        should_proceed_to_testing=True,  # Force continue
+        routing_info=pre_dict.get("routing_info", {}),
+    )
+
+    # Jump to Step 2: connectivity check + testing (same as run_pipeline from line 589)
+    repo.update_run_status(run_id, "running")
+    conn_check = adapter.list_models()
+    conn_status = conn_check.get("status_code")
+    conn_error = conn_check.get("error")
+
+    if conn_error and not conn_status:
+        msg = (
+            f"无法连接到 API：{conn_error}。"
+            f"请检查 base_url 是否正确（当前：{run['base_url']}），"
+            f"网络是否可达，以及 API Key 是否有效。"
+        )
+        repo.update_run_status(run_id, "failed", error_message=msg)
+        return
+
+    if conn_status and conn_status in (401, 403, 404):
+        from app.core.schemas import LLMRequest as _LR, Message as _M
+        probe_resp = adapter.chat(_LR(
+            model=run["model_name"],
+            messages=[_M(role="user", content="hi")],
+            max_tokens=1, temperature=0.0, timeout_sec=15,
+        ))
+        if probe_resp.error_type and not probe_resp.status_code:
+            repo.update_run_status(run_id, "failed",
+                                   error_message=f"无法连接到 API chat 端点：{probe_resp.error_message}")
+            return
+        if probe_resp.status_code == 401:
+            repo.update_run_status(run_id, "failed",
+                                   error_message=f"API 鉴权失败（HTTP 401）。base_url：{run['base_url']}")
+            return
+        if probe_resp.status_code == 404:
+            repo.update_run_status(run_id, "failed",
+                                   error_message=f"API 端点不存在（HTTP 404）。base_url：{run['base_url']}")
+            return
+
+    # Load and execute test cases
+    cases = _load_suite(suite_version, test_mode)
+    if not cases:
+        repo.update_run_status(run_id, "failed", error_message="No test cases loaded")
+        return
+
+    if (
+        test_mode != "full"
+        and pre_result.success
+        and 0.60 <= pre_result.confidence < settings.PREDETECT_CONFIDENCE_THRESHOLD
+        and pre_result.identified_as
+    ):
+        cases = _select_confirmatory_cases(cases, pre_result.identified_as)
+
+    phase1_cases, phase2_cases = _prepare_cases(cases, test_mode)
+
+    existing_responses = repo.get_responses(run_id)
+    completed_case_ids = {r.get("case_id") for r in existing_responses if r.get("case_id")}
+    if completed_case_ids:
+        phase1_cases = [c for c in phase1_cases if c.id not in completed_case_ids]
+        phase2_cases = [c for c in phase2_cases if c.id not in completed_case_ids]
+
+    case_results: list[CaseResult] = []
+    failed_count_ref = {"count": 0}
+    backoff_state = {"delay_ms": settings.INTER_REQUEST_DELAY_MS}
+
+    budget_map = {
+        "quick": settings.TOKEN_BUDGET_QUICK,
+        "standard": settings.TOKEN_BUDGET_STANDARD,
+        "full": settings.TOKEN_BUDGET_FULL,
+    }
+    budget_guard = TokenBudgetGuard(budget_map.get(test_mode, settings.TOKEN_BUDGET_STANDARD))
+
+    cancelled = _run_cases_concurrent(
+        adapter=adapter, model_name=run["model_name"],
+        cases=phase1_cases, test_mode=test_mode, run_id=run_id,
+        phase_label="phase1", case_results=case_results,
+        failed_count_ref=failed_count_ref, backoff_state=backoff_state,
+        budget_guard=budget_guard,
+    )
+    if cancelled:
+        repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
+        return
+
+    stop_now, cached_features, cached_sims, _ = _checkpoint_should_stop(
+        test_mode=test_mode, case_results=case_results,
+        features_cache=None, sims_cache=None, scorecard_cache=None,
+    )
+    if stop_now:
+        _build_and_save_report(run_id, run, pre_result, case_results,
+                               cached_features or {}, suite_version,
+                               precomputed_similarities=cached_sims)
+        final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
+        repo.update_run_status(run_id, final_status)
+        return
+
+    if phase2_cases:
+        cancelled = _run_cases_concurrent(
+            adapter=adapter, model_name=run["model_name"],
+            cases=phase2_cases, test_mode=test_mode, run_id=run_id,
+            phase_label="phase2", case_results=case_results,
+            failed_count_ref=failed_count_ref, backoff_state=backoff_state,
+            budget_guard=budget_guard,
+        )
+        if cancelled:
+            repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
+            return
+
+    # High error rate guard
+    if case_results:
+        total_samples = sum(len(r.samples) for r in case_results)
+        error_samples = sum(1 for r in case_results for s in r.samples if s.response.error_type)
+        if total_samples > 0 and (error_samples / total_samples) >= 0.9:
+            error_types: dict[str, int] = {}
+            for r in case_results:
+                for s in r.samples:
+                    if s.response.error_type:
+                        error_types[s.response.error_type] = error_types.get(s.response.error_type, 0) + 1
+            top_error = max(error_types, key=error_types.get) if error_types else "unknown"
+            repo.update_run_status(run_id, "failed",
+                                   error_message=f"API 连接/配置失败：90%+ 请求出错（{top_error}）。请修正配置后重试。")
+            return
+
+    _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
+    final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
+    repo.update_run_status(run_id, final_status)
+    logger.info("Continue pipeline complete", run_id=run_id, status=final_status)
+
+
+def skip_testing_pipeline(run_id: str) -> None:
+    """Skip full testing for a pre_detected run, generate report from predetect only."""
+    logger.info("Skip testing pipeline", run_id=run_id)
+    run = repo.get_run(run_id)
+    if not run:
+        logger.error("Run not found", run_id=run_id)
+        return
+
+    pre_dict = run.get("predetect_result") or {}
+    pre_result = PreDetectionResult(
+        success=pre_dict.get("success", False),
+        identified_as=pre_dict.get("identified_as"),
+        confidence=pre_dict.get("confidence", 0.0),
+        layer_stopped=pre_dict.get("layer_stopped"),
+        total_tokens_used=pre_dict.get("total_tokens_used", 0),
+        should_proceed_to_testing=False,
+        routing_info=pre_dict.get("routing_info", {}),
+    )
+    suite_version = run.get("suite_version", "v1")
+
+    _build_and_save_report(run_id, run, pre_result, [], {}, suite_version)
+    repo.update_run_status(run_id, "completed")
+    logger.info("Skip testing pipeline complete", run_id=run_id)
 
 
 def run_compare_pipeline(compare_id: str) -> None:

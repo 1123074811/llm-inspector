@@ -72,7 +72,12 @@ class FeatureExtractor:
             features["param_compliance_rate"] = self._pass_rate(
                 [r for r in param_cases if r.samples and r.samples[-1].judge_passed is not None]
             )
-            temp_cases = [r for r in param_cases if "temperature" in r.case.id]
+            temp_cases = [
+                r for r in param_cases
+                if r.case.judge_method == "heuristic_style"
+                and isinstance(r.case.params, dict)
+                and "also_run_at" in r.case.params
+            ]
             if temp_cases:
                 for r in temp_cases:
                     for s in r.samples:
@@ -120,6 +125,42 @@ class FeatureExtractor:
             if total > 0:
                 features["refusal_rate"] = refusal_count / total
                 features["alt_suggestion_rate"] = alt_count / total
+
+        # --- Antispoof identity features ---
+        identity_cases = [r for r in case_results if r.case.judge_method == "identity_consistency"]
+        if identity_cases:
+            judged = [
+                s for r in identity_cases for s in r.samples
+                if s.judge_passed is not None
+            ]
+            if judged:
+                features["identity_consistency_pass_rate"] = (
+                    sum(1 for s in judged if s.judge_passed) / len(judged)
+                )
+
+        antispoof_cases = [r for r in case_results if r.case.category == "antispoof"]
+        if antispoof_cases:
+            extract_samples = []
+            contradiction_samples = []
+            for r in antispoof_cases:
+                for s in r.samples:
+                    detail = s.judge_detail or {}
+                    detected = detail.get("detected_identities") or []
+                    if detected:
+                        extract_samples.append(1)
+                    elif "detected_identities" in detail:
+                        extract_samples.append(0)
+
+                    if "leaked_identity" in detail:
+                        leaked = detail.get("leaked_identity") or []
+                        contradiction_samples.append(1 if leaked else 0)
+
+            if extract_samples:
+                features["antispoof_identity_detect_rate"] = sum(extract_samples) / len(extract_samples)
+            if contradiction_samples:
+                features["antispoof_override_leak_rate"] = (
+                    sum(contradiction_samples) / len(contradiction_samples)
+                )
 
         # --- Latency features ---
         all_latencies = [
@@ -716,7 +757,8 @@ FEATURE_ORDER = [
     "protocol_success_rate", "instruction_pass_rate", "exact_match_rate",
     "json_valid_rate", "system_obedience_rate", "param_compliance_rate",
     "temperature_param_effective", "refusal_rate", "disclaimer_rate",
-    "avg_markdown_score", "avg_response_length",
+    "identity_consistency_pass_rate", "antispoof_identity_detect_rate",
+    "antispoof_override_leak_rate", "avg_markdown_score", "avg_response_length",
     "adversarial_spoof_signal_rate", "latency_mean_ms",
 ]
 
@@ -733,6 +775,9 @@ GLOBAL_FEATURE_MEANS: dict[str, float] = {
     "temperature_param_effective": 0.70,
     "refusal_rate": 0.10,
     "disclaimer_rate": 0.40,
+    "identity_consistency_pass_rate": 0.75,
+    "antispoof_identity_detect_rate": 0.35,
+    "antispoof_override_leak_rate": 0.20,
     "avg_markdown_score": 2.5,
     "avg_response_length": 600.0,
     "adversarial_spoof_signal_rate": 0.15,
@@ -1514,6 +1559,8 @@ class ReportBuilder:
         verdict: TrustVerdict | None = None,
         theta_report: ThetaReport | None = None,
         pairwise: dict | None = None,
+        scoring_profile_version: str = "v1",
+        calibration_tag: str | None = None,
     ) -> dict:
         dimensions = {
             k.replace("dim_", "").replace("_pass_rate", ""): v
@@ -1538,6 +1585,9 @@ class ReportBuilder:
                 "model": model_name,
                 "test_mode": test_mode,
             },
+            "scoring_profile_version": scoring_profile_version,
+            "calibration_tag": calibration_tag,
+            "uncertainty_flags": [],
             "predetection": predetect.to_dict() if predetect else None,
             "scores": {
                 "protocol_score": scores.protocol_score,

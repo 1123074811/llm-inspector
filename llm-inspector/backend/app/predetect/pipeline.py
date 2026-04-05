@@ -68,6 +68,7 @@ KNOWN_MODEL_PREFIXES: list[tuple[str, str]] = [
     ("qwen",         "Alibaba/Qwen"),
     ("glm-4",        "Zhipu/GLM-4"),
     ("glm-3",        "Zhipu/GLM-3"),
+    ("glm-5",        "Zhipu/GLM-5"),
     ("llama-3",      "Meta/LLaMA-3"),
     ("llama-2",      "Meta/LLaMA-2"),
     ("llama",        "Meta/LLaMA"),
@@ -78,6 +79,10 @@ KNOWN_MODEL_PREFIXES: list[tuple[str, str]] = [
     ("kimi",         "Moonshot AI/Kimi"),
     ("baichuan",     "Baichuan AI"),
     ("internlm",     "Shanghai AI Lab/InternLM"),
+    ("minimax",      "MiniMax"),
+    ("abab",         "MiniMax/Abab"),
+    ("ernie",        "Baidu/ERNIE"),
+    ("wenxin",       "Baidu/ERNIE"),
 ]
 
 # Tokenizer fingerprints: known token counts for specific strings
@@ -175,7 +180,7 @@ class Layer0HTTP:
 class Layer1SelfReport:
     """Query /models and first-token chat response. ~5 tokens."""
 
-    def run(self, adapter, model_name: str) -> LayerResult:
+    def run(self, adapter, model_name: str, prefetched_resp=None) -> LayerResult:
         evidence = []
         identified: str | None = None
         confidence = 0.0
@@ -200,13 +205,17 @@ class Layer1SelfReport:
             evidence.append(f"/models unavailable (status {models_resp.get('status_code')})")
 
         # 2. Minimal chat — observe response.model field
-        req = LLMRequest(
-            model=model_name,
-            messages=[Message("user", "hi")],
-            max_tokens=3,
-            temperature=0.0,
-        )
-        resp = adapter.chat(req)
+        # Reuse prefetched response from quick probe if available
+        if prefetched_resp is not None:
+            resp = prefetched_resp
+        else:
+            req = LLMRequest(
+                model=model_name,
+                messages=[Message("user", "hi")],
+                max_tokens=3,
+                temperature=0.0,
+            )
+            resp = adapter.chat(req)
         tokens_used += (resp.usage_total_tokens or 0) + 3  # approx
 
         if resp.ok and resp.raw_json:
@@ -220,6 +229,15 @@ class Layer1SelfReport:
                 if hit:
                     evidence.append(f"Returned model name → {hit}")
                     identified = hit
+                    confidence = max(confidence, 0.85)
+                else:
+                    # Model name differs but not in known list — still a strong
+                    # signal of model routing/proxy. Record the raw name.
+                    evidence.append(
+                        f"Returned model '{returned_model}' is unknown but differs "
+                        f"from claimed '{model_name}' — routing detected"
+                    )
+                    identified = returned_model
                     confidence = max(confidence, 0.85)
 
             # Check for explicit model name match in list
@@ -1060,13 +1078,60 @@ class PreDetectionPipeline:
         if r0.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r0, layer_results, total_tokens)
 
-        # Layer 1 — Self-report
+        # Quick connectivity check: send a minimal chat request with the actual
+        # model name. If this fails (error_type set), API is likely unreachable
+        # or misconfigured — skip expensive identity probes.
+        probe = adapter.chat(LLMRequest(
+            model=model_name,
+            messages=[Message(role="user", content="hi")],
+            max_tokens=1,
+            temperature=0.0,
+            timeout_sec=15,
+        ))
+        if probe.error_type:
+            logger.warning(
+                "PreDetect quick probe failed, skipping remaining layers",
+                model=model_name,
+                error_type=probe.error_type,
+                status_code=probe.status_code,
+                error=probe.error_message,
+            )
+            return PreDetectionResult(
+                success=False,
+                identified_as=None,
+                confidence=0.0,
+                layer_stopped="probe",
+                layer_results=layer_results,
+                total_tokens_used=total_tokens,
+                should_proceed_to_testing=True,
+            )
+
+        # Extract routing info from quick probe for detailed reporting
+        routing_info: dict = {}
+        if probe.ok and probe.raw_json:
+            returned_model = probe.raw_json.get("model", "")
+            if returned_model:
+                routing_info["returned_model"] = returned_model
+                routing_info["claimed_model"] = model_name
+                if returned_model.lower() != model_name.lower():
+                    routing_info["is_routed"] = True
+                else:
+                    routing_info["is_routed"] = False
+            # Capture usage info
+            usage = probe.raw_json.get("usage", {})
+            if usage:
+                routing_info["probe_usage"] = usage
+            # Capture latency
+            if probe.latency_ms:
+                routing_info["probe_latency_ms"] = probe.latency_ms
+
+        # Layer 1 — Self-report (reuse quick probe response)
         logger.info("PreDetect Layer1: Self-report", model=model_name)
-        r1 = Layer1SelfReport().run(adapter, model_name)
+        r1 = Layer1SelfReport().run(adapter, model_name, prefetched_resp=probe)
         layer_results.append(r1)
         total_tokens += r1.tokens_used
         if r1.confidence >= CONFIDENCE_THRESHOLD:
-            return self._build_result(True, r1, layer_results, total_tokens)
+            return self._build_result(True, r1, layer_results, total_tokens, routing_info=routing_info)
 
         # Layer 2 — Identity probes
         logger.info("PreDetect Layer2: Identity probes", model=model_name)
@@ -1129,12 +1194,14 @@ class PreDetectionPipeline:
             layer_results=layer_results,
             total_tokens_used=total_tokens,
             should_proceed_to_testing=merged_conf < CONFIDENCE_THRESHOLD,
+            routing_info=routing_info,
         )
 
     @staticmethod
     def _build_result(
         success: bool, winning_layer: LayerResult,
         all_layers: list[LayerResult], tokens: int,
+        routing_info: dict | None = None,
     ) -> PreDetectionResult:
         return PreDetectionResult(
             success=success,
@@ -1144,6 +1211,7 @@ class PreDetectionPipeline:
             layer_results=all_layers,
             total_tokens_used=tokens,
             should_proceed_to_testing=not success,
+            routing_info=routing_info or {},
         )
 
     @staticmethod

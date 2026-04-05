@@ -139,6 +139,17 @@ def test_ssrf_strips_query():
     except ValueError:
         pass  # DNS may fail in sandbox — that's fine
 
+
+def test_normalize_openai_base_strips_chat_completions():
+    from app.core.security import normalize_openai_compatible_base_url
+    assert normalize_openai_compatible_base_url(
+        "https://qianfan.baidubce.com/v2/coding/chat/completions"
+    ) == "https://qianfan.baidubce.com/v2/coding"
+    assert normalize_openai_compatible_base_url(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/"
+    ) == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
 test("encrypt/decrypt roundtrip", test_encrypt_decrypt_roundtrip)
 test("different nonce each call", test_encrypt_different_nonce)
 test("hash prefix stable", test_hash_prefix_stable)
@@ -148,6 +159,7 @@ test("SSRF: blocks 10.x.x.x", test_ssrf_private_10)
 test("SSRF: blocks 192.168.x.x", test_ssrf_private_192)
 test("SSRF: blocks ftp scheme", test_ssrf_bad_scheme)
 test("SSRF: strips query+fragment", test_ssrf_strips_query)
+test("normalize OpenAI base strips /chat/completions", test_normalize_openai_base_strips_chat_completions)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -572,11 +584,14 @@ def test_report_builder_keys():
         scores=scores, similarities=sims, risk=risk,
     )
     for key in ("run_id", "target", "predetection", "scores",
-                "similarity", "risk", "features", "case_results"):
+                "similarity", "risk", "features", "case_results",
+                "scoring_profile_version", "uncertainty_flags"):
         assert key in report, f"Missing key: {key}"
     assert report["scores"]["protocol_score"] == 80
     assert report["similarity"][0]["benchmark"] == "gpt-4o"
     assert report["risk"]["level"] == "medium"
+    assert report["scoring_profile_version"] == "v1"
+    assert report["uncertainty_flags"] == []
 
 test("feature extraction: basic", test_feature_extraction_basic)
 test("feature extraction: latency", test_feature_extraction_latency)
@@ -1024,6 +1039,81 @@ def test_api_report_not_ready():
     status, data = _call_handler("GET", f"/api/v1/runs/{run_id}/report")
     assert status == 404
 
+
+def test_api_create_run_calibration_metadata():
+    from app.core.db import init_db
+    from app.repository import repo
+    init_db()
+    status, data = _call_handler("POST", "/api/v1/runs", {
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-test-calibration-12345",
+        "model": "gpt-4o",
+        "evaluation_mode": "calibration",
+        "calibration_case_id": "calib_case_001",
+        "scoring_profile_version": "profile-v1",
+    })
+    assert status == 201
+    run_id = data.get("run_id")
+    assert run_id
+    run = repo.get_run(run_id)
+    meta = run.get("metadata") or {}
+    assert meta.get("evaluation_mode") == "calibration"
+    assert meta.get("calibration_case_id") == "calib_case_001"
+    assert meta.get("scoring_profile_version") == "profile-v1"
+    assert meta.get("calibration_tag") == "baseline-v1.0"
+
+
+def test_api_create_run_default_scoring_profile_version():
+    from app.core.db import init_db
+    from app.core.config import settings
+    init_db()
+    status, data = _call_handler("POST", "/api/v1/runs", {
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-test-default-12345",
+        "model": "gpt-4o-mini",
+    })
+    assert status == 201
+    assert data.get("scoring_profile_version") == settings.CALIBRATION_VERSION
+
+
+def test_api_create_calibration_replay_missing_cases():
+    from app.core.db import init_db
+    init_db()
+    status, data = _call_handler("POST", "/api/v1/calibration/replay", {})
+    assert status == 400
+
+
+def test_api_create_and_get_calibration_replay():
+    from app.core.db import init_db
+    init_db()
+    status, data = _call_handler("POST", "/api/v1/calibration/replay", {
+        "cases": [
+            {
+                "case_id": "calib_001",
+                "run_id": "nonexistent-run-id",
+                "expected_level": "trusted",
+            }
+        ]
+    })
+    assert status == 201
+    replay_id = data.get("replay_id")
+    assert replay_id
+
+    # Immediately query replay; status may still be queued/running
+    status2, data2 = _call_handler("GET", f"/api/v1/calibration/replay/{replay_id}")
+    assert status2 == 200
+    assert data2.get("replay_id") == replay_id
+    assert data2.get("status") in ("queued", "running", "completed", "failed")
+
+
+def test_api_list_calibration_replays():
+    from app.core.db import init_db
+    init_db()
+    status, data = _call_handler("GET", "/api/v1/calibration/replay?limit=5")
+    assert status == 200
+    assert isinstance(data, list)
+
+
 test("API: GET /health", test_api_health)
 test("API: GET /benchmarks", test_api_benchmarks)
 test("API: GET /runs list", test_api_runs_empty)
@@ -1031,6 +1121,11 @@ test("API: POST /runs missing field → 400", test_api_create_run_missing_field)
 test("API: POST /runs SSRF → 400", test_api_create_run_ssrf_blocked)
 test("API: GET /runs/nonexistent → 404", test_api_get_nonexistent_run)
 test("API: GET /runs/{id}/report not ready → 404", test_api_report_not_ready)
+test("API: POST /runs calibration metadata persisted", test_api_create_run_calibration_metadata)
+test("API: POST /runs default scoring profile version", test_api_create_run_default_scoring_profile_version)
+test("API: POST /calibration/replay missing cases → 400", test_api_create_calibration_replay_missing_cases)
+test("API: POST+GET /calibration/replay", test_api_create_and_get_calibration_replay)
+test("API: GET /calibration/replay list", test_api_list_calibration_replays)
 
 
 # ═══════════════════════════════════════════════════════════════
