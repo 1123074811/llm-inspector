@@ -42,8 +42,29 @@ def _seed_test_cases() -> None:
                 ],
                 "fail_condition": "does not satisfy expected output constraints",
             })
+            meta = (case.get("params", {}) or {}).get("_meta", {})
+            dimension = meta.get("dimension") or case.get("dimension") or case.get("category", "general")
+            anchor = bool(meta.get("anchor", False))
+            info_gain_prior = float(meta.get("info_gain_prior", case.get("weight", 1.0)))
             try:
                 repo.upsert_test_case(case)
+                repo.upsert_item_bank(
+                    item_id=case["id"],
+                    dimension=dimension,
+                    anchor_flag=anchor,
+                    active=bool(case.get("enabled", True)),
+                    version=version,
+                )
+                if not repo.get_item_stat(case["id"]):
+                    repo.upsert_item_stat(
+                        item_id=case["id"],
+                        dimension=dimension,
+                        a=1.0,
+                        b=0.0,
+                        c=None,
+                        info_score=info_gain_prior,
+                        sample_size=0,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to seed case {case.get('id')}: {e}")
         total += len(cases)

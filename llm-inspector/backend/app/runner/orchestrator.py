@@ -5,6 +5,7 @@ Called from the task worker (thread pool or Celery).
 from __future__ import annotations
 
 import pathlib
+import random
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -21,6 +22,7 @@ from app.analysis.pipeline import (
     FeatureExtractor, ScoreCalculator,
     SimilarityEngine, RiskEngine, ReportBuilder,
     ScoreCardCalculator, VerdictEngine,
+    ThetaEstimator, UncertaintyEstimator, PercentileMapper, PairwiseEngine,
 )
 from app.repository import repo
 
@@ -34,6 +36,8 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
     raw_cases = repo.load_cases(suite_version, test_mode)
     cases = []
     for c in raw_cases:
+        params = c.get("params", {})
+        meta = (params.get("_meta") or {})
         cases.append(TestCase(
             id=c["id"],
             category=c["category"],
@@ -42,7 +46,10 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
             expected_type=c["expected_type"],
             judge_method=c["judge_method"],
             system_prompt=c.get("system_prompt"),
-            params=c.get("params", {}),
+            dimension=meta.get("dimension") or c.get("dimension"),
+            tags=meta.get("tags") or c.get("tags", []),
+            judge_rubric=meta.get("judge_rubric") or c.get("judge_rubric", {}),
+            params=params,
             max_tokens=c.get("max_tokens", 5),
             n_samples=c.get("n_samples", 1),
             temperature=c.get("temperature", 0.0),
@@ -59,13 +66,25 @@ def _load_benchmarks(suite_version: str) -> list[dict]:
 
 def _save_case_result(run_id: str, result: CaseResult) -> None:
     batch_rows = []
+    case = result.case
     for sample in result.samples:
         r = sample.response
+        # Build request payload preview from the case definition
+        request_payload = {
+            "messages": [{"role": "user", "content": case.user_prompt[:200]}],
+            "temperature": case.temperature,
+            "max_tokens": case.max_tokens,
+        }
+        if case.system_prompt:
+            request_payload["messages"].insert(
+                0, {"role": "system", "content": case.system_prompt[:100]},
+            )
         batch_rows.append({
             "run_id": run_id,
-            "case_id": result.case.id,
+            "case_id": case.id,
             "sample_index": sample.sample_index,
             "resp_data": {
+                "request": request_payload,
                 "response_text": r.content,
                 "raw_response": r.raw_json,
                 "raw_headers": r.headers,
@@ -123,6 +142,84 @@ def _case_value(c: TestCase) -> float:
     return (info_gain * max(0.2, c.weight)) / est_cost
 
 
+# -- Categories that best discriminate each model family.
+# When predetect identifies a candidate, these are the test dimensions
+# that differ most between the candidate and its close alternatives.
+# The selection is based on known behavioural divergence patterns:
+#   - identity/antispoof: directly confirms who the model claims to be
+#   - consistency: multi-sample stability is family-specific
+#   - reasoning: adversarial reasoning patterns are highly distinctive
+#   - instruction: format compliance varies by architecture
+#   - system: system prompt handling differs across families
+#   - param: temperature effectiveness reveals proxy layers
+
+_CONFIRMATORY_CATEGORIES: dict[str, list[str]] = {
+    # Always include these (universal discriminators)
+    "_core": ["antispoof", "consistency", "param"],
+    # Family-specific additions
+    "OpenAI":    ["reasoning", "instruction", "system"],
+    "Anthropic": ["reasoning", "instruction", "refusal"],
+    "Google":    ["reasoning", "coding", "instruction"],
+    "DeepSeek":  ["reasoning", "coding", "instruction"],
+    "Meta":      ["instruction", "coding", "system"],
+    "Alibaba":   ["instruction", "reasoning", "system"],
+    "Zhipu":     ["instruction", "reasoning", "refusal"],
+    "Mistral":   ["instruction", "coding", "reasoning"],
+    "Moonshot":  ["instruction", "reasoning", "system"],
+    "Baichuan":  ["instruction", "reasoning", "system"],
+}
+
+
+def _select_confirmatory_cases(
+    all_cases: list[TestCase],
+    candidate: str,
+) -> list[TestCase]:
+    """
+    Select a subset of test cases optimised for confirming/denying
+    the predetect hypothesis. Returns the full suite if candidate is
+    unknown (no matching family).
+
+    Strategy:
+      1. Always include core discriminator categories (antispoof, consistency, param).
+      2. Add 3 family-specific categories based on known divergence patterns.
+      3. Within selected categories, pick by _case_value ranking.
+      4. Ensure minimum coverage: at least 12 cases, at most 20.
+    """
+    # Match candidate to a family key
+    candidate_lower = candidate.lower()
+    matched_family: str | None = None
+    for family in _CONFIRMATORY_CATEGORIES:
+        if family == "_core":
+            continue
+        if family.lower() in candidate_lower:
+            matched_family = family
+            break
+
+    if not matched_family:
+        # Unknown family — run full suite, no savings possible
+        return all_cases
+
+    # Build the set of target categories
+    target_cats = set(_CONFIRMATORY_CATEGORIES["_core"])
+    target_cats.update(_CONFIRMATORY_CATEGORIES[matched_family])
+
+    # Select cases matching target categories
+    selected = [c for c in all_cases if c.category in target_cats]
+
+    # Ensure minimum coverage: if too few, backfill with highest-value remaining
+    if len(selected) < 12:
+        remaining = [c for c in all_cases if c.category not in target_cats]
+        remaining.sort(key=_case_value, reverse=True)
+        selected.extend(remaining[:12 - len(selected)])
+
+    # Cap at 20 to bound cost, keeping highest-value
+    if len(selected) > 20:
+        selected.sort(key=_case_value, reverse=True)
+        selected = selected[:20]
+
+    return selected
+
+
 def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase], list[TestCase]]:
     """
     Returns (phase1_cases, phase2_cases).
@@ -132,14 +229,68 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
     """
     ordered = list(cases)
 
-    # Token economy baseline: most cases capped at 120 tokens.
+    # --- Phase 1 Optimization: Fine-grained token capping ---
+    # Set max_tokens to 2-3× realistic output ceiling per judge_method.
+    # This prevents runaway generation (model rambling past the answer)
+    # without truncating valid responses. Judge accuracy is unaffected
+    # because useful content is always within these bounds.
+    _JUDGE_MAX_TOKENS: dict[str, int] = {
+        "exact_match":          15,   # single token/word ("7", "OK", "Paris")
+        "json_schema":         120,   # small JSON objects
+        "line_count":          100,   # 3-5 short lines
+        "code_execution":      400,   # function definitions
+        "regex_match":         250,   # reasoning chain + numeric answer
+        "refusal_detect":      200,   # refusal + brief explanation
+        "constraint_reasoning": 500,  # multi-step reasoning with boundary proof
+        "text_constraints":    150,   # CJK char-count constrained output
+        "identity_consistency": 250,  # model identity / consistency probes
+        "heuristic_style":     350,   # style analysis, disclaimers, format
+        "any_text":            250,   # general text responses
+    }
+
     for c in ordered:
-        if c.category not in ("coding", "performance"):
-            c.max_tokens = min(c.max_tokens, settings.DEFAULT_MAX_TOKENS_CAP)
+        # 1. Apply tight ceiling by judge_method
+        judge_cap = _JUDGE_MAX_TOKENS.get(c.judge_method)
+
+        if judge_cap:
+            # Special: latency baseline only needs first-token timing
+            if c.category == "performance" and "latency" in c.name:
+                c.max_tokens = min(c.max_tokens, 10)
+            # Special: throughput test needs enough output to measure chars/sec
+            elif c.category == "performance" and "throughput" in c.name:
+                c.max_tokens = min(c.max_tokens, 500)
+            # Special: text_constraints — derive from exact_chars param
+            elif c.judge_method == "text_constraints":
+                exact_chars = c.params.get("exact_chars", 0)
+                # CJK chars → tokens ratio ~1.5, then 2× safety margin
+                derived_cap = max(100, int(exact_chars * 3))
+                c.max_tokens = min(c.max_tokens, derived_cap)
+            else:
+                c.max_tokens = min(c.max_tokens, judge_cap)
+        else:
+            # Fallback: general cap for unknown judge methods
+            if c.category not in ("coding", "performance"):
+                c.max_tokens = min(c.max_tokens, settings.DEFAULT_MAX_TOKENS_CAP)
+
+        # Special case for long-form performance tests
         if c.id == "perf_002":
             c.max_tokens = min(c.max_tokens, settings.LONG_FORM_MAX_TOKENS_CAP)
-        if test_mode in ("quick", "standard") and c.category == "style":
-            c.n_samples = 1
+
+        # 2. Adaptive sampling reduction
+        # In quick/standard mode, reduce samples for deterministic instruction following
+        if test_mode in ("quick", "standard"):
+            if c.category in ("style", "protocol", "instruction", "system", "param"):
+                # If temperature is 0, one sample is usually enough for these categories
+                if getattr(c, 'temperature', 0.0) == 0.0:
+                    c.n_samples = 1
+                else:
+                    c.n_samples = min(c.n_samples, 2)
+        
+        # Quick mode is even more aggressive
+        if test_mode == "quick":
+            if c.category != "consistency":
+                c.n_samples = 1
+
 
     # In non-full modes, keep only top-2 core code execution cases.
     if test_mode != "full":
@@ -219,7 +370,8 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
 
     # quick: stop on strong separation
     if test_mode == "quick":
-        return (top.similarity_score >= 0.85 and delta >= 0.15), features, similarities, scorecard_cache
+        # More aggressive: 0.82 similarity and 0.12 delta
+        return (top.similarity_score >= 0.82 and delta >= 0.12), features, similarities, scorecard_cache
 
     # standard: compute confidence via scorecard + similarity separation
     if test_mode == "standard":
@@ -232,12 +384,14 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
                 predetect=None,
                 claimed_model=None,
             )
-        near_boundary = abs(sc.total_score - 70.0) <= 5.0 or abs(sc.authenticity_score - 70.0) <= 6.0
-        strong_sep = top.similarity_score >= 0.90 and delta >= 0.18
-        unstable = delta < 0.08
+        # Wider permissive boundary, lower separation requirement
+        near_boundary = abs(sc.total_score - 70.0) <= 3.0 or abs(sc.authenticity_score - 70.0) <= 4.0
+        strong_sep = top.similarity_score >= 0.88 and delta >= 0.15
+        unstable = delta < 0.05
         # Stop when strong confidence and not near threshold boundary.
         should_stop = strong_sep and not near_boundary and not unstable
         return should_stop, features, similarities, sc
+
 
     return False, features, similarities, scorecard_cache
 
@@ -370,6 +524,25 @@ def run_pipeline(run_id: str) -> None:
         logger.warning("No test cases found", suite_version=suite_version)
         repo.update_run_status(run_id, "failed", error_message="No test cases loaded")
         return
+
+    # Targeted confirmation: when predetect has moderate confidence (0.60-0.84),
+    # select only the cases with highest discriminative power for the candidate
+    # model family, instead of running the full suite. This saves ~40% tokens
+    # without losing detection precision — the selected cases are specifically
+    # chosen to confirm or deny the predetect hypothesis.
+    if (
+        test_mode != "full"
+        and pre_result.success
+        and 0.60 <= pre_result.confidence < settings.PREDETECT_CONFIDENCE_THRESHOLD
+        and pre_result.identified_as
+    ):
+        cases = _select_confirmatory_cases(cases, pre_result.identified_as)
+        logger.info(
+            "Targeted confirmation mode",
+            run_id=run_id,
+            candidate=pre_result.identified_as,
+            selected_cases=len(cases),
+        )
 
     phase1_cases, phase2_cases = _prepare_cases(cases, test_mode)
 
@@ -558,6 +731,7 @@ def _build_and_save_report(
         "authenticity": scorecard.authenticity_score,
         "performance": scorecard.performance_score,
         "reasoning": scorecard.reasoning_score,
+        "adversarial_reasoning": scorecard.adversarial_reasoning_score,
         "instruction": scorecard.instruction_score,
         "coding": scorecard.coding_score,
         "safety": scorecard.safety_score,
@@ -586,6 +760,53 @@ def _build_and_save_report(
         performance=scorecard.performance_score,
     )
 
+    # Theta report (relative scale)
+    item_stats_rows = repo.list_item_stats()
+    item_stats = {r.get("item_id"): r for r in item_stats_rows}
+
+    theta_estimator = ThetaEstimator()
+    theta_report = theta_estimator.estimate(case_results, item_stats)
+    theta_report = UncertaintyEstimator().apply_ci(theta_report, case_results, theta_estimator, item_stats)
+
+    hist = repo.get_model_theta_trend(run["model_name"], limit=200)
+    theta_report = PercentileMapper().map_percentiles(theta_report, hist)
+
+    theta_dims_payload = {d.dimension: d.to_dict() for d in theta_report.dimensions}
+    pct_dims_payload = {d.dimension: d.percentile for d in theta_report.dimensions}
+
+    repo.save_theta_history(
+        run_id=run_id,
+        model_name=run["model_name"],
+        base_url=run["base_url"],
+        theta_global=theta_report.global_theta,
+        theta_global_ci_low=theta_report.global_ci_low,
+        theta_global_ci_high=theta_report.global_ci_high,
+        theta_dims=theta_dims_payload,
+        percentile_global=theta_report.global_percentile,
+        percentile_dims=pct_dims_payload,
+        calibration_version=theta_report.calibration_version,
+        method=theta_report.method,
+    )
+
+    baseline_theta = None
+    if similarities:
+        top_benchmark = similarities[0].benchmark_name
+        baseline_hist = repo.get_model_theta_trend(top_benchmark, limit=1)
+        if baseline_hist:
+            baseline_theta = float(baseline_hist[0].get("theta_global", 0.0) or 0.0)
+
+    pairwise = PairwiseEngine().compare_to_baseline(theta_report, baseline_theta)
+    if pairwise:
+        repo.save_pairwise_result(
+            run_id=run_id,
+            model_a=run["model_name"],
+            model_b=(similarities[0].benchmark_name if similarities else "baseline"),
+            delta_theta=pairwise["delta_theta"],
+            win_prob_a=pairwise["win_prob"],
+            method=pairwise.get("method", "bradley_terry"),
+            details=pairwise,
+        )
+
     # Build final report
     builder = ReportBuilder()
     report = builder.build(
@@ -601,6 +822,8 @@ def _build_and_save_report(
         risk=risk,
         scorecard=scorecard,
         verdict=verdict,
+        theta_report=theta_report,
+        pairwise=pairwise,
     )
     repo.save_report(run_id, report)
     return report

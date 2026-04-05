@@ -37,6 +37,10 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _identity_consistency(text, params)
     elif method == "any_text":
         passed, detail = True, {"length": len(text)}
+    elif method == "constraint_reasoning":
+        passed, detail = _constraint_reasoning(text, params)
+    elif method == "text_constraints":
+        passed, detail = _text_constraints(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 
@@ -157,6 +161,86 @@ def _line_count(text: str, params: dict) -> tuple[bool, dict]:
     return passed, {"expected_lines": expected, "actual_lines": len(lines)}
 
 
+def _constraint_reasoning(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    Constraint-first reasoning judge:
+      - Prioritizes key constraint hit and boundary-proof signals.
+      - Optional final answer pattern check.
+      - Does NOT reward long chain-of-thought length.
+    """
+    lower_text = text.lower()
+    key_constraints = params.get("key_constraints", [])
+    boundary_signals = params.get("boundary_signals", [])
+    anti_pattern_signals = params.get("anti_pattern_signals", [])
+
+    constraint_hits = [kw for kw in key_constraints if kw.lower() in lower_text]
+    boundary_hits = [kw for kw in boundary_signals if kw.lower() in lower_text]
+    anti_pattern_hits = [kw for kw in anti_pattern_signals if kw.lower() in lower_text]
+
+    target_pattern = params.get("target_pattern")
+    answer_found = None
+    if target_pattern:
+        try:
+            answer_found = bool(re.search(target_pattern, text, re.IGNORECASE | re.MULTILINE))
+        except re.error:
+            answer_found = False
+
+    min_constraints = int(params.get("min_constraint_hits", 1))
+    require_boundary = bool(params.get("require_boundary", True))
+    allow_anti_pattern = bool(params.get("allow_anti_pattern", False))
+
+    constraints_ok = len(constraint_hits) >= min_constraints
+    boundary_ok = (len(boundary_hits) > 0) if require_boundary else True
+    anti_pattern_ok = allow_anti_pattern or (len(anti_pattern_hits) == 0)
+    answer_ok = True if answer_found is None else answer_found
+
+    passed = constraints_ok and boundary_ok and anti_pattern_ok and answer_ok
+
+    return passed, {
+        "constraint_hits": constraint_hits,
+        "boundary_hits": boundary_hits,
+        "anti_pattern_hits": anti_pattern_hits,
+        "constraints_ok": constraints_ok,
+        "boundary_ok": boundary_ok,
+        "anti_pattern_ok": anti_pattern_ok,
+        "answer_found": answer_found,
+        "reasoning_length": len(text),
+        "note": "reasoning_length is informational only; score is constraint-first",
+    }
+
+
+def _strip_punctuation_for_count(text: str) -> str:
+    return re.sub(r"[\s\.,，。！？；：、“”‘’\-—_~`!@#$%^&*()\[\]{}<>/\\\|+=]+", "", text)
+
+
+def _text_constraints(text: str, params: dict) -> tuple[bool, dict]:
+    """
+    Unified text constraint judge for token-control style tasks.
+    - character counting uses one normalized script-wide rule.
+    - can enforce exact char count and forbidden chars simultaneously.
+    """
+    normalized = _strip_punctuation_for_count(text)
+    exact_chars = params.get("exact_chars")
+    forbidden_chars = params.get("forbidden_chars", [])
+
+    char_count = len(normalized)
+    char_ok = True if exact_chars is None else (char_count == int(exact_chars))
+
+    forbidden_hits = [ch for ch in forbidden_chars if ch in normalized]
+    forbidden_ok = len(forbidden_hits) == 0
+
+    passed = char_ok and forbidden_ok
+    return passed, {
+        "char_count": char_count,
+        "exact_chars": exact_chars,
+        "char_ok": char_ok,
+        "forbidden_hits": forbidden_hits,
+        "forbidden_ok": forbidden_ok,
+        "normalized_text": normalized[:200],
+        "counting_rule": "strip whitespace and common punctuation, then count remaining characters",
+    }
+
+
 def _refusal_detect(text: str, params: dict) -> tuple[bool | None, dict]:
     """
     Detect if model refused the request.
@@ -274,6 +358,7 @@ def _code_execution(text: str, params: dict) -> tuple[bool, dict]:
 _result = {call_expr}
 print(repr(_result))
 """
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode='w', suffix='.py', delete=False, encoding='utf-8'
@@ -303,10 +388,11 @@ print(repr(_result))
                     "call": call_expr, "error": proc.stderr[:200], "passed": False,
                 })
         except subprocess.TimeoutExpired:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
             results.append({"call": call_expr, "error": "timeout", "passed": False})
         except Exception as e:
             results.append({"call": call_expr, "error": str(e)[:200], "passed": False})
@@ -391,5 +477,14 @@ def _build_judge_explanation(
         parts.append(f"pattern_found={detail.get('found')}")
     if method == "line_count":
         parts.append(f"line_count={detail.get('actual_lines')}/{detail.get('expected_lines')}")
+    if method == "constraint_reasoning":
+        parts.append(
+            "constraint_hits="
+            f"{len(detail.get('constraint_hits', []))}, "
+            "boundary_hits="
+            f"{len(detail.get('boundary_hits', []))}, "
+            "anti_pattern_hits="
+            f"{len(detail.get('anti_pattern_hits', []))}"
+        )
 
     return " ; ".join(parts)

@@ -61,9 +61,6 @@ llm-inspector/
 │   │           └── default_profiles.json  # 108 个基准模型画像
 │   └── tests/
 │       └── test_all.py            # 测试套件（~60+ 用例）
-└── sandbox-test/
-    ├── .env.example               # 环境变量模板
-    └── setup.ps1                  # PowerShell 一键部署脚本
 ```
 
 ## 快速开始
@@ -89,7 +86,7 @@ python -m venv .venv
 pip install cryptography numpy scikit-learn
 
 # 配置环境变量
-cp sandbox-test/.env.example sandbox-test/.env
+cp .env.example .env
 # 编辑 .env 文件，填入必要配置
 
 # 启动服务
@@ -101,14 +98,11 @@ python -m app.main
 
 **Windows 快捷启动**：直接运行 `start.bat`。
 
-**PowerShell 部署**：
+**PowerShell 一键启动**（自动创建 .venv + 安装依赖 + 健康检查）：
 
 ```powershell
-cd sandbox-test
-.\setup.ps1               # 启动（自动安装依赖、生成密钥、健康检查）
-.\setup.ps1 -Port 9000    # 指定端口
-.\setup.ps1 -NoBrowser    # 不自动打开浏览器
-.\setup.ps1 -Stop          # 停止服务
+cd llm-inspector
+.\start.bat              # 或手动：python backend/app/main.py
 ```
 
 ## 配置说明
@@ -175,7 +169,7 @@ curl -X POST http://localhost:8000/api/v1/runs \
 
 ```
 HTTP Handler → Repository → Worker(ThreadPool)
-  → Orchestrator: PreDetect(5层) → CaseExecutor → Judge(9种) → Analysis Pipeline
+  → Orchestrator: PreDetect(5层) → CaseExecutor → Judge(11种) → Analysis Pipeline
 ```
 
 ### 预检测 5 层管道
@@ -226,7 +220,7 @@ Performance  = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
 | Protocol | 2 | 基础聊天、usage 字段 |
 | Instruction | 5 | 格式约束、语言切换、字数限制 |
 | System | 4 | 系统提示遵从、角色扮演 |
-| Reasoning | 4 | 数学推理、逻辑问题 |
+| Reasoning | 13 | 数学推理、逻辑问题、约束优先推理（糖果/烧绳/试毒同构题） |
 | Coding | 3 | 代码生成与执行 |
 | Consistency | 2 | 多次采样一致性 |
 | Antispoof | 3 | 身份探测、矛盾检测 |
@@ -235,9 +229,13 @@ Performance  = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
 | Refusal | 2 | 敏感内容处理、拒绝措辞 |
 | Performance | 2 | 响应速度、吞吐量 |
 
-### 9 种判定方法
+### 11 种判定方法
 
-`exact_match` · `regex_match` · `json_schema` · `line_count` · `refusal_detect` · `heuristic_style` · `code_execution` · `identity_consistency` · `any_text`
+`exact_match` · `regex_match` · `json_schema` · `line_count` · `refusal_detect` · `heuristic_style` · `code_execution` · `identity_consistency` · `any_text` · `constraint_reasoning` · `text_constraints`
+
+新增说明：
+- `constraint_reasoning`：约束优先判定，重点检查“关键约束命中 + 边界证明信号 + 反模板误触发”，不以思维链长度作为加分项。
+- `text_constraints`：统一字符计数规则（去空白与常见标点后计数）+ 禁字校验，避免平台计数口径不一致导致误判。
 
 ## 基准模型库
 
@@ -262,6 +260,73 @@ Performance  = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
 - SSRF 防护：阻止对内网 / 私有 IP 地址的请求
 - 可配置 CORS 策略
 - API 密钥自动过期清理
+
+## 工具脚本（新增）
+
+### 1) 同构题批量生成
+
+```bash
+cd llm-inspector
+PYTHONPATH=backend python backend/tools/generate_isomorphic_cases.py --preview
+PYTHONPATH=backend python backend/tools/generate_isomorphic_cases.py --apply
+```
+
+- `--preview`：预览将新增的同构题，不写入文件
+- `--apply`：写入 `backend/app/fixtures/suite_v2.json`
+
+### 2) 导出单次检测 CSV
+
+```bash
+cd llm-inspector
+PYTHONPATH=backend python backend/tools/export_run_report.py --run-id <RUN_ID> --out backend/output/<RUN_ID>.csv
+```
+
+导出内容包含：总分、三大主分、关键子分、判定等级。
+
+### 3) 导出雷达图（SVG）
+
+```bash
+cd llm-inspector
+PYTHONPATH=backend python backend/tools/export_radar_svg.py --run-id <RUN_ID> --out backend/output/<RUN_ID>-radar.svg
+```
+
+> 采用 SVG 输出（无第三方依赖），可直接用浏览器打开或后续转 PNG。
+
+## API 直连导出（新增）
+
+### 1) 导出报告 CSV
+
+```bash
+GET /api/v1/runs/{run_id}/report.csv
+```
+
+### 2) 导出雷达图 SVG
+
+```bash
+GET /api/v1/runs/{run_id}/radar.svg
+```
+
+### 3) 触发同构题生成
+
+```bash
+POST /api/v1/tools/generate-isomorphic?apply=false   # 预览
+POST /api/v1/tools/generate-isomorphic?apply=true    # 写入 suite_v2.json
+```
+
+## 前端一键入口（新增）
+
+- 首页新增“题库维护工具”卡片，可一键：
+  - 预览同构题增量
+  - 写入同构题
+- 历史记录页新增：
+  - 状态筛选 + 模型关键字筛选
+  - 分页浏览（每页 10 条）
+  - 每条 run 快速导出（CSV / 雷达图）
+  - 勾选后批量导出 ZIP（CSV / 雷达图 / CSV+雷达图）
+- 任务详情页在完成后新增：
+  - 导出 CSV
+  - 导出雷达图（SVG）
+  - 内嵌雷达图预览（iframe 直连 `/radar.svg`）
 
 ## 运行测试
 

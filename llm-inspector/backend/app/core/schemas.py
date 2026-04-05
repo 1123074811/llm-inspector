@@ -198,6 +198,7 @@ class ScoreCard:
     performance_score: float = 0.0
     # Capability sub-scores
     reasoning_score: float = 0.0
+    adversarial_reasoning_score: float = 0.0
     instruction_score: float = 0.0
     coding_score: float = 0.0
     safety_score: float = 0.0
@@ -221,6 +222,7 @@ class ScoreCard:
             "performance_score": round(self.performance_score, 1),
             "breakdown": {
                 "reasoning": round(self.reasoning_score, 1),
+                "adversarial_reasoning": round(self.adversarial_reasoning_score, 1),
                 "instruction": round(self.instruction_score, 1),
                 "coding": round(self.coding_score, 1),
                 "safety": round(self.safety_score, 1),
@@ -263,6 +265,71 @@ class SimilarityResult:
     ci_95_low: float
     ci_95_high: float
     rank: int
+
+
+@dataclass
+class ThetaDimensionEstimate:
+    dimension: str
+    theta: float
+    ci_low: float
+    ci_high: float
+    percentile: float | None = None
+    n_items: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "dimension": self.dimension,
+            "theta": round(self.theta, 4),
+            "ci_low": round(self.ci_low, 4),
+            "ci_high": round(self.ci_high, 4),
+            "percentile": round(self.percentile, 2) if self.percentile is not None else None,
+            "n_items": self.n_items,
+        }
+
+
+@dataclass
+class ThetaReport:
+    global_theta: float
+    global_ci_low: float
+    global_ci_high: float
+    dimensions: list[ThetaDimensionEstimate] = field(default_factory=list)
+    global_percentile: float | None = None
+    calibration_version: str = "v1"
+    method: str = "rasch_1pl"
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "global_theta": round(self.global_theta, 4),
+            "global_ci_low": round(self.global_ci_low, 4),
+            "global_ci_high": round(self.global_ci_high, 4),
+            "global_percentile": round(self.global_percentile, 2) if self.global_percentile is not None else None,
+            "calibration_version": self.calibration_version,
+            "method": self.method,
+            "notes": self.notes,
+            "dimensions": [d.to_dict() for d in self.dimensions],
+        }
+
+
+@dataclass
+class ItemStat:
+    item_id: str
+    dimension: str
+    a: float = 1.0
+    b: float = 0.0
+    c: float | None = None
+    info_score: float = 0.0
+    sample_size: int = 0
+    anchor: bool = False
+
+
+@dataclass
+class PairwiseResult:
+    model_a: str
+    model_b: str
+    delta_theta: float
+    win_prob_a: float
+    method: str = "bradley_terry"
 
 
 @dataclass

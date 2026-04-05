@@ -254,6 +254,15 @@ body>*{position:relative;z-index:1}
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-label">题库维护工具</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="previewIsomorphicCases()">预览增强测试项</button>
+      <button class="btn" onclick="applyIsomorphicCases()">更新实验室评测集</button>
+      <span id="iso-hint" style="font-size:12px;color:var(--ink4)">基于逻辑同构原理扩展约束推理/文本约束测试项</span>
+    </div>
+  </div>
+
   <div class="card" style="background:var(--bg2);border-style:dashed">
     <div class="card-label">检测流程说明</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px">
@@ -271,6 +280,8 @@ body>*{position:relative;z-index:1}
       </div>
     </div>
   </div>
+
+
 </div>
 
 <!-- ═══════════════════════ PAGE: TASK DETAIL ═══════════════════════ -->
@@ -291,10 +302,31 @@ body>*{position:relative;z-index:1}
 <div class="page" id="page-runs">
   <div style="margin-bottom:24px">
     <h1>历史检测记录</h1>
-    <p class="subtitle">点击记录查看详情或报告</p>
+    <p class="subtitle">支持筛选、分页、批量导出</p>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:220px 1fr auto;gap:10px;align-items:center">
+      <select id="runs-filter-status" onchange="applyRunFilters()">
+        <option value="all">全部状态</option>
+        <option value="queued">queued</option>
+        <option value="pre_detecting">pre_detecting</option>
+        <option value="running">running</option>
+        <option value="completed">completed</option>
+        <option value="partial_failed">partial_failed</option>
+        <option value="failed">failed</option>
+      </select>
+      <input id="runs-filter-model" type="text" placeholder="按模型关键字筛选（如 gpt / claude）" oninput="applyRunFilters()" />
+      <div style="display:flex;gap:8px">
+        <button class="btn" style="padding:6px 10px;font-size:12px" onclick="batchExportSelected('csv')">批量CSV(zip)</button>
+        <button class="btn" style="padding:6px 10px;font-size:12px" onclick="batchExportSelected('svg')">批量雷达图(zip)</button>
+        <button class="btn" style="padding:6px 10px;font-size:12px" onclick="batchExportZipAll()">批量全量(zip)</button>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--ink4)" id="runs-filter-hint">已选择 0 条</div>
   </div>
   <div class="card">
     <div id="runs-list"><div class="loading"><div class="spinner"></div><div>加载中...</div></div></div>
+    <div id="runs-pager" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px"></div>
   </div>
 </div>
 
@@ -318,6 +350,12 @@ let _consoleLines = [];
 let _typingTimer = null;
 let _logPinnedToBottom = true;
 let _logFilter = 'all';
+
+let _allRuns = [];
+let _filteredRuns = [];
+let _runPage = 1;
+const _runPageSize = 10;
+let _runSelected = new Set();
 
 // ── Page routing ───────────────────────────────────────────────────────────
 
@@ -389,7 +427,7 @@ async function submitRun() {
   hint.textContent = '';
 
   const {ok, data} = await api('POST', '/api/v1/runs', {
-    base_url: url, api_key: key, model, test_mode: mode, suite_version: 'v2'
+    base_url: url, api_key: key, model, test_mode: mode
   });
 
   btn.disabled = false;
@@ -415,7 +453,7 @@ function openTask(runId) {
   _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued' };
   _consoleLines = [{ text: '初始化任务上下文...', type: 'normal' }];
   showPage('task');
-  document.getElementById('task-title').textContent = 'Run: ' + runId.slice(0,8) + '...';
+  document.getElementById('task-title').textContent = '检测: ' + runId.slice(0,8) + '...';
   document.getElementById('task-status-badge').innerHTML = '';
   document.getElementById('task-content').innerHTML =
     '<div class="loading"><div class="spinner"></div><div>检测进行中，请稍候...</div></div>';
@@ -464,6 +502,7 @@ function renderTaskActions(runId, status) {
 
   const canCancel = ['queued','pre_detecting','running'].includes(status);
   const canRetry = ['failed','partial_failed'].includes(status);
+  const canExport = ['completed','partial_failed'].includes(status);
 
   let html = '';
   if (canCancel) {
@@ -471,6 +510,10 @@ function renderTaskActions(runId, status) {
   }
   if (canRetry) {
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="retryRun('${runId}')">从失败处重试</button>`;
+  }
+  if (canExport) {
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadReportCsv('${runId}')">导出CSV</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadRadarSvg('${runId}')">导出雷达图</button>`;
   }
   el.innerHTML = html;
 }
@@ -493,6 +536,65 @@ async function retryRun(runId) {
     return;
   }
   openTask(data.run_id || runId);
+}
+
+function downloadReportCsv(runId) {
+  window.open(`/api/v1/runs/${encodeURIComponent(runId)}/report.csv`, '_blank');
+}
+
+function downloadRadarSvg(runId) {
+  window.open(`/api/v1/runs/${encodeURIComponent(runId)}/radar.svg`, '_blank');
+}
+
+function quickExportCsv(evt, runId) {
+  if (evt) evt.stopPropagation();
+  downloadReportCsv(runId);
+}
+
+function quickExportRadar(evt, runId) {
+  if (evt) evt.stopPropagation();
+  downloadRadarSvg(runId);
+}
+
+async function previewIsomorphicCases() {
+  const hint = document.getElementById('iso-hint');
+  if (hint) {
+    hint.style.color = 'var(--ink4)';
+    hint.textContent = '预览中...';
+  }
+  const {ok, data} = await api('POST', '/api/v1/tools/generate-isomorphic?apply=false');
+  if (!ok) {
+    if (hint) {
+      hint.style.color = 'var(--red)';
+      hint.textContent = '预览失败: ' + (data.error || 'unknown error');
+    }
+    return;
+  }
+  const ids = (data.to_add_ids || []).slice(0, 5).join(', ');
+  if (hint) {
+    hint.style.color = 'var(--blue)';
+    hint.textContent = `可新增 ${data.preview_count || 0} 题${ids ? `（${ids}${(data.to_add_ids || []).length > 5 ? ' ...' : ''}）` : ''}`;
+  }
+}
+
+async function applyIsomorphicCases() {
+  const hint = document.getElementById('iso-hint');
+  if (hint) {
+    hint.style.color = 'var(--ink4)';
+    hint.textContent = '写入中...';
+  }
+  const {ok, data} = await api('POST', '/api/v1/tools/generate-isomorphic?apply=true');
+  if (!ok) {
+    if (hint) {
+      hint.style.color = 'var(--red)';
+      hint.textContent = '写入失败: ' + (data.error || 'unknown error');
+    }
+    return;
+  }
+  if (hint) {
+    hint.style.color = 'var(--green)';
+    hint.textContent = `已写入 ${data.added_count || 0} 题`;
+  }
 }
 
 function renderTaskProgress(data, responses = []) {
@@ -539,14 +641,32 @@ function renderTaskProgress(data, responses = []) {
         ${renderLogPanel(data)}
       </aside>
     </div>`;
+
+  const oldBox = document.getElementById('live-console-body');
+  let oldTop = 0;
+  if (oldBox) {
+    const distanceToBottom = oldBox.scrollHeight - oldBox.scrollTop - oldBox.clientHeight;
+    _logPinnedToBottom = distanceToBottom <= 24;
+    oldTop = oldBox.scrollTop;
+  }
+
   document.getElementById('task-content').innerHTML = html;
   bindLogScrollBehavior();
+
+  const newBox = document.getElementById('live-console-body');
+  if (newBox) {
+    if (_logPinnedToBottom) {
+      newBox.scrollTop = newBox.scrollHeight;
+    } else {
+      newBox.scrollTop = oldTop;
+    }
+  }
 }
 
 function renderLogPanel(data) {
   return `
     <div class="card" style="padding:0;overflow:hidden">
-      <div class="console-head" style="position:sticky;top:0;z-index:1"><span>RUNNER LOG</span><span>${escHtml(data.status || 'running')}</span></div>
+      <div class="console-head" style="position:sticky;top:0;z-index:1"><span>执行日志</span><span>${escHtml(data.status || 'running')}</span></div>
       <div class="log-filter" id="log-filter-bar">
         <button class="chip ${_logFilter === 'all' ? 'active' : ''}" onclick="setLogFilter('all')">全部</button>
         <button class="chip ${_logFilter === 'prompt' ? 'active' : ''}" onclick="setLogFilter('prompt')">仅看提示词</button>
@@ -627,7 +747,7 @@ function renderStageExperience(data, prog, pct, opts = {includeConsole:true}) {
 
   const consoleBlock = opts.includeConsole ? `
       <div class="live-console">
-        <div class="console-head"><span>RUNNER LOG</span><span>${escHtml(data.status || 'running')}</span></div>
+        <div class="console-head"><span>执行日志</span><span>${escHtml(data.status || 'running')}</span></div>
         <div class="console-body" id="live-console-body">${renderConsoleLines()}</div>
       </div>` : '';
 
@@ -820,6 +940,8 @@ function renderReport(r) {
   const risk   = r.risk || {};
   const scorecard = r.scorecard || null;
   const verdict = r.verdict || null;
+  const theta = r.theta || null;
+  const pairwise = r.pairwise_rank || null;
   const cases  = r.case_results || [];
   const dimensions = r.dimensions || {};
   const tagBreakdown = r.tag_breakdown || {};
@@ -828,16 +950,56 @@ function renderReport(r) {
 
   let html = '';
 
+  if (theta) {
+    const dims = theta.dimensions || [];
+    const dimRows = dims.map(d => {
+      const t = Number(d.theta || 0).toFixed(2);
+      const lo = Number(d.ci_low || 0).toFixed(2);
+      const hi = Number(d.ci_high || 0).toFixed(2);
+      const pct = d.percentile == null ? '-' : `${Number(d.percentile).toFixed(1)}%`;
+      const width = Math.max(2, Math.min(100, ((Number(d.theta || 0) + 4) / 8) * 100));
+      return `<div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3)">
+          <span>${escHtml(zhLabel(d.dimension))}</span>
+          <span>${pct !== '-' ? `超越 ${pct}` : `得分为 ${t}`}</span>
+        </div>
+        <div class="progress-bar" style="height:7px"><div class="progress-fill" style="width:${width}%"></div></div>
+      </div>`;
+    }).join('');
+
+    html += `
+      <div class="card">
+        <h2>相对能力标尺（Theta）</h2>
+        <div class="score-grid" style="grid-template-columns:repeat(2,1fr)">
+          ${scoreCard(theta.global_theta, '综合评估水平 (θ)')}
+          ${scoreCard(theta.global_percentile == null ? '-' : `${Number(theta.global_percentile).toFixed(1)}%`, '击败同期主流模型')}
+        </div>
+        <div class="card" style="margin-top:8px;padding:10px">${dimRows || '<div style="font-size:12px;color:var(--ink4)">暂无维度数据</div>'}</div>
+      </div>`;
+  }
+
+  if (pairwise) {
+    html += `
+      <div class="card">
+        <h2>Pairwise 对比</h2>
+        <div style="font-size:13px;color:var(--ink3);line-height:1.7">
+          <div>Δθ: <strong>${Number(pairwise.delta_theta||0).toFixed(3)}</strong></div>
+          <div>胜率: <strong>${Number((pairwise.win_prob||0)*100).toFixed(1)}%</strong></div>
+          <div>基准 θ: <strong>${Number(pairwise.baseline_theta||0).toFixed(3)}</strong></div>
+        </div>
+      </div>`;
+  }
+
   if (scorecard) {
     const b = scorecard.breakdown || {};
     html += `
       <div class="card">
-        <h2>跑分报告卡（v2）</h2>
+        <h2>核心能力评分</h2>
         <div class="score-grid">
-          ${scoreCard(scorecard.total_score, '总分 Total')}
-          ${scoreCard(scorecard.capability_score, '能力分 Capability')}
-          ${scoreCard(scorecard.authenticity_score, '真实性 Authenticity')}
-          ${scoreCard(scorecard.performance_score, '性能分 Performance')}
+          ${scoreCard(scorecard.total_score, '总分')}
+          ${scoreCard(scorecard.capability_score, '能力分')}
+          ${scoreCard(scorecard.authenticity_score, '真实性')}
+          ${scoreCard(scorecard.performance_score, '性能分')}
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
           <div class="score-card" style="text-align:left">
@@ -866,7 +1028,7 @@ function renderReport(r) {
     const cls = verdict.level === 'trusted' ? 'low' : verdict.level === 'suspicious' ? 'medium' : 'high';
     html += `
       <div class="risk-block ${cls}">
-        <div class="card-label">真实性结论 / Trust Verdict</div>
+        <div class="card-label">真实性结论</div>
         <div class="risk-level ${cls}">${escHtml(verdict.label || verdict.level)}</div>
         <ul class="evidence-list">
           ${(verdict.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
@@ -875,30 +1037,6 @@ function renderReport(r) {
       </div>`;
   }
 
-  // Scores
-  html += `
-    <div class="card">
-      <h2>评分（兼容 v1）</h2>
-      <div class="score-grid">
-        ${scoreCard(scores.protocol_score, '协议兼容')}
-        ${scoreCard(scores.instruction_score, '指令遵循')}
-        ${scoreCard(scores.system_obedience_score, 'System 权重')}
-        ${scoreCard(scores.param_compliance_score, '参数生效')}
-      </div>
-    </div>`;
-
-  // Risk
-  if (risk.level) {
-    html += `
-      <div class="risk-block ${risk.level}">
-        <div class="card-label">套壳风险评级</div>
-        <div class="risk-level ${risk.level}">${escHtml(risk.label||risk.level)}</div>
-        <ul class="evidence-list">
-          ${(risk.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
-        </ul>
-        <div class="risk-disclaimer">${escHtml(risk.disclaimer||'')}</div>
-      </div>`;
-  }
 
   if (Object.keys(dimensions).length || Object.keys(tagBreakdown).length || Object.keys(failureAttribution).length) {
     html += `
@@ -945,6 +1083,15 @@ function renderReport(r) {
       </div>`;
   }
 
+  html += `
+    <div class="card">
+      <h2>雷达图预览</h2>
+      <div style="font-size:12px;color:var(--ink4);margin-bottom:10px">可右上角按钮下载 SVG 原图</div>
+      <div style="border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff">
+        <iframe src="/api/v1/runs/${encodeURIComponent(r.run_id)}/radar.svg" style="width:100%;aspect-ratio:760/560;border:0" scrolling="no" loading="lazy"></iframe>
+      </div>
+    </div>`;
+
   // Case results
   if (cases.length) {
     html += '<div class="card"><h2>题目详情</h2>';
@@ -956,21 +1103,28 @@ function renderReport(r) {
 }
 
 function scoreCard(val, label) {
-  const v = val != null ? Math.round(val) : '–';
+  const v = val != null ? (typeof val === 'number' ? Math.round(val) : val) : '–';
   return `<div class="score-card"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
 }
 
 const _zhLabels = {
   // 维度名称
-  instruction: '指令遵循', protocol: '协议兼容', performance: '性能表现',
+  instruction: '指令理解', protocol: '协议兼容', performance: '性能表现',
   reasoning: '推理能力', coding: '编程能力', consistency: '一致性',
-  system: '系统提示', param: '参数控制', style: '风格特征', refusal: '安全拒答',
+  system: '系统提示', param: '参数控制', style: '风格特征', refusal: '安全控制',
+  safety: '安全控制', speed: '响应速度', stability: '稳定性', cost_efficiency: '成本效率',
   // 失败归因
   format_violation: '格式违规', reasoning_failure: '推理失败',
   error_response: '错误响应', safety_violation: '安全违规', unknown: '未知原因',
+  timeout: '连接超时', connection_error: '连接错误',
   // 标签（常见）
   exact_match: '精确匹配', json_schema: 'JSON格式', regex_match: '正则匹配',
   line_count: '行数控制', temperature: '温度参数', markdown: 'Markdown',
+  format_strict: '严格格式', instruction_following: '指令遵循', deterministic: '确定性',
+  json_output: 'JSON 输出', schema_compliance: 'Schema 符合度', math_reasoning: '数学推理',
+  constraint_reasoning: '约束推理', token_control: 'Token 控制', char_count: '字符统计',
+  forbidden_chars: '禁用词检查', python: 'Python', code_execution: '代码执行',
+  function_correctness: '函数正确性',
 };
 function zhLabel(key) { return _zhLabels[key] || key; }
 
@@ -1008,8 +1162,8 @@ function renderAbRow(item) {
 
   return `<div class="ab-row">
     <div class="ab-left">
-      <div class="ab-metric">${escHtml(item.metric || 'metric')}</div>
-      <div class="ab-meta">95% CI [${Number(item.ci_95_low||0).toFixed(4)}, ${Number(item.ci_95_high||0).toFixed(4)}] · p=${Number(item.p_value||1).toFixed(6)}</div>
+      <div class="ab-metric">${escHtml(zhLabel(item.metric) || item.metric)}</div>
+      <div class="ab-meta">波动区间 [${Number(item.ci_95_low||0).toFixed(4)}, ${Number(item.ci_95_high||0).toFixed(4)}]</div>
     </div>
     <div style="display:flex;align-items:center;gap:10px">
       <div class="ab-delta ${cls}">${sign}${delta.toFixed(4)}</div>
@@ -1058,29 +1212,112 @@ function toggleCase(id) {
 async function loadRuns() {
   document.getElementById('runs-list').innerHTML =
     '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
-  const {ok, data} = await api('GET', '/api/v1/runs?limit=50');
+  const {ok, data} = await api('GET', '/api/v1/runs?limit=200');
   if (!ok) { document.getElementById('runs-list').innerHTML = '<div class="empty">加载失败</div>'; return; }
 
-  if (!data.length) {
+  _allRuns = data || [];
+  if (!_allRuns.length) {
     document.getElementById('runs-list').innerHTML =
       '<div class="empty"><div class="empty-icon">○</div><div>暂无检测记录</div></div>';
+    document.getElementById('runs-pager').innerHTML = '';
     return;
   }
+  applyRunFilters();
+}
 
-  const html = data.map(r => {
+function applyRunFilters() {
+  const status = (document.getElementById('runs-filter-status')?.value || 'all').toLowerCase();
+  const keyword = (document.getElementById('runs-filter-model')?.value || '').trim().toLowerCase();
+
+  _filteredRuns = _allRuns.filter(r => {
+    const okStatus = status === 'all' ? true : String(r.status || '').toLowerCase() === status;
+    const m = String(r.model || '').toLowerCase();
+    const okKeyword = keyword ? m.includes(keyword) : true;
+    return okStatus && okKeyword;
+  });
+
+  _runPage = 1;
+  renderRunsPage();
+}
+
+function renderRunsPage() {
+  const total = _filteredRuns.length;
+  const pages = Math.max(1, Math.ceil(total / _runPageSize));
+  if (_runPage > pages) _runPage = pages;
+
+  const start = (_runPage - 1) * _runPageSize;
+  const pageRows = _filteredRuns.slice(start, start + _runPageSize);
+
+  const html = pageRows.map(r => {
     const statusDot = `<span class="status-dot dot-${r.status}"></span>`;
     const pre = r.predetect_identified ? '<span class="badge badge-blue" style="margin-left:6px">已识别</span>' : '';
+    const canExport = ['completed','partial_failed'].includes(r.status);
+    const exportBtns = canExport
+      ? `<div style="display:flex;gap:6px;align-items:center">
+          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="quickExportCsv(event, '${r.run_id}')">CSV</button>
+          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="quickExportRadar(event, '${r.run_id}')">雷达图</button>
+        </div>`
+      : '<div style="width:132px"></div>';
+
+    const checked = _runSelected.has(r.run_id) ? 'checked' : '';
+
     return `
       <div class="run-row" onclick="openTask('${r.run_id}')">
+        <input type="checkbox" ${checked} onclick="toggleRunSelect(event, '${r.run_id}')" />
         ${statusDot}
         <div class="run-model">${escHtml(r.model)}${pre}</div>
         <div class="run-url">${escHtml(r.base_url)}</div>
         <div>${renderStatusBadge(r.status)}</div>
+        ${exportBtns}
         <div class="run-time">${fmtTime(r.created_at)}</div>
       </div>`;
   }).join('');
 
-  document.getElementById('runs-list').innerHTML = html;
+  document.getElementById('runs-list').innerHTML = html || '<div class="empty">筛选后暂无记录</div>';
+
+  document.getElementById('runs-pager').innerHTML = `
+    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage <= 1 ? 'disabled' : ''} onclick="changeRunsPage(-1)">上一页</button>
+    <span style="font-size:12px;color:var(--ink4);display:inline-flex;align-items:center">第 ${_runPage} / ${pages} 页 · 共 ${total} 条</span>
+    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage >= pages ? 'disabled' : ''} onclick="changeRunsPage(1)">下一页</button>
+  `;
+
+  const hint = document.getElementById('runs-filter-hint');
+  if (hint) hint.textContent = `已选择 ${_runSelected.size} 条`;
+}
+
+function changeRunsPage(delta) {
+  _runPage = Math.max(1, _runPage + delta);
+  renderRunsPage();
+}
+
+function toggleRunSelect(evt, runId) {
+  evt.stopPropagation();
+  if (_runSelected.has(runId)) _runSelected.delete(runId);
+  else _runSelected.add(runId);
+  const hint = document.getElementById('runs-filter-hint');
+  if (hint) hint.textContent = `已选择 ${_runSelected.size} 条`;
+}
+
+function batchExportSelected(type) {
+  const ids = [..._runSelected];
+  if (!ids.length) {
+    alert('请先勾选至少一条记录');
+    return;
+  }
+
+  const t = type === 'csv' ? 'csv' : type === 'svg' ? 'svg' : 'csv,svg';
+  const url = `/api/v1/exports/runs.zip?run_ids=${encodeURIComponent(ids.join(','))}&types=${encodeURIComponent(t)}`;
+  window.open(url, '_blank');
+}
+
+function batchExportZipAll() {
+  const ids = [..._runSelected];
+  if (!ids.length) {
+    alert('请先勾选至少一条记录');
+    return;
+  }
+  const url = `/api/v1/exports/runs.zip?run_ids=${encodeURIComponent(ids.join(','))}&types=csv,svg`;
+  window.open(url, '_blank');
 }
 
 // ── Benchmarks ─────────────────────────────────────────────────────────────

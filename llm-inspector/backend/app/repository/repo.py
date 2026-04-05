@@ -132,11 +132,15 @@ def upsert_test_case(case: dict) -> None:
     conn = get_conn()
     params = dict(case.get("params", {}))
     params.setdefault("_meta", {})
-    params["_meta"].update({
-        "dimension": case.get("dimension"),
-        "tags": case.get("tags", []),
-        "judge_rubric": case.get("judge_rubric", {}),
+    meta = params.get("_meta") or {}
+    meta.update({
+        "dimension": meta.get("dimension") or case.get("dimension"),
+        "tags": meta.get("tags") or case.get("tags", []),
+        "judge_rubric": meta.get("judge_rubric") or case.get("judge_rubric", {}),
+        "anchor": bool(meta.get("anchor", False)),
+        "info_gain_prior": float(meta.get("info_gain_prior", case.get("weight", 1.0))),
     })
+    params["_meta"] = meta
 
     conn.execute(
         """INSERT OR REPLACE INTO test_cases
@@ -286,6 +290,7 @@ def get_responses(run_id: str) -> list[dict]:
         d = dict(row)
         d["raw_response"] = from_json_col(d.get("raw_response"))
         d["judge_detail"] = from_json_col(d.get("judge_detail"))
+        d["request_payload"] = from_json_col(d.get("request_payload"))
         result.append(d)
     return result
 
@@ -516,3 +521,188 @@ def get_leaderboard(sort_by: str = "total_score", limit: int = 50) -> list[dict]
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Item bank / IRT stats / Theta history / Pairwise ───────────────────────
+
+def upsert_item_bank(item_id: str, dimension: str,
+                     anchor_flag: bool = False,
+                     active: bool = True,
+                     version: str = "v1") -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO item_bank
+           (item_id, dimension, anchor_flag, active, version, created_at)
+           VALUES (?,?,?,?,?,COALESCE((SELECT created_at FROM item_bank WHERE item_id=?), ?))""",
+        (item_id, dimension, 1 if anchor_flag else 0, 1 if active else 0, version, item_id, now_iso()),
+    )
+    conn.commit()
+
+
+def upsert_item_stat(item_id: str, dimension: str, a: float = 1.0,
+                     b: float = 0.0, c: float | None = None,
+                     info_score: float = 0.0, sample_size: int = 0) -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO item_stats
+           (id, item_id, dimension, irt_a, irt_b, irt_c, info_score, sample_size, last_calibrated_at)
+           VALUES (COALESCE((SELECT id FROM item_stats WHERE item_id=?), ?),?,?,?,?,?,?,?,?)""",
+        (item_id, new_id(), item_id, dimension, a, b, c, info_score, sample_size, now_iso()),
+    )
+    conn.commit()
+
+
+def get_item_stat(item_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM item_stats WHERE item_id=?", (item_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_item_stats(dimension: str | None = None) -> list[dict]:
+    conn = get_conn()
+    if dimension:
+        rows = conn.execute(
+            "SELECT * FROM item_stats WHERE dimension=? ORDER BY item_id", (dimension,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM item_stats ORDER BY item_id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_theta_history(run_id: str, model_name: str, base_url: str,
+                       theta_global: float, theta_global_ci_low: float,
+                       theta_global_ci_high: float, theta_dims: dict,
+                       percentile_global: float | None,
+                       percentile_dims: dict | None,
+                       calibration_version: str,
+                       method: str = "rasch_1pl") -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO model_theta_history
+           (id, run_id, model_name, base_url,
+            theta_global, theta_global_ci_low, theta_global_ci_high,
+            theta_dims_json, percentile_global, percentile_dims_json,
+            calibration_version, method, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            new_id(), run_id, model_name, base_url,
+            theta_global, theta_global_ci_low, theta_global_ci_high,
+            json_col(theta_dims), percentile_global,
+            json_col(percentile_dims) if percentile_dims is not None else None,
+            calibration_version, method, now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def get_theta_by_run(run_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM model_theta_history WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["theta_dims_json"] = from_json_col(d.get("theta_dims_json")) or {}
+    d["percentile_dims_json"] = from_json_col(d.get("percentile_dims_json")) or {}
+    return d
+
+
+def get_model_theta_trend(model_name: str, limit: int = 50) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT * FROM model_theta_history
+           WHERE model_name=? ORDER BY created_at DESC LIMIT ?""",
+        (model_name, limit),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["theta_dims_json"] = from_json_col(d.get("theta_dims_json")) or {}
+        d["percentile_dims_json"] = from_json_col(d.get("percentile_dims_json")) or {}
+        out.append(d)
+    return out
+
+
+def get_theta_leaderboard(dimension: str = "global", limit: int = 50) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT h.* FROM model_theta_history h
+            INNER JOIN (
+                SELECT model_name, MAX(created_at) as latest
+                FROM model_theta_history GROUP BY model_name
+            ) g ON h.model_name = g.model_name AND h.created_at = g.latest
+            ORDER BY h.theta_global DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+    data = []
+    for r in rows:
+        d = dict(r)
+        d["theta_dims_json"] = from_json_col(d.get("theta_dims_json")) or {}
+        if dimension and dimension != "global":
+            d["sort_theta"] = float(d["theta_dims_json"].get(dimension, {}).get("theta", d.get("theta_global", 0.0)))
+        else:
+            d["sort_theta"] = float(d.get("theta_global", 0.0))
+        data.append(d)
+
+    data.sort(key=lambda x: x.get("sort_theta", 0.0), reverse=True)
+    return data[:limit]
+
+
+def save_pairwise_result(run_id: str, model_a: str, model_b: str,
+                         delta_theta: float, win_prob_a: float,
+                         method: str = "bradley_terry",
+                         details: dict | None = None) -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO pairwise_results
+           (id, run_id, model_a, model_b, delta_theta, win_prob_a, method, details, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            new_id(), run_id, model_a, model_b,
+            delta_theta, win_prob_a, method,
+            json_col(details) if details else None,
+            now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def get_pairwise_by_run(run_id: str) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM pairwise_results WHERE run_id=? ORDER BY created_at DESC",
+        (run_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["details"] = from_json_col(d.get("details"))
+        out.append(d)
+    return out
+
+
+def save_calibration_snapshot(version: str, item_params_json: dict, notes: str = "") -> None:
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO calibration_snapshots
+           (id, version, item_params_json, notes, created_at)
+           VALUES (COALESCE((SELECT id FROM calibration_snapshots WHERE version=?), ?), ?, ?, ?, ?)
+        """,
+        (version, new_id(), version, json_col(item_params_json), notes, now_iso()),
+    )
+    conn.commit()
+
+
+def get_latest_calibration_snapshot() -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM calibration_snapshots ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["item_params_json"] = from_json_col(d.get("item_params_json")) or {}
+    return d

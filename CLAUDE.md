@@ -2,8 +2,7 @@
 
 ## Quick Start
 - `cd llm-inspector/backend && python -m app.main` — 启动服务（默认 :8000）
-- `PYTHONPATH=backend python backend/tests/test_all.py` — 运行测试（自制框架，非 pytest）
-- `.\sandbox-test\setup.ps1` — PowerShell 一键部署（含 venv 创建）
+- `PYTHONPATH=llm-inspector/backend python llm-inspector/backend/tests/test_all.py` — 运行测试（自制框架，非 pytest）
 
 ## Tech Stack
 - **零框架后端**: Python stdlib（http.server + urllib + sqlite3 + dataclasses），唯一外部依赖 `cryptography`
@@ -35,7 +34,6 @@ HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
 - 10 个 section，~60+ 用例，覆盖 config/security/db/seeder/judge/analysis/repo/predetect/executor/http
 
 ## Gotchas
-- 无 requirements.txt/pyproject.toml，依赖仅在 README 和 setup.ps1 中记录
+- 无 requirements.txt/pyproject.toml，依赖仅在 README.md 中记录（cryptography, numpy, scikit-learn）
 - dev 模式下 ENCRYPTION_KEY 自动生成确定性密钥，生产环境必须手动设置
-- sandbox-test/ 下有独立的 .env 和代码副本，修改 backend/ 后需同步
 - 前端是单文件 1080 行，修改时注意不要破坏内联 CSS/JS 结构

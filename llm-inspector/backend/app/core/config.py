@@ -63,6 +63,14 @@ class Settings:
     DEFAULT_MAX_TOKENS_CAP: int = int(os.getenv("DEFAULT_MAX_TOKENS_CAP", "120"))
     LONG_FORM_MAX_TOKENS_CAP: int = int(os.getenv("LONG_FORM_MAX_TOKENS_CAP", "250"))
 
+    # Theta / relative scale
+    THETA_METHOD: str = os.getenv("THETA_METHOD", "rasch_1pl")
+    THETA_BOOTSTRAP_B: int = int(os.getenv("THETA_BOOTSTRAP_B", "200"))
+    THETA_CI_STOP_WIDTH: float = float(os.getenv("THETA_CI_STOP_WIDTH", "0.35"))
+    THETA_DELTA_STOP: float = float(os.getenv("THETA_DELTA_STOP", "0.45"))
+    THETA_SCALE_FOR_WIN_PROB: float = float(os.getenv("THETA_SCALE_FOR_WIN_PROB", "0.6"))
+    CALIBRATION_VERSION: str = os.getenv("CALIBRATION_VERSION", "v1")
+
     def _ensure_encryption_key(self) -> bytes:
         """Return 32-byte AES key, auto-generating one if not set."""
         import base64, secrets

@@ -6,16 +6,18 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import pathlib
-import threading
 import urllib.parse
+import io
+import csv
+import zipfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from app.core.config import settings
 from app.core.db import init_db
 from app.core.logging import setup_logging, get_logger
 from app.core.security import validate_and_sanitize_url, get_key_manager
 from app.tasks.seeder import seed_all
+from app.tasks.calibration import recalibrate_and_snapshot, snapshot_calibration
 from app.tasks.worker import submit_run, submit_compare, active_count
 from app.repository import repo
 
@@ -80,8 +82,8 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
         test_mode = "standard"
 
     suite_version = body.get("suite_version", "v2")
-    if suite_version not in ("v1", "v2"):
-        suite_version = "v2"
+    # Project now uses v2 suite by default for all runs
+    suite_version = "v2"
 
     run_id = repo.create_run(
         base_url=clean_url,
@@ -135,23 +137,207 @@ def handle_get_run(path, _qs, _body) -> tuple:
     })
 
 
+def _load_report_or_error(run_id: str):
+    run = repo.get_run(run_id)
+    if not run:
+        return None, _error("Run not found", 404)
+    if run["status"] not in ("completed", "partial_failed"):
+        return None, _error("Report not ready yet", 404)
+    report_row = repo.get_report(run_id)
+    if not report_row:
+        return None, _error("Report not found", 404)
+    return report_row["details"], None
+
+
 def handle_get_report(path, _qs, _body) -> tuple:
     run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/report$")
     if not run_id:
         return _error("Invalid run ID", 400)
 
-    run = repo.get_run(run_id)
-    if not run:
-        return _error("Run not found", 404)
+    report, err = _load_report_or_error(run_id)
+    if err:
+        return err
+    return _json(report)
 
-    if run["status"] not in ("completed", "partial_failed"):
-        return _error("Report not ready yet", 404)
 
-    report_row = repo.get_report(run_id)
-    if not report_row:
-        return _error("Report not found", 404)
+def handle_export_report_csv(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/report\.csv$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
 
-    return _json(report_row["details"])
+    report, err = _load_report_or_error(run_id)
+    if err:
+        return err
+
+    scorecard = report.get("scorecard", {})
+    verdict = report.get("verdict", {})
+    risk = report.get("risk", {})
+    target = report.get("target", {})
+
+    rows = [
+        ("run_id", report.get("run_id")),
+        ("model", target.get("model")),
+        ("base_url", target.get("base_url")),
+        ("test_mode", target.get("test_mode")),
+        ("total_score", scorecard.get("total_score")),
+        ("capability_score", scorecard.get("capability_score")),
+        ("authenticity_score", scorecard.get("authenticity_score")),
+        ("performance_score", scorecard.get("performance_score")),
+        ("reasoning_score", scorecard.get("reasoning_score")),
+        ("instruction_score", scorecard.get("instruction_score")),
+        ("coding_score", scorecard.get("coding_score")),
+        ("safety_score", scorecard.get("safety_score")),
+        ("protocol_score", scorecard.get("protocol_score")),
+        ("consistency_score", scorecard.get("consistency_score")),
+        ("speed_score", scorecard.get("speed_score")),
+        ("stability_score", scorecard.get("stability_score")),
+        ("cost_efficiency", scorecard.get("cost_efficiency")),
+        ("verdict_level", verdict.get("level")),
+        ("risk_level", risk.get("level")),
+    ]
+
+    body = _build_csv_bytes(report)
+    return 200, body, "text/csv; charset=utf-8"
+
+
+def _build_csv_bytes(report: dict) -> bytes:
+    scorecard = report.get("scorecard", {})
+    verdict = report.get("verdict", {})
+    risk = report.get("risk", {})
+    target = report.get("target", {})
+
+    rows = [
+        ("run_id", report.get("run_id")),
+        ("model", target.get("model")),
+        ("base_url", target.get("base_url")),
+        ("test_mode", target.get("test_mode")),
+        ("total_score", scorecard.get("total_score")),
+        ("capability_score", scorecard.get("capability_score")),
+        ("authenticity_score", scorecard.get("authenticity_score")),
+        ("performance_score", scorecard.get("performance_score")),
+        ("reasoning_score", scorecard.get("reasoning_score")),
+        ("instruction_score", scorecard.get("instruction_score")),
+        ("coding_score", scorecard.get("coding_score")),
+        ("safety_score", scorecard.get("safety_score")),
+        ("protocol_score", scorecard.get("protocol_score")),
+        ("consistency_score", scorecard.get("consistency_score")),
+        ("speed_score", scorecard.get("speed_score")),
+        ("stability_score", scorecard.get("stability_score")),
+        ("cost_efficiency", scorecard.get("cost_efficiency")),
+        ("verdict_level", verdict.get("level")),
+        ("risk_level", risk.get("level")),
+    ]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["metric", "value"])
+    writer.writerows(rows)
+    return buf.getvalue().encode("utf-8")
+
+
+def _build_radar_svg_bytes(report: dict) -> bytes:
+    score = report.get("scorecard", {})
+    breakdown = score.get("breakdown", {})
+    dims = [
+        ("能力分", float(score.get("capability_score", 0.0))),
+        ("真实性", float(score.get("authenticity_score", 0.0))),
+        ("性能分", float(score.get("performance_score", 0.0))),
+        ("推理", float(breakdown.get("reasoning", 0.0))),
+        ("指令", float(breakdown.get("instruction", 0.0))),
+        ("一致性", float(breakdown.get("consistency", 0.0))),
+    ]
+
+    import math
+    w, h = 760, 560
+    cx, cy = 400, 300
+    max_r = 200
+    n = len(dims)
+    angles = [(-math.pi / 2) + i * (2 * math.pi / n) for i in range(n)]
+
+    def p2xy(r: float, a: float):
+        return cx + r * math.cos(a), cy + r * math.sin(a)
+
+    rings = []
+    for lv in [20, 40, 60, 80, 100]:
+        r = max_r * lv / 100
+        pts = ["{:.1f},{:.1f}".format(*p2xy(r, a)) for a in angles]
+        rings.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="#ddd" stroke-width="1" />')
+
+    axes = []
+    labels = []
+    poly_pts = []
+    dots = []
+    for (name, val), a in zip(dims, angles):
+        x2, y2 = p2xy(max_r, a)
+        axes.append(f'<line x1="{cx}" y1="{cy}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#bbb" stroke-width="1" />')
+        lx, ly = p2xy(max_r + 24, a)
+        labels.append(f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="14" fill="#333" text-anchor="middle">{name}</text>')
+        r = max_r * max(0.0, min(100.0, val)) / 100
+        x, y = p2xy(r, a)
+        poly_pts.append(f"{x:.1f},{y:.1f}")
+        dots.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#2563eb" />')
+
+    target = report.get("target") or {}
+    title = f"综合能力雷达图 · {target.get('model', 'unknown')}"
+    svg = f"""<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" width=\"100%\" height=\"100%\">\n  <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n  <text x=\"24\" y=\"36\" font-size=\"24\" font-weight=\"700\" fill=\"#111\">{title}</text>\n  <text x=\"24\" y=\"62\" font-size=\"14\" fill=\"#666\">run_id: {report.get('run_id')}</text>\n  {''.join(rings)}\n  {''.join(axes)}\n  <polygon points=\"{' '.join(poly_pts)}\" fill=\"rgba(37,99,235,0.20)\" stroke=\"#2563eb\" stroke-width=\"2\"/>\n  {''.join(dots)}\n  {''.join(labels)}\n</svg>\n"""
+    return svg.encode("utf-8")
+
+
+def handle_export_radar_svg(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/radar\.svg$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+
+    report, err = _load_report_or_error(run_id)
+    if err:
+        return err
+
+    return 200, _build_radar_svg_bytes(report), "image/svg+xml"
+
+
+def handle_export_runs_zip(_path, qs, _body) -> tuple:
+    run_ids_raw = qs.get("run_ids", [""])[0]
+    export_types_raw = qs.get("types", ["csv,svg"])[0]
+
+    run_ids = [x.strip() for x in run_ids_raw.split(",") if x.strip()]
+    if not run_ids:
+        return _error("Missing run_ids query param", 400)
+
+    requested_types = {x.strip().lower() for x in export_types_raw.split(",") if x.strip()}
+    if not requested_types:
+        requested_types = {"csv", "svg"}
+    allowed_types = requested_types.intersection({"csv", "svg"})
+    if not allowed_types:
+        return _error("types must include csv and/or svg", 400)
+
+    mem = io.BytesIO()
+    zf = zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED)
+
+    added = []
+    errors = []
+    for run_id in run_ids[:100]:
+        report, err = _load_report_or_error(run_id)
+        if err:
+            errors.append(run_id)
+            continue
+
+        if "csv" in allowed_types:
+            zf.writestr(f"{run_id}/report.csv", _build_csv_bytes(report))
+            added.append(f"{run_id}/report.csv")
+        if "svg" in allowed_types:
+            zf.writestr(f"{run_id}/radar.svg", _build_radar_svg_bytes(report))
+            added.append(f"{run_id}/radar.svg")
+
+    manifest = {
+        "requested_run_ids": run_ids,
+        "types": sorted(list(allowed_types)),
+        "added_files": added,
+        "skipped_run_ids": errors,
+    }
+    zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    zf.close()
+
+    return 200, mem.getvalue(), "application/zip"
 
 
 def handle_get_responses(path, _qs, _body) -> tuple:
@@ -317,6 +503,189 @@ def handle_leaderboard(_path, qs, _body) -> tuple:
     return _json(repo.get_leaderboard(sort_by=sort_by, limit=min(limit, 200)))
 
 
+def handle_get_theta_report(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/theta-report$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+
+    row = repo.get_theta_by_run(run_id)
+    if not row:
+        return _error("Theta report not found", 404)
+
+    return _json({
+        "run_id": run_id,
+        "theta_global": row.get("theta_global"),
+        "theta_global_ci_low": row.get("theta_global_ci_low"),
+        "theta_global_ci_high": row.get("theta_global_ci_high"),
+        "theta_dims": row.get("theta_dims_json") or {},
+        "percentile_global": row.get("percentile_global"),
+        "percentile_dims": row.get("percentile_dims_json") or {},
+        "calibration_version": row.get("calibration_version"),
+        "method": row.get("method"),
+        "created_at": row.get("created_at"),
+    })
+
+
+def handle_model_theta_trend(path, qs, _body) -> tuple:
+    model_name = _extract_id(path, r"/api/v1/models/([^/]+)/theta-trend$")
+    if not model_name:
+        return _error("Invalid model name", 400)
+    model_name = urllib.parse.unquote(model_name)
+    limit = int(qs.get("limit", ["50"])[0])
+    return _json(repo.get_model_theta_trend(model_name, min(limit, 200)))
+
+
+def handle_theta_leaderboard(_path, qs, _body) -> tuple:
+    dimension = qs.get("dimension", ["global"])[0]
+    limit = int(qs.get("limit", ["50"])[0])
+    return _json(repo.get_theta_leaderboard(dimension=dimension, limit=min(limit, 200)))
+
+
+def handle_get_pairwise(path, _qs, _body) -> tuple:
+    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/pairwise$")
+    if not run_id:
+        return _error("Invalid run ID", 400)
+    return _json(repo.get_pairwise_by_run(run_id))
+
+
+def handle_calibration_rebuild(_path, qs, _body) -> tuple:
+    version = qs.get("version", [None])[0]
+    try:
+        result = recalibrate_and_snapshot(version=version)
+        return _json({"status": "ok", **result})
+    except Exception as e:
+        logger.error("Calibration rebuild failed", error=str(e))
+        return _error(f"Calibration rebuild failed: {e}", 500)
+
+
+def handle_calibration_snapshot_only(_path, qs, _body) -> tuple:
+    version = qs.get("version", [None])[0]
+    notes = qs.get("notes", [""])[0]
+    try:
+        result = snapshot_calibration(version=version, notes=notes)
+        return _json({"status": "ok", "snapshot": result})
+    except Exception as e:
+        logger.error("Calibration snapshot failed", error=str(e))
+        return _error(f"Calibration snapshot failed: {e}", 500)
+
+
+def _build_isomorphic_cases() -> list[dict]:
+    return [
+        {
+            "id": "reason_candy_iso_007",
+            "category": "reasoning",
+            "dimension": "reasoning",
+            "tags": ["constraint_reasoning", "isomorphic"],
+            "name": "candy_shape_flavor_iso_a",
+            "system_prompt": "Focus on constraints and boundary proof. Keep answer concise.",
+            "user_prompt": "袋中有三种口味糖果，每种有圆形和星形可触摸区分。请给出最少抓取总数，保证手里一定同时存在跨形状的苹果味与桃子味配对（圆苹果+星桃子，或圆桃子+星苹果）。请给出最不利边界证明。",
+            "expected_type": "text",
+            "judge_method": "constraint_reasoning",
+            "max_tokens": 220,
+            "n_samples": 2,
+            "temperature": 0.0,
+            "params": {
+                "target_pattern": "\\b21\\b",
+                "key_constraints": ["可触摸区分", "最不利", "边界", "形状"],
+                "boundary_signals": ["最不利", "上界", "保证", "边界"],
+                "anti_pattern_signals": ["盲抽", "随机抽取即可"],
+                "min_constraint_hits": 1,
+                "require_boundary": True,
+                "allow_anti_pattern": False,
+            },
+            "weight": 2.4,
+        },
+        {
+            "id": "reason_rope_iso_007",
+            "category": "reasoning",
+            "dimension": "reasoning",
+            "tags": ["constraint_reasoning", "isomorphic"],
+            "name": "rope_unsat_iso_a",
+            "system_prompt": "Focus on constraints and boundary proof. Keep answer concise.",
+            "user_prompt": "有一根燃烧不均匀的绳子，整根烧完60分钟，只有一个打火机。如何精确测15分钟？若无解请说明约束冲突与边界理由。",
+            "expected_type": "text",
+            "judge_method": "constraint_reasoning",
+            "max_tokens": 220,
+            "n_samples": 2,
+            "temperature": 0.0,
+            "params": {
+                "target_pattern": "无解|无法",
+                "key_constraints": ["不均匀", "一根", "一个打火机"],
+                "boundary_signals": ["无解", "无法", "约束冲突"],
+                "anti_pattern_signals": ["对折", "两头点燃后再"],
+                "min_constraint_hits": 1,
+                "require_boundary": True,
+                "allow_anti_pattern": False,
+            },
+            "weight": 2.4,
+        },
+        {
+            "id": "reason_mice_iso_007",
+            "category": "reasoning",
+            "dimension": "reasoning",
+            "tags": ["constraint_reasoning", "isomorphic"],
+            "name": "mice_ternary_iso_a",
+            "system_prompt": "Focus on constraints and boundary proof. Keep answer concise.",
+            "user_prompt": "240瓶酒有1瓶毒酒，毒发固定24小时。离宴会48小时，最少需要几只小白鼠确保定位毒酒？要求说明状态数建模。",
+            "expected_type": "text",
+            "judge_method": "constraint_reasoning",
+            "max_tokens": 220,
+            "n_samples": 2,
+            "temperature": 0.0,
+            "params": {
+                "target_pattern": "\\b5\\b",
+                "key_constraints": ["48小时", "24小时", "两轮", "三种状态"],
+                "boundary_signals": ["3^5", "243", "编码"],
+                "anti_pattern_signals": ["二进制", "8只"],
+                "min_constraint_hits": 1,
+                "require_boundary": True,
+                "allow_anti_pattern": False,
+            },
+            "weight": 2.4,
+        },
+        {
+            "id": "instr_token_iso_007",
+            "category": "instruction",
+            "dimension": "instruction",
+            "tags": ["token_control", "isomorphic", "char_count", "forbidden_chars"],
+            "name": "apple_50char_no_de_shi_iso",
+            "system_prompt": "严格执行硬约束，不要解释。",
+            "user_prompt": "写一段介绍苹果的中文短文，要求：恰好50个中文字符（不计标点），且不能出现“的”和“是”。",
+            "expected_type": "text",
+            "judge_method": "text_constraints",
+            "max_tokens": 180,
+            "n_samples": 3,
+            "temperature": 0.0,
+            "params": {"exact_chars": 50, "forbidden_chars": ["的", "是"]},
+            "weight": 2.2,
+        },
+    ]
+
+
+def handle_generate_isomorphic(_path, qs, _body) -> tuple:
+    apply_flag = (qs.get("apply", ["false"])[0] or "false").lower() == "true"
+    suite_path = pathlib.Path(__file__).parent / "fixtures" / "suite_v2.json"
+    if not suite_path.exists():
+        return _error("suite_v2.json not found", 404)
+
+    data = json.loads(suite_path.read_text(encoding="utf-8"))
+    cases = data.get("cases", [])
+    existing_ids = {c.get("id") for c in cases}
+    generated = _build_isomorphic_cases()
+    to_add = [c for c in generated if c["id"] not in existing_ids]
+
+    if apply_flag and to_add:
+        data["cases"] = cases + to_add
+        suite_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return _json({
+        "apply": apply_flag,
+        "added_count": len(to_add) if apply_flag else 0,
+        "preview_count": len(to_add),
+        "to_add_ids": [c["id"] for c in to_add],
+    })
+
+
 def handle_static(path) -> tuple:
     """Serve the frontend single-page app."""
     frontend_dir = pathlib.Path(__file__).parent.parent.parent / "frontend"
@@ -381,14 +750,24 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("POST",   r"^/api/v1/runs/[^/]+/cancel$",       handle_cancel_run),
     ("POST",   r"^/api/v1/runs/[^/]+/retry$",        handle_retry_run),
     ("GET",    r"^/api/v1/runs/[^/]+/report$",       handle_get_report),
+    ("GET",    r"^/api/v1/runs/[^/]+/report\.csv$",  handle_export_report_csv),
+    ("GET",    r"^/api/v1/runs/[^/]+/radar\.svg$",   handle_export_radar_svg),
     ("GET",    r"^/api/v1/runs/[^/]+/responses$",    handle_get_responses),
     ("GET",    r"^/api/v1/runs/[^/]+/scorecard$",    handle_get_scorecard),
+    ("GET",    r"^/api/v1/runs/[^/]+/theta-report$", handle_get_theta_report),
+    ("GET",    r"^/api/v1/runs/[^/]+/pairwise$",     handle_get_pairwise),
     ("GET",    r"^/api/v1/benchmarks$",              handle_benchmarks),
     ("POST",   r"^/api/v1/compare-runs$",            handle_create_compare_run),
     ("GET",    r"^/api/v1/compare-runs$",            handle_list_compare_runs),
     ("GET",    r"^/api/v1/compare-runs/[^/]+$",      handle_get_compare_run),
     ("GET",    r"^/api/v1/models/[^/]+/trend$",      handle_model_trend),
+    ("GET",    r"^/api/v1/models/[^/]+/theta-trend$",handle_model_theta_trend),
     ("GET",    r"^/api/v1/leaderboard$",             handle_leaderboard),
+    ("GET",    r"^/api/v1/theta-leaderboard$",       handle_theta_leaderboard),
+    ("GET",    r"^/api/v1/exports/runs\.zip$",       handle_export_runs_zip),
+    ("POST",   r"^/api/v1/calibration/rebuild$",     handle_calibration_rebuild),
+    ("POST",   r"^/api/v1/calibration/snapshot$",    handle_calibration_snapshot_only),
+    ("POST",   r"^/api/v1/tools/generate-isomorphic$", handle_generate_isomorphic),
 ]
 
 

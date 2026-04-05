@@ -8,13 +8,13 @@ Analysis pipeline:
 """
 from __future__ import annotations
 
-import json
 import math
 import random
 from app.core.schemas import (
     CaseResult, PreDetectionResult, Scores, SimilarityResult, RiskAssessment,
-    ScoreCard, TrustVerdict,
+    ScoreCard, TrustVerdict, ThetaReport, ThetaDimensionEstimate,
 )
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -138,6 +138,18 @@ class FeatureExtractor:
         features.update(tag_stats)
         features.update(failure_stats)
 
+        # --- Adversarial spoof signal ---
+        # Aggregate anti-pattern hit rate from adversarial_reasoning dimension cases.
+        # Also cross-check paired variants for template-matching behaviour.
+        adv_cases = [
+            r for r in case_results
+            if (r.case.dimension or r.case.category or "").lower() == "adversarial_reasoning"
+        ]
+        if adv_cases:
+            features["adversarial_spoof_signal_rate"] = self._adversarial_spoof_rate(
+                adv_cases, case_results,
+            )
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -185,6 +197,58 @@ class FeatureExtractor:
                 continue
             out[f"tag_{tag}_pass_rate"] = sum(1 for v in vals if v) / len(vals)
         return out
+
+    @staticmethod
+    def _adversarial_spoof_rate(
+        adv_cases: list[CaseResult],
+        all_cases: list[CaseResult],
+    ) -> float:
+        """
+        Compute spoof signal rate from adversarial reasoning cases.
+
+        Two signal sources:
+        1. Anti-pattern hits in adversarial cases (template-matching detected).
+        2. Paired-variant cross-check: if a model gives the WRONG answer on a
+           variant that flips the expected outcome, it's likely memorising
+           rather than reasoning.
+        """
+        if not adv_cases:
+            return 0.0
+
+        # Build lookup for paired cross-checking
+        all_by_id = {r.case.id: r for r in all_cases}
+
+        spoof_signals = 0
+        total_checks = 0
+
+        for r in adv_cases:
+            meta = (r.case.params.get("_meta") or {})
+            spoof_cfg = meta.get("spoof_detection") or {}
+            paired_id = meta.get("paired_with")
+
+            for s in r.samples:
+                total_checks += 1
+                d = s.judge_detail or {}
+
+                # Signal 1: anti-pattern hits on the adversarial case itself
+                if d.get("anti_pattern_hits"):
+                    spoof_signals += 1
+                    continue
+
+                # Signal 2: case failed (wrong answer on variant)
+                if s.judge_passed is False:
+                    # Check if the paired original was passed — if so, the model
+                    # "knows" the original answer but can't adapt to the variant,
+                    # which is a strong spoof signal.
+                    if paired_id and paired_id in all_by_id:
+                        paired_result = all_by_id[paired_id]
+                        if paired_result.pass_rate >= 0.5:
+                            spoof_signals += 1
+                            continue
+
+        if total_checks == 0:
+            return 0.0
+        return spoof_signals / total_checks
 
     @staticmethod
     def _failure_attribution(case_results: list[CaseResult]) -> dict[str, float]:
@@ -272,8 +336,9 @@ class ScoreCalculator:
 
 class ScoreCardCalculator:
     """
-    v2 三维评分体系:
-      CapabilityScore  = 0.25×reasoning + 0.25×instruction + 0.20×coding + 0.15×safety + 0.15×protocol
+    v2 三维评分体系 (updated with adversarial_reasoning split):
+      CapabilityScore  = 0.15×reasoning + 0.15×adversarial_reasoning + 0.25×instruction
+                         + 0.20×coding + 0.12×safety + 0.13×protocol
       AuthenticityScore = 0.40×similarity + 0.25×predetect + 0.15×consistency + 0.10×temp + 0.10×usage
       PerformanceScore = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
       TotalScore = 0.45×Capability + 0.35×Authenticity + 0.20×Performance
@@ -291,17 +356,19 @@ class ScoreCardCalculator:
 
         # ── Capability sub-scores ──
         card.reasoning_score = self._reasoning_score(case_results)
+        card.adversarial_reasoning_score = self._adversarial_reasoning_score(case_results)
         card.instruction_score = self._instruction_score(features)
         card.coding_score = self._coding_score(case_results)
         card.safety_score = self._safety_score(features)
         card.protocol_score = self._protocol_score(features)
 
         card.capability_score = min(100.0, round(
-            0.25 * card.reasoning_score
+            0.15 * card.reasoning_score
+            + 0.15 * card.adversarial_reasoning_score
             + 0.25 * card.instruction_score
             + 0.20 * card.coding_score
-            + 0.15 * card.safety_score
-            + 0.15 * card.protocol_score,
+            + 0.12 * card.safety_score
+            + 0.13 * card.protocol_score,
             1,
         ))
 
@@ -352,10 +419,88 @@ class ScoreCardCalculator:
     # ── Sub-score implementations ──
 
     def _reasoning_score(self, case_results: list[CaseResult]) -> float:
-        cases = [r for r in case_results if r.case.category == "reasoning"]
+        """Basic reasoning score — excludes adversarial_reasoning dimension."""
+        cases = [
+            r for r in case_results
+            if r.case.category == "reasoning"
+            and (r.case.dimension or "").lower() != "adversarial_reasoning"
+        ]
         if not cases:
             return 50.0  # no data, neutral
-        return self._weighted_pass_rate(cases) * 100
+
+        base = self._weighted_pass_rate(cases) * 100
+
+        # Constraint-first bonus: reward key-constraint hit + boundary proof,
+        # and penalize anti-pattern/template slip.
+        total_samples = 0
+        constraint_hit_samples = 0
+        boundary_hit_samples = 0
+        anti_pattern_samples = 0
+
+        for r in cases:
+            for s in r.samples:
+                d = s.judge_detail or {}
+                total_samples += 1
+                if d.get("constraint_hits"):
+                    if len(d.get("constraint_hits", [])) > 0:
+                        constraint_hit_samples += 1
+                if d.get("boundary_hits"):
+                    if len(d.get("boundary_hits", [])) > 0:
+                        boundary_hit_samples += 1
+                if d.get("anti_pattern_hits"):
+                    if len(d.get("anti_pattern_hits", [])) > 0:
+                        anti_pattern_samples += 1
+
+        if total_samples == 0:
+            return base
+
+        constraint_rate = constraint_hit_samples / total_samples
+        boundary_rate = boundary_hit_samples / total_samples
+        anti_pattern_rate = anti_pattern_samples / total_samples
+
+        adjusted = base + 12.0 * constraint_rate + 12.0 * boundary_rate - 10.0 * anti_pattern_rate
+        return max(0.0, min(100.0, round(adjusted, 1)))
+
+    def _adversarial_reasoning_score(self, case_results: list[CaseResult]) -> float:
+        """
+        Adversarial reasoning score — paired-variant cases only.
+
+        Scoring logic:
+        - Base: weighted pass rate × 100
+        - Bonus: +15 per paired cross-check that succeeds (model differentiates
+          solvable vs unsolvable, or adapts base-encoding to round count)
+        - Penalty: -20 for anti-pattern hits (template-matching detected)
+        """
+        cases = [
+            r for r in case_results
+            if (r.case.dimension or "").lower() == "adversarial_reasoning"
+        ]
+        if not cases:
+            return 50.0  # no data, neutral
+
+        base = self._weighted_pass_rate(cases) * 100
+
+        total_samples = 0
+        anti_pattern_samples = 0
+        constraint_hit_samples = 0
+
+        for r in cases:
+            for s in r.samples:
+                d = s.judge_detail or {}
+                total_samples += 1
+                if d.get("anti_pattern_hits") and len(d["anti_pattern_hits"]) > 0:
+                    anti_pattern_samples += 1
+                if d.get("constraint_hits") and len(d["constraint_hits"]) > 0:
+                    constraint_hit_samples += 1
+
+        if total_samples == 0:
+            return base
+
+        constraint_rate = constraint_hit_samples / total_samples
+        anti_pattern_rate = anti_pattern_samples / total_samples
+
+        adjusted = base + 15.0 * constraint_rate - 20.0 * anti_pattern_rate
+        return max(0.0, min(100.0, round(adjusted, 1)))
 
     def _instruction_score(self, features: dict[str, float]) -> float:
         f = features.get
@@ -528,9 +673,24 @@ class VerdictEngine:
                 f"(相似度 {top.similarity_score:.2f})"
             )
 
+        # Signal 6: Adversarial spoof signal
+        adv_spoof = features.get("adversarial_spoof_signal_rate")
+        if adv_spoof is not None and adv_spoof > 0.3:
+            reasons.append(
+                f"对抗推理检测到模板套用 (信号率 {adv_spoof:.0%})"
+            )
+
         # Determine level based on authenticity + overall score
+        # Adversarial spoof > 0.7 forces at least high_risk regardless of other scores.
         score = scorecard.total_score
-        if auth >= 85 and score >= 75:
+        adv_override = adv_spoof is not None and adv_spoof > 0.7
+
+        if adv_override:
+            if auth < 50 or score < 45:
+                level, label = "fake", "疑似假模型 / Likely Fake"
+            else:
+                level, label = "high_risk", "高风险 / High Risk"
+        elif auth >= 85 and score >= 75:
             level, label = "trusted", "可信 / Trusted"
         elif auth >= 70 or score >= 65:
             level, label = "suspicious", "轻度可疑 / Suspicious"
@@ -557,6 +717,7 @@ FEATURE_ORDER = [
     "json_valid_rate", "system_obedience_rate", "param_compliance_rate",
     "temperature_param_effective", "refusal_rate", "disclaimer_rate",
     "avg_markdown_score", "avg_response_length",
+    "adversarial_spoof_signal_rate", "latency_mean_ms",
 ]
 
 
@@ -599,10 +760,22 @@ class SimilarityEngine:
         """Build a fixed-length vector from features, normalised 0-1."""
         vec = []
         for key in FEATURE_ORDER:
-            val = features.get(key, 0.5)  # 0.5 = unknown/missing
-            # Normalise latency (0-5000ms range → 0-1, inverted)
-            if "latency" in key:
-                val = max(0.0, 1.0 - val / 5000.0)
+            val = features.get(key)
+            if val is None:
+                vec.append(0.0)  # Unknown data doesn't contribute to similarity
+                continue
+
+            # Feature-specific normalization
+            if key == "avg_response_length":
+                # Normalize length: 0-1200 range
+                val = val / 1200.0
+            elif key == "avg_markdown_score":
+                # Normalize score: 0-5 range
+                val = val / 5.0
+            elif key == "latency_mean_ms":
+                # Normalize latency: 0-5000ms range, inverted (lower is 1.0)
+                val = 1.0 - (val / 5000.0)
+            
             # Clamp to [0,1]
             vec.append(max(0.0, min(1.0, float(val))))
         return vec
@@ -612,8 +785,8 @@ class SimilarityEngine:
         if len(a) != len(b):
             # Pad shorter
             n = max(len(a), len(b))
-            a = a + [0.5] * (n - len(a))
-            b = b + [0.5] * (n - len(b))
+            a = a + [0.0] * (n - len(a))
+            b = b + [0.0] * (n - len(b))
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(y * y for y in b))
@@ -662,31 +835,31 @@ class RiskEngine:
         # Signal 1: Pre-detection confidence
         if predetect and predetect.success:
             conf = predetect.confidence
-            risk_score += conf * 0.40
+            risk_score += conf * 0.35
             reasons.append(
                 f"预检测识别为 {predetect.identified_as}，置信度 {conf:.0%}"
                 f" / Pre-detection identified as {predetect.identified_as} "
                 f"(confidence {conf:.0%})"
             )
 
-        # Signal 2: Similarity to top benchmark
+        # Signal 2: Similarity to top benchmark (reduced from 0.35 to 0.25)
         if similarities:
             top = similarities[0]
             if top.similarity_score >= 0.85:
-                risk_score += 0.35
+                risk_score += 0.25
                 reasons.append(
                     f"与基准模型 {top.benchmark_name} 相似度极高 ({top.similarity_score:.2f})"
                     f" / Very high similarity to {top.benchmark_name} ({top.similarity_score:.2f})"
                 )
             elif top.similarity_score >= 0.70:
-                risk_score += 0.20
+                risk_score += 0.15
                 reasons.append(
                     f"与基准模型 {top.benchmark_name} 相似度较高 ({top.similarity_score:.2f})"
                 )
 
         # Signal 3: Temperature not effective
         if features.get("temperature_param_effective", 1.0) < 0.5:
-            risk_score += 0.15
+            risk_score += 0.10
             reasons.append(
                 "temperature 参数似乎不生效（响应多样性异常低）"
                 " / temperature parameter appears ineffective (low output diversity)"
@@ -699,6 +872,17 @@ class RiskEngine:
             reasons.append(
                 f"system prompt 遵循率异常低 ({sys_obey:.0%})，可能存在覆盖层"
                 f" / System prompt obedience abnormally low ({sys_obey:.0%})"
+            )
+
+        # Signal 5: Adversarial spoof signal — highest single-indicator
+        # precision for detecting proxy/wrapper models.
+        adv_spoof = features.get("adversarial_spoof_signal_rate")
+        if adv_spoof is not None and adv_spoof > 0.3:
+            risk_score += adv_spoof * 0.20
+            reasons.append(
+                f"对抗推理套壳信号率 {adv_spoof:.0%}（配对变体检测到模板套用）"
+                f" / Adversarial reasoning spoof signal {adv_spoof:.0%} "
+                f"(template-matching detected in paired variants)"
             )
 
         # Determine level
@@ -715,6 +899,168 @@ class RiskEngine:
             reasons.append("没有检测到明显的套壳信号 / No strong proxy signals detected")
 
         return RiskAssessment(level=level, label=label, reasons=reasons)
+
+
+# ── Theta Estimation (relative scale) ───────────────────────────────────────
+
+class ThetaEstimator:
+    """Simple Rasch-like 1PL estimator from pass/fail case results."""
+
+    def estimate(self, case_results: list[CaseResult], item_stats: dict[str, dict]) -> ThetaReport:
+        by_dim: dict[str, list[float]] = {}
+        for r in case_results:
+            dim = (r.case.dimension or r.case.category or "unknown").lower()
+            st = item_stats.get(r.case.id, {})
+            b = float(st.get("irt_b", 0.0) or 0.0)
+            for s in r.samples:
+                if s.judge_passed is None:
+                    continue
+                x = 1.0 if s.judge_passed else 0.0
+                by_dim.setdefault(dim, []).append((x, b))
+
+        dims: list[ThetaDimensionEstimate] = []
+        all_thetas: list[float] = []
+        for dim, obs in by_dim.items():
+            theta = self._estimate_theta_1pl(obs)
+            dims.append(ThetaDimensionEstimate(
+                dimension=dim,
+                theta=theta,
+                ci_low=theta - 0.25,
+                ci_high=theta + 0.25,
+                n_items=len(obs),
+            ))
+            all_thetas.append(theta)
+
+        if not all_thetas:
+            return ThetaReport(
+                global_theta=0.0,
+                global_ci_low=-0.3,
+                global_ci_high=0.3,
+                dimensions=[],
+                calibration_version=settings.CALIBRATION_VERSION,
+                method=settings.THETA_METHOD,
+                notes=["insufficient judged samples"],
+            )
+
+        g = sum(all_thetas) / len(all_thetas)
+        return ThetaReport(
+            global_theta=g,
+            global_ci_low=g - 0.25,
+            global_ci_high=g + 0.25,
+            dimensions=sorted(dims, key=lambda d: d.theta, reverse=True),
+            calibration_version=settings.CALIBRATION_VERSION,
+            method=settings.THETA_METHOD,
+        )
+
+    def _estimate_theta_1pl(self, obs: list[tuple[float, float]]) -> float:
+        if not obs:
+            return 0.0
+        theta = 0.0
+        for _ in range(25):
+            p_vals = [1.0 / (1.0 + math.exp(-(theta - b))) for _, b in obs]
+            grad = sum((x - p) for (x, _), p in zip(obs, p_vals))
+            hess = -sum(p * (1.0 - p) for p in p_vals)
+            if abs(hess) < 1e-6:
+                break
+            step = grad / hess
+            theta -= step
+            if abs(step) < 1e-4:
+                break
+        return max(-4.0, min(4.0, theta))
+
+
+class UncertaintyEstimator:
+    def apply_ci(self, theta_report: ThetaReport, case_results: list[CaseResult],
+                 estimator: ThetaEstimator, item_stats: dict[str, dict]) -> ThetaReport:
+        boot_n = max(10, settings.THETA_BOOTSTRAP_B)
+        if not case_results:
+            return theta_report
+
+        samples_global: list[float] = []
+        samples_dims: dict[str, list[float]] = {}
+
+        flat = []
+        for r in case_results:
+            for s in r.samples:
+                if s.judge_passed is None:
+                    continue
+                flat.append((r, s))
+
+        if len(flat) < 4:
+            return theta_report
+
+        for _ in range(boot_n):
+            picked = [flat[random.randint(0, len(flat) - 1)] for _ in range(len(flat))]
+            by_case: dict[str, CaseResult] = {}
+            for r, s in picked:
+                rid = r.case.id
+                if rid not in by_case:
+                    by_case[rid] = CaseResult(case=r.case, samples=[])
+                by_case[rid].samples.append(s)
+
+            rep = estimator.estimate(list(by_case.values()), item_stats)
+            samples_global.append(rep.global_theta)
+            for d in rep.dimensions:
+                samples_dims.setdefault(d.dimension, []).append(d.theta)
+
+        theta_report.global_ci_low, theta_report.global_ci_high = self._percentile_ci(samples_global)
+        dim_map = {d.dimension: d for d in theta_report.dimensions}
+        for dim, vals in samples_dims.items():
+            if dim in dim_map and vals:
+                lo, hi = self._percentile_ci(vals)
+                dim_map[dim].ci_low = lo
+                dim_map[dim].ci_high = hi
+        return theta_report
+
+    @staticmethod
+    def _percentile_ci(values: list[float]) -> tuple[float, float]:
+        if not values:
+            return (-0.3, 0.3)
+        arr = sorted(values)
+        n = len(arr)
+        lo = arr[max(0, int(0.025 * n) - 1)]
+        hi = arr[min(n - 1, int(0.975 * n))]
+        return (round(lo, 4), round(hi, 4))
+
+
+class PercentileMapper:
+    def map_percentiles(self, theta_report: ThetaReport, historical: list[dict]) -> ThetaReport:
+        if not historical:
+            return theta_report
+        globals_hist = sorted(float(r.get("theta_global", 0.0) or 0.0) for r in historical)
+        theta_report.global_percentile = self._pct(theta_report.global_theta, globals_hist)
+
+        dim_hist: dict[str, list[float]] = {}
+        for r in historical:
+            dims = r.get("theta_dims_json") or {}
+            for k, v in dims.items():
+                dim_hist.setdefault(k, []).append(float((v or {}).get("theta", 0.0) or 0.0))
+        for d in theta_report.dimensions:
+            h = sorted(dim_hist.get(d.dimension, []))
+            d.percentile = self._pct(d.theta, h) if h else None
+        return theta_report
+
+    @staticmethod
+    def _pct(v: float, arr: list[float]) -> float:
+        if not arr:
+            return 50.0
+        rank = sum(1 for x in arr if x <= v)
+        return round(rank * 100.0 / len(arr), 2)
+
+
+class PairwiseEngine:
+    def compare_to_baseline(self, theta_report: ThetaReport, baseline_theta: float | None) -> dict | None:
+        if baseline_theta is None:
+            return None
+        delta = theta_report.global_theta - baseline_theta
+        scale = max(0.1, settings.THETA_SCALE_FOR_WIN_PROB)
+        win_prob = 1.0 / (1.0 + math.exp(-delta / scale))
+        return {
+            "delta_theta": round(delta, 4),
+            "win_prob": round(win_prob, 4),
+            "baseline_theta": round(baseline_theta, 4),
+            "method": "bradley_terry",
+        }
 
 
 # ── Report Builder ────────────────────────────────────────────────────────────
@@ -735,6 +1081,8 @@ class ReportBuilder:
         risk: RiskAssessment,
         scorecard: ScoreCard | None = None,
         verdict: TrustVerdict | None = None,
+        theta_report: ThetaReport | None = None,
+        pairwise: dict | None = None,
     ) -> dict:
         dimensions = {
             k.replace("dim_", "").replace("_pass_rate", ""): v
@@ -817,5 +1165,9 @@ class ReportBuilder:
             report["scorecard"] = scorecard.to_dict()
         if verdict:
             report["verdict"] = verdict.to_dict()
+        if theta_report:
+            report["theta"] = theta_report.to_dict()
+        if pairwise:
+            report["pairwise_rank"] = pairwise
 
         return report

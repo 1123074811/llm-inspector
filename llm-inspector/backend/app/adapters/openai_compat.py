@@ -9,9 +9,12 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+import hashlib
 from app.core.schemas import (
     LLMRequest, LLMResponse, StreamChunk, StreamCaptureResult
 )
+from app.core.db import get_conn, now_iso, json_col, from_json_col
+
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -110,8 +113,53 @@ class OpenAICompatibleAdapter:
             return {"error": str(e),
                     "latency_ms": int((time.monotonic() - t0) * 1000)}
 
+    def _get_cache_key(self, req: LLMRequest) -> str:
+        payload = req.to_payload()
+        # Ensure consistent key by sorting keys in JSON
+        payload_str = json.dumps(payload, sort_keys=True)
+        key_src = f"{self.base_url}:{payload_str}"
+        return hashlib.sha256(key_src.encode()).hexdigest()
+
+    def _get_cache(self, key: str) -> LLMResponse | None:
+        try:
+            conn = get_conn()
+            row = conn.execute(
+                "SELECT response_json FROM llm_response_cache WHERE cache_key=? AND expires_at > ?",
+                (key, now_iso())
+            ).fetchone()
+            if row:
+                data = from_json_col(row["response_json"])
+                return LLMResponse(**data)
+        except Exception as e:
+            logger.warning("Cache fetch error", error=str(e))
+        return None
+
+    def _save_cache(self, key: str, resp: LLMResponse, ttl_hours: int = 24) -> None:
+        if not resp.ok or resp.error_type:
+            return
+        try:
+            conn = get_conn()
+            # Calculate expiry (naive string comparison OK for ISO)
+            from datetime import datetime, timedelta, timezone
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
+            conn.execute(
+                "INSERT OR REPLACE INTO llm_response_cache (cache_key, response_json, created_at, expires_at) VALUES (?,?,?,?)",
+                (key, json_col(resp.to_dict()), now_iso(), expires_at)
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Cache save error", error=str(e))
+
     def chat(self, req: LLMRequest) -> LLMResponse:
-        """Synchronous non-streaming chat completion."""
+        """Synchronous non-streaming chat completion with internal caching."""
+        # 1. Check cache
+        cache_key = self._get_cache_key(req)
+        cached = self._get_cache(cache_key)
+        if cached:
+            logger.info("Cache hit for LLM request", model=req.model)
+            return cached
+
+        # 2. Real API call
         url = f"{self.base_url}/chat/completions"
         payload = json.dumps(req.to_payload()).encode("utf-8")
         t0 = time.monotonic()
@@ -134,8 +182,13 @@ class OpenAICompatibleAdapter:
                         headers=dict(resp.headers),
                         latency_ms=latency,
                     )
-                return self._parse_response(body, resp.status,
-                                            dict(resp.headers), latency)
+                parsed_resp = self._parse_response(body, resp.status,
+                                                  dict(resp.headers), latency)
+                
+                # 3. Save to cache
+                self._save_cache(cache_key, parsed_resp)
+                return parsed_resp
+
         except urllib.error.HTTPError as e:
             latency = int((time.monotonic() - t0) * 1000)
             try:

@@ -201,7 +201,81 @@ CREATE TABLE IF NOT EXISTS model_scores_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scores_model ON model_scores_history(model_name, recorded_at);
+
+CREATE TABLE IF NOT EXISTS item_bank (
+    item_id          TEXT PRIMARY KEY,
+    dimension        TEXT NOT NULL,
+    anchor_flag      INTEGER NOT NULL DEFAULT 0,
+    active           INTEGER NOT NULL DEFAULT 1,
+    version          TEXT NOT NULL DEFAULT 'v1',
+    created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS item_stats (
+    id                  TEXT PRIMARY KEY,
+    item_id             TEXT NOT NULL UNIQUE,
+    dimension           TEXT NOT NULL,
+    irt_a               REAL NOT NULL DEFAULT 1.0,
+    irt_b               REAL NOT NULL DEFAULT 0.0,
+    irt_c               REAL,
+    info_score          REAL NOT NULL DEFAULT 0.0,
+    sample_size         INTEGER NOT NULL DEFAULT 0,
+    last_calibrated_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_stats_dimension ON item_stats(dimension);
+
+CREATE TABLE IF NOT EXISTS model_theta_history (
+    id                    TEXT PRIMARY KEY,
+    run_id                TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    model_name            TEXT NOT NULL,
+    base_url              TEXT NOT NULL,
+    theta_global          REAL NOT NULL,
+    theta_global_ci_low   REAL NOT NULL,
+    theta_global_ci_high  REAL NOT NULL,
+    theta_dims_json       TEXT NOT NULL,
+    percentile_global     REAL,
+    percentile_dims_json  TEXT,
+    calibration_version   TEXT NOT NULL,
+    method                TEXT NOT NULL,
+    created_at            TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_theta_history_model_time ON model_theta_history(model_name, created_at);
+
+CREATE TABLE IF NOT EXISTS pairwise_results (
+    id              TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    model_a         TEXT NOT NULL,
+    model_b         TEXT NOT NULL,
+    delta_theta     REAL NOT NULL,
+    win_prob_a      REAL NOT NULL,
+    method          TEXT NOT NULL,
+    details         TEXT,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pairwise_run ON pairwise_results(run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS calibration_snapshots (
+    id                TEXT PRIMARY KEY,
+    version           TEXT NOT NULL UNIQUE,
+    item_params_json  TEXT NOT NULL,
+    notes             TEXT,
+    created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS llm_response_cache (
+    cache_key         TEXT PRIMARY KEY,
+    response_json     TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    expires_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_expires ON llm_response_cache(expires_at);
 """
+
+
 
 
 def init_db() -> None:
