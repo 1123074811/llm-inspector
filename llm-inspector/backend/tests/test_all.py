@@ -1221,6 +1221,129 @@ test("API: baseline section11 flow", test_api_baseline_section11_flow)
 
 
 # ═══════════════════════════════════════════════════════════════
+# SECTION 12: Retry Logic
+# ═══════════════════════════════════════════════════════════════
+section("Retry Logic")
+
+def test_retry_succeeds_after_rate_limit():
+    from app.adapters.openai_compat import _with_retry, LLMResponse
+    call_count = [0]
+    def flaky_fn():
+        call_count[0] += 1
+        if call_count[0] < 3:
+            return LLMResponse(status_code=429, error_type="rate_limit",
+                               error_message="rate limit")
+        return LLMResponse(status_code=200, content="ok")
+    import unittest.mock as mock
+    with mock.patch("time.sleep"):
+        result = _with_retry(flaky_fn, max_retries=3)
+    assert result.status_code == 200
+    assert call_count[0] == 3
+
+def test_retry_gives_up_after_max():
+    from app.adapters.openai_compat import _with_retry, LLMResponse
+    import unittest.mock as mock
+    def always_429():
+        return LLMResponse(status_code=429, error_type="rate_limit",
+                           error_message="rate limit")
+    with mock.patch("time.sleep"):
+        result = _with_retry(always_429, max_retries=2)
+    assert result.status_code == 429
+
+def test_retry_no_retry_on_400():
+    from app.adapters.openai_compat import _with_retry, LLMResponse
+    call_count = [0]
+    def bad_request():
+        call_count[0] += 1
+        return LLMResponse(status_code=400, error_type="bad_request",
+                           error_message="bad request")
+    result = _with_retry(bad_request, max_retries=3)
+    assert result.status_code == 400
+    assert call_count[0] == 1
+
+test("Retry: succeeds after 2x rate limit", test_retry_succeeds_after_rate_limit)
+test("Retry: gives up after max_retries", test_retry_gives_up_after_max)
+test("Retry: no retry on 400", test_retry_no_retry_on_400)
+
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 13: TTFT Bimodal Detection
+# ═══════════════════════════════════════════════════════════════
+section("TTFT Bimodal Detection")
+
+def test_ttft_single_peak_no_proxy_signal():
+    import numpy as np
+    from app.analysis.pipeline import ProxyLatencyAnalyzer
+    ttfts_single = [120, 130, 140, 150, 160, 140, 130, 150]
+    class MockCaseResult:
+        def __init__(self, ttfts):
+            self.ttft_ms = ttfts
+    analyzer = ProxyLatencyAnalyzer()
+    result = analyzer._detect_bimodal(sorted(ttfts_single))
+    assert result < 0.6
+
+def test_ttft_bimodal_detected():
+    import numpy as np
+    from app.analysis.pipeline import ProxyLatencyAnalyzer
+    ttfts_bimodal = [50, 55, 60, 65, 500, 520, 540, 560]
+    class MockCaseResult:
+        def __init__(self, ttfts):
+            self.ttft_ms = ttfts
+    analyzer = ProxyLatencyAnalyzer()
+    result = analyzer._detect_bimodal(sorted(ttfts_bimodal))
+    assert result > 0.6
+
+test("TTFT: single peak no proxy signal", test_ttft_single_peak_no_proxy_signal)
+test("TTFT: bimodal distribution detected", test_ttft_bimodal_detected)
+
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 14: Multi-Signal Verdict
+# ═══════════════════════════════════════════════════════════════
+section("Multi-Signal Verdict")
+
+def test_verdict_confidence_real_computed():
+    from app.analysis.pipeline import VerdictEngine
+    from app.core.schemas import ScoreCard, TrustVerdict
+    engine = VerdictEngine()
+    scorecard = ScoreCard(
+        total_score=8000, capability_score=7500, authenticity_score=8200,
+        performance_score=7800, breakdown={}
+    )
+    verdict = engine.assess(scorecard, [], None, {
+        "ttft_proxy_signal": 0.0,
+        "latency_length_correlated": 1.0,
+        "temperature_param_effective": 1.0,
+        "token_count_consistent": 0.8,
+        "adversarial_spoof_signal_rate": 0.0,
+    })
+    assert verdict.confidence_real is not None
+    assert verdict.signal_details is not None
+    assert "timing_fingerprint" in verdict.signal_details
+    assert "capability_score" in verdict.signal_details
+
+def test_verdict_levels():
+    from app.analysis.pipeline import VerdictEngine
+    from app.core.schemas import ScoreCard
+    engine = VerdictEngine()
+    scorecard = ScoreCard(
+        total_score=8500, capability_score=8200, authenticity_score=8400,
+        performance_score=8300, breakdown={}
+    )
+    high_conf = engine.assess(scorecard, [], None, {
+        "ttft_proxy_signal": 0.0,
+        "latency_length_correlated": 1.0,
+        "temperature_param_effective": 1.0,
+        "token_count_consistent": 1.0,
+        "adversarial_spoof_signal_rate": 0.0,
+    })
+    assert high_conf.level in ("trusted", "suspicious", "high_risk", "fake")
+
+test("Verdict: confidence_real computed", test_verdict_confidence_real_computed)
+test("Verdict: levels assigned", test_verdict_levels)
+
+
+# ═══════════════════════════════════════════════════════════════
 # SUMMARY
 # ═══════════════════════════════════════════════════════════════
 

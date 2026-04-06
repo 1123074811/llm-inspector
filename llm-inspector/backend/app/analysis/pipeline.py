@@ -973,8 +973,9 @@ class VerdictEngine:
         ttft_proxy = f("ttft_proxy_signal", 0.0)
         lat_corr = f("latency_length_correlated", 1.0)
         temp_ok = f("temperature_param_effective", 1.0)
+        proxy_lat_conf = f("proxy_latency_confidence", 0.0)
         timing_score = (
-            (1.0 - ttft_proxy) * 40
+            (1.0 - max(ttft_proxy, proxy_lat_conf)) * 40
             + lat_corr * 35
             + temp_ok * 25
         )
@@ -2004,8 +2005,10 @@ class ReportBuilder:
         )
         if proxy_analysis.get("status") != "insufficient_samples":
             report["proxy_latency_analysis"] = proxy_analysis
-            # Inject proxy evidence into extraction audit
-            if proxy_analysis.get("proxy_confidence", 0) > 0.65 and "extraction_audit" in report:
+            proxy_conf = proxy_analysis.get("proxy_confidence", 0.0)
+            if proxy_conf > 0:
+                features["proxy_latency_confidence"] = proxy_conf
+            if proxy_conf > 0.65 and "extraction_audit" in report:
                 report["extraction_audit"]["evidence_chain"].append(
                     f"[TTFT] Proxy layer detected: confidence={proxy_analysis['proxy_confidence']}, "
                     f"signals={proxy_analysis['proxy_signals']}"
@@ -2103,6 +2106,17 @@ class ReportBuilder:
                 "phase": "timing",
                 "signal": "延迟与输出长度无相关性",
                 "severity": "warn",
+            })
+
+        if verdict:
+            chain.append({
+                "phase": "verdict",
+                "signal": verdict.label,
+                "confidence_real": verdict.confidence_real,
+                "level": verdict.level,
+                "severity": "critical" if verdict.level in ("fake", "high_risk")
+                            else "warn" if verdict.level == "suspicious"
+                            else "info",
             })
 
         return chain

@@ -419,6 +419,18 @@ class Layer3Knowledge:
         },
     ]
 
+    KNOWN_CUTOFFS: dict[str, list[str]] = {
+        "gpt-4o":          ["october 2023", "oct 2023", "2023-10", "2023年10月"],
+        "gpt-4-turbo":     ["april 2024",   "apr 2024", "2024-04"],
+        "gpt-4":            ["september 2021","sep 2021","2021-09"],
+        "claude-3-5-sonnet":["april 2024",  "2024-04"],
+        "claude-3-opus":    ["august 2023",  "aug 2023", "2023-08"],
+        "deepseek-v3":     ["october 2023", "2023-10",  "2023年10月"],
+        "deepseek-r1":     ["july 2024",    "2024-07",  "2024年7月"],
+        "gemini-1.5-pro":  ["november 2023","nov 2023", "2023-11"],
+        "llama-3.1":       ["march 2023",   "mar 2023", "2023-03"],
+    }
+
     def run(self, adapter, model_name: str, extra: dict) -> LayerResult:
         evidence = []
         tokens_used = 0
@@ -463,6 +475,22 @@ class Layer3Knowledge:
 
         identified = cutoff_candidates[0] if len(cutoff_candidates) == 1 else None
         confidence = 0.60 if len(cutoff_candidates) == 1 else 0.40 if cutoff_candidates else 0.0
+
+        if model_name and cutoff_candidates:
+            model_lower = model_name.lower()
+            for known_model, known_dates in self.KNOWN_CUTOFFS.items():
+                if known_model in model_lower:
+                    matched = any(
+                        kd in cutoff_text.lower()
+                        for kd in known_dates
+                    )
+                    if matched:
+                        confidence = max(confidence, 0.75)
+                        evidence.append(f"知识截止日期与声称模型 {model_name} 吻合")
+                    else:
+                        confidence = max(confidence, 0.65)
+                        evidence.append(f"知识截止日期与声称模型 {model_name} 不完全吻合")
+                    break
 
         return LayerResult(
             layer="knowledge",

@@ -1131,6 +1131,9 @@ function renderReport(r) {
           <div class="score-card" style="text-align:left">
             <div class="card-label">真实性信号</div>
             <div style="font-size:12px;color:var(--ink3)">一致性: ${fmtScore(b.consistency||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">行为不变量: ${fmtScore(b.behavioral_invariant||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">时序指纹: ${fmtScore(b.timing_fingerprint||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">协议合规: ${fmtScore(b.protocol||0)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">性能信号</div>
@@ -1150,8 +1153,57 @@ function renderReport(r) {
         <div class="risk-level ${cls}">${escHtml(verdict.label || verdict.level)}</div>
         <ul class="evidence-list">
           ${(verdict.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
-        </ul>
-        <div class="risk-disclaimer">${escHtml(verdict.disclaimer||'')}</div>
+        </ul>`;
+    if (verdict.confidence_real !== undefined) {
+      const cr = Number(verdict.confidence_real || 0);
+      const crColor = cr >= 80 ? '#16a34a' : cr >= 60 ? '#d97706' : '#dc2626';
+      const sd = verdict.signal_details || {};
+      const SIGNAL_LABELS = {
+        behavioral_similarity: '行为相似度',
+        capability_score:      '能力分',
+        timing_fingerprint:    '时序指纹',
+        consistency_score:     '一致性',
+        protocol_compliance:   '协议合规',
+        predetect_identity:    '身份自报',
+      };
+      const SIGNAL_WEIGHTS = {
+        behavioral_similarity: 30,
+        capability_score:      20,
+        timing_fingerprint:    20,
+        consistency_score:     15,
+        protocol_compliance:   10,
+        predetect_identity:     5,
+      };
+      html += `
+        <div style="margin-top:12px;padding:12px;background:var(--bg2);border-radius:6px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:13px;color:var(--ink3)">综合置信度</span>
+            <span style="font-size:22px;font-weight:700;color:${crColor}">${cr.toFixed(1)}</span>
+            <span style="font-size:12px;color:var(--ink4)">/ 100</span>
+            <div style="flex:1;height:6px;background:var(--rule);border-radius:3px;overflow:hidden">
+              <div style="width:${cr}%;height:100%;background:${crColor};border-radius:3px"></div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+            ${Object.entries(SIGNAL_LABELS).map(([k,label]) => {
+              const val = Number(sd[k] || 0);
+              const w = SIGNAL_WEIGHTS[k];
+              const barW = Math.min(100, val);
+              const c = val >= 70 ? '#16a34a' : val >= 45 ? '#d97706' : '#dc2626';
+              return `<div style="background:var(--bg);padding:6px 8px;border-radius:4px;font-size:11px">
+                <div style="color:var(--ink3);margin-bottom:3px">${label} <span style="color:var(--ink4)">(×${w}%)</span></div>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <div style="flex:1;height:4px;background:var(--rule);border-radius:2px">
+                    <div style="width:${barW}%;height:100%;background:${c};border-radius:2px"></div>
+                  </div>
+                  <span style="color:${c};font-weight:600;min-width:28px;text-align:right">${val.toFixed(0)}</span>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+    html += `<div class="risk-disclaimer">${escHtml(verdict.disclaimer||'')}</div>
       </div>`;
   }
 
@@ -1175,21 +1227,56 @@ function renderReport(r) {
         <h2>相似度排名</h2>
         ${sim.map(s => {
           const pct = Math.round(s.score * 100);
-          const ciLo = Math.round((s.ci_95_low||0)*100);
-          const ciHi = Math.round((s.ci_95_high||0)*100);
+          const hasCi = s.ci_95_low != null && s.ci_95_high != null;
+          const ciLo = hasCi ? Math.round(s.ci_95_low * 100) : null;
+          const ciHi = hasCi ? Math.round(s.ci_95_high * 100) : null;
+          const ciText = hasCi
+            ? `[${fmtScore(ciLo)}–${fmtScore(ciHi)}%]`
+            : `[样本不足，CI 不可用]`;
           const barColor = s.score > 0.75 ? '#E24B4A' : s.score > 0.55 ? '#EF9F27' : '#1D9E75';
+          const ciBarLeft = hasCi ? ciLo : 0;
+          const ciBarWidth = hasCi ? Math.max(1, ciHi - ciLo) : pct;
           return `
             <div class="sim-row">
               <div class="sim-name">${escHtml(s.benchmark)}</div>
               <div class="sim-bar-wrap">
                 <div class="sim-bar" style="width:${pct}%;background:${barColor}"></div>
-                <div class="sim-ci" style="left:${ciLo}%;width:${Math.max(1, ciHi-ciLo)}%;background:${barColor}"></div>
+                <div class="sim-ci" style="left:${hasCi ? ciBarLeft : 0}%;width:${ciBarWidth}%;background:${barColor}"></div>
               </div>
               <div class="sim-score">${fmtScore(pct)}%</div>
-              <div style="font-size:10px;color:var(--ink4);min-width:80px">[${fmtScore(ciLo)}–${fmtScore(ciHi)}%]</div>
+              <div style="font-size:10px;color:var(--ink4);min-width:80px">${ciText}</div>
             </div>`;
         }).join('')}
         <div style="font-size:11px;color:var(--ink4);margin-top:8px">[ ] 为 95% 置信区间</div>
+      </div>`;
+  }
+
+  const evidenceChain = r.evidence_chain || [];
+  if (evidenceChain.length) {
+    const SEV_COLOR = { info: '#16a34a', warn: '#d97706', critical: '#dc2626' };
+    const PHASE_LABEL = { predetect: '预检测', testing: '行为测试', timing: '时序分析', verdict: '最终判定' };
+    html += `
+      <div class="card">
+        <h2>检测证据链</h2>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${evidenceChain.map(item => {
+            const color = SEV_COLOR[item.severity] || '#888';
+            const phase = PHASE_LABEL[item.phase] || item.phase;
+            const extra = item.pass_rate !== undefined
+              ? `<span style="color:var(--ink4);font-size:11px">通过率 ${item.pass_rate}%</span>`
+              : item.confidence !== undefined
+              ? `<span style="color:var(--ink4);font-size:11px">${item.confidence}%</span>`
+              : item.value !== undefined
+              ? `<span style="color:var(--ink4);font-size:11px">${item.value}${item.unit==='ms_gap'?' ms间距':''}</span>`
+              : '';
+            return `
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-left:3px solid ${color};background:var(--bg2);border-radius:0 4px 4px 0">
+                <span style="font-size:10px;color:var(--ink4);min-width:52px;background:var(--bg);padding:1px 5px;border-radius:3px">${escHtml(phase)}</span>
+                <span style="font-size:12px;color:var(--ink2);flex:1">${escHtml(item.signal || '')}</span>
+                ${extra}
+              </div>`;
+          }).join('')}
+        </div>
       </div>`;
   }
 
