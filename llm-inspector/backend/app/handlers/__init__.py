@@ -11,7 +11,6 @@ from app.handlers.runs import (
 )
 from app.handlers.reports import (
     handle_get_report,
-    handle_export_report_csv,
     handle_export_radar_svg,
     handle_export_runs_zip,
     handle_get_responses,
@@ -63,7 +62,6 @@ __all__ = [
     "handle_continue_run",
     "handle_skip_testing",
     "handle_get_report",
-    "handle_export_report_csv",
     "handle_export_radar_svg",
     "handle_export_runs_zip",
     "handle_get_responses",

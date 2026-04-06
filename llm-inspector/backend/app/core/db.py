@@ -130,16 +130,6 @@ CREATE TABLE IF NOT EXISTS extracted_features (
     UNIQUE(run_id, feature_name)
 );
 
-CREATE TABLE IF NOT EXISTS benchmark_profiles (
-    id              TEXT PRIMARY KEY,
-    benchmark_name  TEXT NOT NULL,
-    suite_version   TEXT NOT NULL,
-    feature_vector  TEXT NOT NULL,
-    sample_count    INTEGER NOT NULL DEFAULT 3,
-    generated_at    TEXT NOT NULL,
-    UNIQUE(benchmark_name, suite_version)
-);
-
 CREATE TABLE IF NOT EXISTS similarity_results (
     id                TEXT PRIMARY KEY,
     run_id            TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,

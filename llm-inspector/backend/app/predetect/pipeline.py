@@ -91,11 +91,43 @@ TOKENIZER_PROBES = {
         "OpenAI (tiktoken cl100k)": 6,
         "Anthropic (claude tokenizer)": 7,
         "Meta (LLaMA sentencepiece)": 5,
+        "DeepSeek": 6,
+        "Qwen": 5,
     },
     "cryptocurrency": {
         "OpenAI (tiktoken cl100k)": 4,
         "Anthropic (claude tokenizer)": 4,
         "Meta (LLaMA sentencepiece)": 5,
+        "DeepSeek": 4,
+        "Qwen": 4,
+    },
+    "antidisestablishmentarianism": {
+        "OpenAI (tiktoken cl100k)": 6,
+        "Anthropic (claude tokenizer)": 8,
+        "Meta (LLaMA sentencepiece)": 7,
+        "DeepSeek": 7,
+        "Qwen": 6,
+    },
+    "pneumonoultramicroscopicsilicovolcanoconiosis": {
+        "OpenAI (tiktoken cl100k)": 11,
+        "Anthropic (claude tokenizer)": 13,
+        "Meta (LLaMA sentencepiece)": 10,
+        "DeepSeek": 12,
+        "Qwen": 11,
+    },
+    "electromagnetic": {
+        "OpenAI (tiktoken cl100k)": 3,
+        "Anthropic (claude tokenizer)": 4,
+        "Meta (LLaMA sentencepiece)": 4,
+        "DeepSeek": 3,
+        "Qwen": 3,
+    },
+    "counterintuitive": {
+        "OpenAI (tiktoken cl100k)": 4,
+        "Anthropic (claude tokenizer)": 5,
+        "Meta (LLaMA sentencepiece)": 4,
+        "DeepSeek": 4,
+        "Qwen": 4,
     },
 }
 

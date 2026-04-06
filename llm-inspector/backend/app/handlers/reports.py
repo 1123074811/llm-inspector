@@ -1,7 +1,6 @@
 """Report and export handlers."""
 from __future__ import annotations
 
-import csv
 import io
 import math
 import urllib.parse
@@ -21,52 +20,6 @@ def handle_get_report(path, _qs, _body) -> tuple:
     if err:
         return err
     return _json(report)
-
-
-def handle_export_report_csv(path, _qs, _body) -> tuple:
-    run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/report\.csv$")
-    if not run_id:
-        return _error("Invalid run ID", 400)
-    report, err = _load_report_or_error(run_id)
-    if err:
-        return err
-    body = _build_csv_bytes(report)
-    return 200, body, "text/csv; charset=utf-8"
-
-
-def _build_csv_bytes(report: dict) -> bytes:
-    scorecard = report.get("scorecard", {})
-    verdict = report.get("verdict", {})
-    risk = report.get("risk", {})
-    target = report.get("target", {})
-
-    rows = [
-        ("run_id", report.get("run_id")),
-        ("model", target.get("model")),
-        ("base_url", target.get("base_url")),
-        ("test_mode", target.get("test_mode")),
-        ("total_score", scorecard.get("total_score")),
-        ("capability_score", scorecard.get("capability_score")),
-        ("authenticity_score", scorecard.get("authenticity_score")),
-        ("performance_score", scorecard.get("performance_score")),
-        ("reasoning_score", scorecard.get("reasoning_score")),
-        ("instruction_score", scorecard.get("instruction_score")),
-        ("coding_score", scorecard.get("coding_score")),
-        ("safety_score", scorecard.get("safety_score")),
-        ("protocol_score", scorecard.get("protocol_score")),
-        ("consistency_score", scorecard.get("consistency_score")),
-        ("speed_score", scorecard.get("speed_score")),
-        ("stability_score", scorecard.get("stability_score")),
-        ("cost_efficiency", scorecard.get("cost_efficiency")),
-        ("verdict_level", verdict.get("level")),
-        ("risk_level", risk.get("level")),
-    ]
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["metric", "value"])
-    writer.writerows(rows)
-    return buf.getvalue().encode("utf-8")
 
 
 def _build_radar_svg_bytes(report: dict) -> bytes:

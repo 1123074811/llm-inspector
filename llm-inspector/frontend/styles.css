@@ -198,3 +198,84 @@ body>*{position:relative;z-index:1}
   .task-split{grid-template-columns:1fr}
   .task-right{position:static}
 }
+/* PRINT STYLES */
+@media print {
+  nav, .nav-brand, .nav-link, .nav-spacer, .nav-status, 
+  .btn, .chip, .console-head button, .task-actions button,
+  .hero-glow {
+    display: none !important;
+  }
+  
+  body {
+    background: #fff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: #000 !important;
+  }
+
+  .page {
+    display: none !important;
+  }
+  .page.active {
+    display: block !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  #page-task {
+    max-width: none !important;
+    width: 100% !important;
+  }
+
+  .task-split {
+    display: block !important; /* Stack columns: left then right */
+    gap: 0 !important;
+  }
+
+  .task-right {
+    position: static !important;
+    margin-top: 32px;
+  }
+
+  .card {
+    border: 1px solid #ddd !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+  }
+
+  .console-body {
+    max-height: none !important; /* Expansion of logs */
+    overflow: visible !important;
+    background: #f8f8f8 !important;
+    color: #000 !important;
+    border: 1px solid #ddd !important;
+  }
+
+  .console-line {
+    color: #000 !important;
+    border-bottom: 1px solid #eee;
+    padding: 4px 0;
+  }
+
+  .live-console {
+    border: 1px solid #ddd !important;
+  }
+
+  .console-head {
+    background: #eee !important;
+    color: #000 !important;
+    border-bottom: 1px solid #ddd !important;
+  }
+  
+  .score-card {
+    background: #f9f9f9 !important;
+    border: 1px solid #eee !important;
+  }
+  
+  /* Prevent cutting off charts or large blocks */
+  h2, h3, .score-grid {
+    page-break-after: avoid;
+  }
+}

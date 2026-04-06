@@ -12,7 +12,6 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST",   r"^/api/v1/runs/[^/]+/continue$",    "app.handlers.runs:handle_continue_run"),
     ("POST",   r"^/api/v1/runs/[^/]+/skip-testing$","app.handlers.runs:handle_skip_testing"),
     ("GET",    r"^/api/v1/runs/[^/]+/report$",      "app.handlers.reports:handle_get_report"),
-    ("GET",    r"^/api/v1/runs/[^/]+/report\.csv$", "app.handlers.reports:handle_export_report_csv"),
     ("GET",    r"^/api/v1/runs/[^/]+/radar\.svg$",  "app.handlers.reports:handle_export_radar_svg"),
     ("GET",    r"^/api/v1/runs/[^/]+/responses$",   "app.handlers.reports:handle_get_responses"),
     ("GET",    r"^/api/v1/runs/[^/]+/scorecard$",   "app.handlers.reports:handle_get_scorecard"),

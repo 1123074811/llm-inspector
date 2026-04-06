@@ -14,9 +14,9 @@ def handle_benchmarks(_path, qs, _body) -> tuple:
     benchmarks = repo.get_benchmarks(suite_version)
     return _json([
         {
-            "name": b["benchmark_name"],
-            "suite_version": b["suite_version"],
-            "generated_at": b["generated_at"],
+            "name": b.get("benchmark_name") or b.get("name", "unknown"),
+            "suite_version": b.get("suite_version", ""),
+            "data_source": b.get("data_source", "estimated"),
             "sample_count": b.get("sample_count", 3),
         }
         for b in benchmarks
@@ -24,6 +24,30 @@ def handle_benchmarks(_path, qs, _body) -> tuple:
 
 
 def handle_create_baseline(_path, _qs, body: dict) -> tuple:
+    # Mode 1: Mark an existing run as baseline (from frontend "标记为基准模型")
+    if body.get("run_id") and not body.get("base_url"):
+        run_id = body["run_id"]
+        run = repo.get_run(run_id)
+        if not run:
+            return _error("Run not found", 404)
+        if run["status"] not in ("completed", "partial_failed"):
+            return _error("Run not completed yet", 400)
+
+        model_name = body.get("model_name") or run["model_name"]
+        display_name = body.get("display_name") or model_name
+
+        try:
+            result = repo.create_baseline(
+                run_id=run_id,
+                model_name=model_name,
+                display_name=display_name,
+            )
+        except ValueError as e:
+            return _error(str(e), 400)
+        logger.info("Baseline created from run", display_name=display_name, run_id=run_id)
+        return _json({"baseline_id": result["id"], "status": "created"}, 201)
+
+    # Mode 2: Create a new run and mark as baseline (full params)
     for field in ("name", "base_url", "api_key", "model"):
         if not body.get(field):
             return _error(f"Missing required field: {field}")
@@ -60,7 +84,7 @@ def handle_create_baseline(_path, _qs, body: dict) -> tuple:
         metadata=run_metadata,
     )
 
-    repo.create_baseline(name=body["name"], run_id=run_id)
+    repo.create_baseline(run_id=run_id, model_name=body["model"], display_name=body["name"])
     submit_run(run_id)
     logger.info("Baseline created", name=body["name"], run_id=run_id)
     return _json({"baseline_id": run_id, "status": "queued"}, 201)
@@ -69,7 +93,7 @@ def handle_create_baseline(_path, _qs, body: dict) -> tuple:
 def handle_list_baselines(_path, qs, _body) -> tuple:
     limit = int(qs.get("limit", ["50"])[0])
     baselines = repo.list_baselines(limit=min(limit, 100))
-    return _json(baselines)
+    return _json({"baselines": baselines})
 
 
 def handle_compare_baseline(_path, _qs, body: dict) -> tuple:

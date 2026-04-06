@@ -17,7 +17,14 @@ def handle_list_runs(_path, qs, _body) -> tuple:
     limit = int(limit_values[0]) if limit_values else 50
     offset = int(offset_values[0]) if offset_values else 0
     runs = repo.list_runs(limit=limit, offset=offset)
-    return _json({"runs": [dict(r) for r in runs], "limit": limit, "offset": offset})
+    # Add frontend-compatible aliases (run_id, model)
+    result = []
+    for r in runs:
+        d = dict(r)
+        d["run_id"] = d.get("id", "")
+        d["model"] = d.get("model_name", "")
+        result.append(d)
+    return _json({"runs": result, "limit": limit, "offset": offset})
 
 
 def handle_create_run(_path, _qs, body: dict) -> tuple:
@@ -96,6 +103,7 @@ def handle_get_run(path, _qs, _body) -> tuple:
     completed = len(set(r["case_id"] for r in responses))
     total = len(cases)
 
+    baseline = repo.get_baseline_by_run_id(run_id)
     return _json({
         "run_id": run_id,
         "status": run["status"],
@@ -118,7 +126,7 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "calibration_case_id": run.get("calibration_case_id"),
         "scoring_profile_version": run.get("scoring_profile_version", settings.CALIBRATION_VERSION),
         "calibration_tag": run.get("calibration_tag"),
-        "has_baseline": repo.get_baseline_by_run_id(run_id) is not None,
+        "baseline_id": baseline["id"] if baseline else None,
     })
 
 

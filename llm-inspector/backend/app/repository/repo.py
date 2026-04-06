@@ -87,12 +87,18 @@ def save_predetect_result(run_id: str, result_dict: dict) -> None:
     conn.commit()
 
 
-def list_runs(limit: int = 50) -> list[dict]:
+def list_runs(limit: int = 50, offset: int = 0) -> list[dict]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT * FROM test_runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        "SELECT * FROM test_runs ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def delete_run(run_id: str) -> None:
+    conn = get_conn()
+    conn.execute("DELETE FROM test_runs WHERE id=?", (run_id,))
+    conn.commit()
 
 
 def set_run_cancel_requested(run_id: str, requested: bool = True) -> None:
@@ -151,11 +157,11 @@ def upsert_test_case(case: dict) -> None:
             max_tokens, n_samples, temperature, weight, enabled, suite_version)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            case["id"], case["category"], case["name"],
-            case.get("system_prompt"), case["user_prompt"],
-            case["expected_type"], case["judge_method"],
+            case.get("id"), case.get("category"), case.get("name"),
+            case.get("system_prompt"), case.get("user_prompt"),
+            case.get("expected_type", "any"), case.get("judge_method", "any_text"),
             json_col(params),
-            case.get("max_tokens", 5), case.get("n_samples", 1),
+            case.get("max_tokens", 4096), case.get("n_samples", 1),
             case.get("temperature", 0.0), case.get("weight", 1.0),
             1 if case.get("enabled", True) else 0,
             case.get("suite_version", "v1"),
@@ -322,33 +328,33 @@ def get_features(run_id: str) -> dict[str, float]:
     return {row["feature_name"]: row["feature_value"] for row in rows}
 
 
-# ── Benchmark Profiles ────────────────────────────────────────────────────────
-
-def upsert_benchmark(name: str, suite_version: str,
-                     feature_vector: dict, sample_count: int = 3) -> None:
-    conn = get_conn()
-    conn.execute(
-        """INSERT OR REPLACE INTO benchmark_profiles
-           (id, benchmark_name, suite_version, feature_vector, sample_count, generated_at)
-           VALUES (?,?,?,?,?,?)""",
-        (new_id(), name, suite_version, json_col(feature_vector),
-         sample_count, now_iso()),
-    )
-    conn.commit()
-
+# ── Benchmarks (from golden_baselines) ────────────────────────────────────────
 
 def get_benchmarks(suite_version: str = "v1") -> list[dict]:
+    """
+    Load benchmark profiles for similarity comparison.
+    Only uses golden_baselines (real measured data marked by user).
+    """
     conn = get_conn()
     rows = conn.execute(
-        """SELECT * FROM benchmark_profiles
-           WHERE suite_version=? ORDER BY benchmark_name""",
-        (suite_version,),
+        "SELECT * FROM golden_baselines WHERE is_active=1 ORDER BY created_at DESC"
     ).fetchall()
-    result = []
+    result: list[dict] = []
+    seen_names: set[str] = set()
     for row in rows:
         d = dict(row)
-        d["feature_vector"] = from_json_col(d.get("feature_vector")) or {}
-        result.append(d)
+        name = d.get("model_name", "")
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        result.append({
+            "benchmark_name": name,
+            "name": d.get("display_name", name),
+            "suite_version": d.get("suite_version", suite_version),
+            "feature_vector": from_json_col(d.get("feature_vector")) or {},
+            "data_source": "measured",
+            "sample_count": d.get("sample_count", 1),
+        })
     return result
 
 
@@ -546,12 +552,17 @@ def get_baseline_by_run_id(run_id: str) -> dict | None:
 def create_baseline(run_id: str, model_name: str, display_name: str, notes: str = "") -> dict:
     conn = get_conn()
 
+    # model_name 是唯一索引：如果已存在同名基准，覆盖它
     existing = conn.execute(
-        "SELECT id FROM golden_baselines WHERE source_run_id=? AND is_active=1",
-        (run_id,),
+        "SELECT id FROM golden_baselines WHERE model_name=? AND is_active=1",
+        (model_name,),
     ).fetchone()
     if existing:
-        raise ValueError("该报告已存在基准模型，无法重复创建")
+        conn.execute(
+            "UPDATE golden_baselines SET is_active=0, updated_at=? WHERE id=?",
+            (now_iso(), existing["id"]),
+        )
+        conn.commit()
 
     run = conn.execute(
         "SELECT id, suite_version, status FROM test_runs WHERE id=?",
@@ -627,7 +638,7 @@ def create_baseline(run_id: str, model_name: str, display_name: str, notes: str 
     }
 
 
-def list_baselines(model_name: str | None = None, active_only: bool = True) -> list[dict]:
+def list_baselines(model_name: str | None = None, active_only: bool = True, limit: int = 100) -> list[dict]:
     conn = get_conn()
     where = []
     vals: list = []
@@ -639,8 +650,8 @@ def list_baselines(model_name: str | None = None, active_only: bool = True) -> l
     sql = "SELECT * FROM golden_baselines"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY created_at DESC"
-    rows = conn.execute(sql, tuple(vals)).fetchall()
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    rows = conn.execute(sql, tuple(vals + [limit])).fetchall()
 
     out = []
     for r in rows:
@@ -682,12 +693,9 @@ def get_latest_active_baseline(model_name: str) -> dict | None:
     return d
 
 
-def deactivate_baseline(baseline_id: str) -> None:
+def delete_baseline(baseline_id: str) -> None:
     conn = get_conn()
-    conn.execute(
-        "UPDATE golden_baselines SET is_active=0, updated_at=? WHERE id=?",
-        (now_iso(), baseline_id),
-    )
+    conn.execute("DELETE FROM golden_baselines WHERE id=?", (baseline_id,))
     conn.commit()
 
 

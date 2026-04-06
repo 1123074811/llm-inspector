@@ -429,6 +429,26 @@ class FeatureExtractor:
             features["difficulty_ceiling"] = 0.5
             features["difficulty_dropoff"] = 0.0
 
+        # -- Tool use features --
+        tool_cases = [r for r in case_results if r.case.category == "tool_use"]
+        if tool_cases:
+            features["tool_use_pass_rate"] = self._pass_rate(tool_cases)
+        else:
+            features["tool_use_pass_rate"] = 0.0
+
+        # -- Fingerprint features --
+        fp_cases = [r for r in case_results if r.case.category == "fingerprint"]
+        if fp_cases:
+            formality_scores = []
+            for r in fp_cases:
+                for s in r.samples:
+                    d = s.judge_detail or {}
+                    if "formality_score" in d:
+                        formality_scores.append(d["formality_score"])
+            features["avg_formality_score"] = (
+                sum(formality_scores) / len(formality_scores)
+            ) if formality_scores else 0.5
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -642,12 +662,12 @@ class ScoreCardCalculator:
         card.protocol_score = self._protocol_score(features)
 
         card.capability_score = min(100.0, round(
-            0.15 * card.reasoning_score
+            0.25 * card.reasoning_score
             + 0.15 * card.adversarial_reasoning_score
-            + 0.25 * card.instruction_score
+            + 0.20 * card.instruction_score
             + 0.20 * card.coding_score
-            + 0.12 * card.safety_score
-            + 0.13 * card.protocol_score,
+            + 0.10 * card.safety_score
+            + 0.10 * card.protocol_score,
             1,
         ))
 
@@ -667,13 +687,11 @@ class ScoreCardCalculator:
         card.behavioral_invariant_score = self._behavioral_invariant_score(case_results)
 
         card.authenticity_score = min(100.0, round(
-            0.40 * card.similarity_to_claimed        # 不变
-            + 0.15 * card.predetect_confidence       # 降：易被针对性训练欺骗
-            + 0.15 * card.consistency_score          # 不变
-            + 0.10 * card.temperature_effectiveness  # 不变
-            + 0.20 * card.usage_fingerprint_match    # 升：现已换成多维指纹
-            # behavioral_invariant 暂时不入总分，只做展示，待数据积累后再调权
-            ,
+            0.35 * card.similarity_to_claimed
+            + 0.20 * card.behavioral_invariant_score  # 正式入权：配对变体是难以伪造的信号
+            + 0.15 * card.consistency_score
+            + 0.10 * card.temperature_effectiveness
+            + 0.20 * card.usage_fingerprint_match,
             1,
         ))
 
@@ -691,8 +709,8 @@ class ScoreCardCalculator:
 
         # ── Total ──
         card.total_score = round(
-            0.45 * card.capability_score
-            + 0.35 * card.authenticity_score
+            0.50 * card.capability_score
+            + 0.30 * card.authenticity_score
             + 0.20 * card.performance_score,
             1,
         )
@@ -1169,6 +1187,33 @@ class VerdictEngine:
             confidence_real = min(confidence_real, 45.0)
             reasons.append(f"对抗推理检测到模板套用（信号率 {adv_spoof:.0%}），置信度强制下调")
 
+        # ── 硬规则：能力-声称不匹配检测 ──
+        difficulty_ceiling = f("difficulty_ceiling", 0.5)
+        claimed = (predetect.identified_as or "").lower() if predetect else ""
+        top_models = ["gpt-4o", "gpt-4-turbo", "claude-3-5", "claude-3-7",
+                      "deepseek-v3", "qwen2.5", "gemini-1.5"]
+
+        if any(m in claimed for m in top_models) and difficulty_ceiling < 0.4:
+            confidence_real = min(confidence_real, 50.0)
+            reasons.append(
+                f"声称为顶级模型但能力天花板仅 {difficulty_ceiling:.2f}，"
+                f"梯度难度测试显示推理能力与声称不符"
+            )
+
+        # ── 硬规则：行为不变性检测 ──
+        beh_inv = scorecard.behavioral_invariant_score
+        if beh_inv < 40:
+            confidence_real = min(confidence_real, 55.0)
+            reasons.append(
+                f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
+                f"疑似模板匹配而非真实推理"
+            )
+
+        # ── 硬规则：编程能力与声称等级不符 ──
+        if scorecard.coding_score < 10 and any(m in claimed for m in top_models):
+            confidence_real = min(confidence_real, 45.0)
+            reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
+
         if confidence_real >= 80:
             level, label = "trusted", "可信 / Trusted"
         elif confidence_real >= 60:
@@ -1206,6 +1251,7 @@ FEATURE_ORDER = [
     "avg_sentence_count", "avg_words_per_sentence",
     "bullet_list_rate", "numbered_list_rate", "code_block_rate", "heading_rate",
     "max_passed_difficulty", "min_failed_difficulty", "difficulty_ceiling", "difficulty_dropoff",
+    "tool_use_pass_rate", "avg_formality_score",
 ]
 
 GLOBAL_FEATURE_MEANS: dict[str, float] = {
@@ -1243,6 +1289,8 @@ GLOBAL_FEATURE_MEANS: dict[str, float] = {
     "min_failed_difficulty": 0.75,
     "difficulty_ceiling": 0.68,
     "difficulty_dropoff": 0.35,
+    "tool_use_pass_rate": 0.60,
+    "avg_formality_score": 0.55,
 }
 
 
@@ -1266,8 +1314,6 @@ class SimilarityEngine:
         for bp in benchmark_profiles:
             bench_vec = self._to_vector(bp["feature_vector"])
             sim = self._cosine_similarity(target_vec, bench_vec)
-            if bp.get("data_source") == "estimated":
-                sim *= 0.6
             ci_low, ci_high = self._bootstrap_ci(target_vec, bench_vec)
             bm_name = bp.get("benchmark_name") or bp.get("name", "unknown")
             results.append(SimilarityResult(

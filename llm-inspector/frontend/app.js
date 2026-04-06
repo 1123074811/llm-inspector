@@ -132,7 +132,7 @@ async function pollTask(runId) {
 
   const status = data.status;
   document.getElementById('task-status-badge').innerHTML = renderStatusBadge(status);
-  renderTaskActions(runId, status, data.has_baseline);
+  renderTaskActions(runId, status, data.baseline_id);
   setNavStatus(status);
 
   renderTaskProgress(data, responses);
@@ -157,7 +157,7 @@ function renderStatusBadge(status) {
   return `<span class="badge ${c}">${labels[status]||status}</span>`;
 }
 
-function renderTaskActions(runId, status, hasBaseline) {
+function renderTaskActions(runId, status, baselineId) {
   const el = document.getElementById('task-actions');
   if (!el) return;
 
@@ -173,13 +173,13 @@ function renderTaskActions(runId, status, hasBaseline) {
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="retryRun('${runId}')">从失败处重试</button>`;
   }
   if (canExport) {
-    if (!hasBaseline) {
+    if (!baselineId) {
       html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" onclick="markAsBaseline('${runId}')">标记为基准模型</button>`;
     } else {
-      html += `<button class="btn" style="padding:6px 12px;font-size:12px" disabled>已标记基准</button>`;
+      html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" onclick="unmarkAsBaseline('${runId}', '${baselineId}')">取消基准标记</button>`;
     }
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="compareWithBaseline('${runId}')">与基准对比</button>`;
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadReportCsv('${runId}')">导出CSV</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="exportReportPdf('${runId}')">生成 PDF 报告</button>`;
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadRadarSvg('${runId}')">导出雷达图</button>`;
   }
   el.innerHTML = html;
@@ -217,6 +217,20 @@ async function continueFullTest(runId) {
   pollTask(runId);
 }
 
+async function unmarkAsBaseline(runId, baselineId) {
+  if (!confirm('确认该模型不再作为对比基准？这不会删除原始检测记录。')) return;
+  const {ok, data} = await api('DELETE', '/api/v1/baselines/' + baselineId);
+  if (!ok) {
+    alert('移除失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  // Refresh current page actions
+  const {ok: ok2, data: data2} = await api('GET', '/api/v1/runs/' + runId);
+  if (ok2) {
+    renderTaskActions(runId, data2.status, data2.baseline_id);
+  }
+}
+
 async function skipTesting(runId) {
   const {ok, data} = await api('POST', `/api/v1/runs/${runId}/skip-testing`);
   if (!ok) {
@@ -229,17 +243,26 @@ async function skipTesting(runId) {
   pollTask(runId);
 }
 
-function downloadReportCsv(runId) {
-  window.open(`/api/v1/runs/${encodeURIComponent(runId)}/report.csv`, '_blank');
+function exportReportPdf(runId) {
+  // Use browser's native high-quality PDF generation
+  // We've configured CSS @media print to layout left first, then right (full logs)
+  const oldTitle = document.title;
+  document.title = 'LLM_Inspector_Report_' + runId.slice(0, 8);
+  window.print();
+  document.title = oldTitle;
 }
 
 function downloadRadarSvg(runId) {
   window.open(`/api/v1/runs/${encodeURIComponent(runId)}/radar.svg`, '_blank');
 }
 
-function quickExportCsv(evt, runId) {
+function exportReportPdfFromList(evt, runId) {
   if (evt) evt.stopPropagation();
-  downloadReportCsv(runId);
+  openTask(runId);
+  // Wait short time to ensure it's loaded, then print
+  setTimeout(() => {
+    exportReportPdf(runId);
+  }, 1000);
 }
 
 function quickExportRadar(evt, runId) {
@@ -1191,7 +1214,7 @@ async function loadRuns() {
   const {ok, data} = await api('GET', '/api/v1/runs?limit=200');
   if (!ok) { document.getElementById('runs-list').innerHTML = '<div class="empty">加载失败</div>'; return; }
 
-  _allRuns = data || [];
+  _allRuns = (data && data.runs) ? data.runs : (Array.isArray(data) ? data : []);
   if (!_allRuns.length) {
     document.getElementById('runs-list').innerHTML =
       '<div class="empty"><div class="empty-icon">○</div><div>暂无检测记录</div></div>';
@@ -1230,7 +1253,7 @@ function renderRunsPage() {
     const canExport = ['completed','partial_failed'].includes(r.status);
     const exportBtns = canExport
       ? `<div style="display:flex;gap:6px;align-items:center">
-          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="quickExportCsv(event, '${r.run_id}')">CSV</button>
+          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="exportReportPdfFromList(event, '${r.run_id}')">PDF 报告</button>
           <button class="btn" style="padding:4px 8px;font-size:11px" onclick="quickExportRadar(event, '${r.run_id}')">雷达图</button>
         </div>`
       : '<div style="width:132px"></div>';
@@ -1304,13 +1327,17 @@ async function markAsBaseline(runId) {
     alert('无法获取任务信息');
     return;
   }
-  const model_name = (data.model || '').trim().toLowerCase();
-  const display_name = data.model || '';
+  const defaultName = data.model || '';
 
-  if (!model_name || !display_name) {
-    alert('无法获取模型信息');
-    return;
-  }
+  // Let user confirm or change the model name (unique key for baselines)
+  const inputName = prompt(
+    '请输入基准模型名称（同名基准将被覆盖）：',
+    defaultName
+  );
+  if (!inputName || !inputName.trim()) return;
+
+  const model_name = inputName.trim();
+  const display_name = model_name;
 
   const {ok: ok2, data: data2} = await api('POST', '/api/v1/baselines', {
     run_id: runId,
@@ -1322,10 +1349,10 @@ async function markAsBaseline(runId) {
     alert(data2.error || '创建基准失败');
     return;
   }
-  alert('已创建基准: ' + (data2.baseline_id || 'unknown'));
+  alert('已创建基准: ' + display_name);
   const {ok: ok3, data: data3} = await api('GET', '/api/v1/runs/' + runId);
   if (ok3) {
-    renderTaskActions(runId, data3.status, true);
+    renderTaskActions(runId, data3.status, data3.baseline_id);
   }
 }
 

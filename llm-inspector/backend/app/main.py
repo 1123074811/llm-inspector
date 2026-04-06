@@ -8,8 +8,6 @@ import json
 import re
 import pathlib
 import urllib.parse
-import io
-import csv
 import zipfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from app.core.config import settings
@@ -22,7 +20,7 @@ from app.handlers.runs import (
     handle_continue_run, handle_skip_testing,
 )
 from app.handlers.reports import (
-    handle_get_report, handle_export_report_csv, handle_export_radar_svg,
+    handle_get_report, handle_export_radar_svg,
     handle_get_responses, handle_get_scorecard, handle_get_extraction_audit,
     handle_get_theta_report, handle_get_pairwise, handle_export_runs_zip,
 )
@@ -59,7 +57,6 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("POST",   r"^/api/v1/runs/[^/]+/continue$",    handle_continue_run),
     ("POST",   r"^/api/v1/runs/[^/]+/skip-testing$",handle_skip_testing),
     ("GET",    r"^/api/v1/runs/[^/]+/report$",      handle_get_report),
-    ("GET",    r"^/api/v1/runs/[^/]+/report\.csv$", handle_export_report_csv),
     ("GET",    r"^/api/v1/runs/[^/]+/radar\.svg$",  handle_export_radar_svg),
     ("GET",    r"^/api/v1/runs/[^/]+/responses$",   handle_get_responses),
     ("GET",    r"^/api/v1/runs/[^/]+/scorecard$",   handle_get_scorecard),

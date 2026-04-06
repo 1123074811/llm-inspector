@@ -67,6 +67,8 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _difficulty_ceiling(text, params)
     elif method == "token_fingerprint":
         passed, detail = _token_fingerprint_judge(text, params)
+    elif method == "tool_call_judge":
+        passed, detail = _tool_call_judge(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 
@@ -904,3 +906,124 @@ def _token_fingerprint_judge(text: str, params: dict) -> tuple[bool | None, dict
         "formal_marker_count": formal_count,
         "informal_marker_count": informal_count,
     }
+
+
+def _tool_call_judge(text: str, params: dict) -> tuple[bool | None, dict]:
+    """
+    Tool call 评判：检测模型是否正确调用了指定工具。
+    - expected_tool is None → 模型不应调用工具，直接回答
+    - expected_tool is str → 模型必须调用该工具
+    - expected_args is dict → 工具参数需匹配
+    """
+    expected_tool = params.get("expected_tool")
+    expected_args = params.get("expected_args")
+    expected_text = params.get("expected_text_answer")
+
+    tool_calls = _extract_tool_calls_from_text(text)
+
+    if expected_tool is None:
+        # 不应该调用工具
+        if tool_calls:
+            return False, {
+                "error": "model called tool when it should have answered directly",
+                "called": [tc.get("name", "") for tc in tool_calls],
+            }
+        if expected_text:
+            found = expected_text.lower() in text.lower()
+            return found, {"expected_text": expected_text, "found": found}
+        return True, {"no_tool_expected": True, "response": text[:200]}
+
+    # 应该调用指定工具
+    if not tool_calls:
+        return False, {"error": "model did not call any tool", "expected": expected_tool}
+
+    called_names = [
+        tc.get("name", "")
+        for tc in tool_calls
+    ]
+    if expected_tool not in called_names:
+        return False, {
+            "error": "wrong tool called",
+            "expected": expected_tool,
+            "got": called_names,
+        }
+
+    # 参数检查
+    if expected_args:
+        target_call = next(
+            tc for tc in tool_calls if tc.get("name") == expected_tool
+        )
+        actual_args = target_call.get("arguments", {})
+        if isinstance(actual_args, str):
+            try:
+                actual_args = json.loads(actual_args)
+            except json.JSONDecodeError:
+                return False, {"error": "tool arguments not valid JSON"}
+
+        args_match = all(
+            str(actual_args.get(k, "")).lower() == str(v).lower()
+            for k, v in expected_args.items()
+        )
+        return args_match, {
+            "expected_args": expected_args,
+            "actual_args": actual_args,
+            "match": args_match,
+        }
+
+    return True, {"tool_called": expected_tool, "correct": True}
+
+
+def _extract_tool_calls_from_text(text: str) -> list[dict]:
+    """从响应文本中提取 tool calls，兼容多种格式。"""
+    # 1. 尝试整体 JSON 解析
+    try:
+        data = json.loads(text.strip())
+        if isinstance(data, dict):
+            # OpenAI tool_calls 格式
+            if "tool_calls" in data:
+                calls = data["tool_calls"]
+                return [
+                    {
+                        "name": tc.get("function", {}).get("name", tc.get("name", "")),
+                        "arguments": tc.get("function", {}).get("arguments", tc.get("arguments", {})),
+                    }
+                    for tc in calls
+                ]
+            # 自定义 tool_call 格式
+            if "tool_call" in data:
+                tc = data["tool_call"]
+                return [{"name": tc.get("name", ""), "arguments": tc.get("arguments", {})}]
+            # 直接的 function call 格式
+            if "name" in data and ("arguments" in data or "parameters" in data):
+                return [{"name": data["name"], "arguments": data.get("arguments", data.get("parameters", {}))}]
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 2. 从 markdown code block 中提取
+    code_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    for block in code_blocks:
+        try:
+            data = json.loads(block)
+            if isinstance(data, dict):
+                if "tool_call" in data:
+                    tc = data["tool_call"]
+                    return [{"name": tc.get("name", ""), "arguments": tc.get("arguments", {})}]
+                if "name" in data:
+                    return [{"name": data["name"], "arguments": data.get("arguments", data.get("parameters", {}))}]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 3. 在文本中搜索内嵌 JSON 对象
+    json_pattern = re.findall(r'\{[^{}]*"(?:tool_call|name)"[^{}]*\}', text, re.DOTALL)
+    for match in json_pattern:
+        try:
+            data = json.loads(match)
+            if "tool_call" in data:
+                tc = data["tool_call"]
+                return [{"name": tc.get("name", ""), "arguments": tc.get("arguments", {})}]
+            if "name" in data:
+                return [{"name": data["name"], "arguments": data.get("arguments", data.get("parameters", {}))}]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return []

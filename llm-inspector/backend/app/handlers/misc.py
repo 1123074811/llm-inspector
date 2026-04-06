@@ -150,14 +150,16 @@ def handle_generate_isomorphic(_path, qs, _body) -> tuple:
 
 
 def handle_static(path) -> tuple:
-    static_dir = pathlib.Path(__file__).parent.parent / "frontend"
+    # __file__ is at backend/app/handlers/misc.py
+    # target is at llm-inspector/llm-inspector/frontend
+    static_dir = pathlib.Path(__file__).parents[3] / "frontend"
     if path == "/" or path == "":
         target = static_dir / "index.html"
     else:
         target = static_dir / path.lstrip("/")
 
-    if not target.is_file() or not str(target).startswith(str(static_dir)):
-        return "HTTP/1.1 404 Not Found\r\n\r\n", 404, b"Not found", "text/plain"
+    if not target.is_file() or not str(target.resolve()).startswith(str(static_dir.resolve())):
+        return 404, b"Not found", "text/plain"
 
     content_type = "text/html; charset=utf-8"
     if path.endswith(".css"):

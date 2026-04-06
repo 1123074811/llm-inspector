@@ -150,7 +150,6 @@ python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32
 | GET | `/api/v1/runs/:id/pairwise` | 获取 Bradley-Terry 两两对比结果 |
 | GET | `/api/v1/baselines/:id` | 获取指定 Golden Baseline 详情 |
 | GET | `/api/v1/baselines/:id/comparisons` | 获取该 Baseline 的历史对比记录 |
-| GET | `/api/v1/runs/:id/report.csv` | 导出报告 CSV |
 | GET | `/api/v1/runs/:id/radar.svg` | 导出雷达图 SVG |
 
 ### 比对与排行
@@ -172,7 +171,7 @@ python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32
 | GET | `/api/v1/models/:name/theta-trend` | 模型历史 theta 趋势 |
 | GET | `/api/v1/leaderboard` | 模型排行榜（支持 sort_by/limit） |
 | GET | `/api/v1/theta-leaderboard` | 基于 Rasch theta 的模型排行榜 |
-| GET | `/api/v1/exports/runs.zip` | 批量导出多次 run（CSV + 雷达图 ZIP） |
+| GET | `/api/v1/exports/runs.zip` | 批量导出多次 run（JSON + 雷达图 ZIP） |
 | POST | `/api/v1/calibration/rebuild` | 重建校准参数（version 参数） |
 | POST | `/api/v1/calibration/snapshot` | 快照当前校准状态 |
 | POST | `/api/v1/tools/generate-isomorphic` | 生成同构题（apply=true 写入 suite_v2.json） |
@@ -415,22 +414,6 @@ PYTHONPATH=backend python backend/tools/generate_isomorphic_cases.py --apply
 - `--preview`：预览将新增的同构题，不写入文件
 - `--apply`：写入 `backend/app/fixtures/suite_v2.json`
 
-### 2) 导出单次检测 CSV
-
-```bash
-cd llm-inspector
-PYTHONPATH=backend python backend/tools/export_run_report.py --run-id <RUN_ID> --out backend/output/<RUN_ID>.csv
-```
-
-导出内容包含：总分、三大主分、关键子分、判定等级。
-
-### 3) 导出雷达图（SVG）
-
-```bash
-cd llm-inspector
-PYTHONPATH=backend python backend/tools/export_radar_svg.py --run-id <RUN_ID> --out backend/output/<RUN_ID>-radar.svg
-```
-
 > 采用 SVG 输出（无第三方依赖），可直接用浏览器打开或后续转 PNG。
 
 ### 4) 运行校准回放（新增）
@@ -448,11 +431,8 @@ PYTHONPATH=backend python backend/tools/run_calibration.py \
 
 ## API 直连导出（新增）
 
-### 1) 导出报告 CSV
-
-```bash
-GET /api/v1/runs/{run_id}/report.csv
-```
+### 1) 导出 PDF 报告
+直接在浏览器页面点击“生成 PDF 报告”，利用内置打印优化样式生成包含摘要与全量日志的 PDF。
 
 ### 2) 导出雷达图 SVG
 
@@ -475,10 +455,10 @@ POST /api/v1/tools/generate-isomorphic?apply=true    # 写入 suite_v2.json
 - 历史记录页新增：
   - 状态筛选 + 模型关键字筛选
   - 分页浏览（每页 10 条）
-  - 每条 run 快速导出（CSV / 雷达图）
-  - 勾选后批量导出 ZIP（CSV / 雷达图 / CSV+雷达图）
+  - 每条 run 快速导出（PDF / 雷达图）
+  - 勾选后批量导出 ZIP（JSON / 雷达图）
 - 任务详情页在完成后新增：
-  - 导出 CSV
+  - 生成 PDF 报告（优化排版：摘要在前，全量日志在后）
   - 导出雷达图（SVG）
   - 内嵌雷达图预览（iframe 直连 `/radar.svg`）
 
