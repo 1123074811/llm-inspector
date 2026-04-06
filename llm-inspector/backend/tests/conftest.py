@@ -20,15 +20,20 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_inspector.db"
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
     """Initialize and seed the test database once per session."""
-    from app.core.db import init_db
+    from app.core.db import init_db, get_conn
+    from app.core.db_migrations import migrate
     from app.tasks.seeder import seed_all
     init_db()
+    migrate(get_conn())
     seed_all()
     yield
-    # Cleanup
+    import time
+    time.sleep(0.1)
     try:
         os.remove("test_inspector.db")
     except FileNotFoundError:
+        pass
+    except PermissionError:
         pass
 
 

@@ -21,13 +21,21 @@ def create_run(
 ) -> str:
     run_id = new_id()
     conn = get_conn()
+    meta = metadata or {}
     conn.execute(
         """INSERT INTO test_runs
            (id, base_url, api_key_encrypted, api_key_hash,
-            model_name, test_mode, suite_version, status, created_at, metadata)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            model_name, test_mode, suite_version, status, created_at,
+            evaluation_mode, calibration_case_id, scoring_profile_version,
+            calibration_tag, metadata)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (run_id, base_url, api_key_encrypted, api_key_hash,
-         model_name, test_mode, suite_version, "queued", now_iso(), json_col(metadata or {})),
+         model_name, test_mode, suite_version, "queued", now_iso(),
+         meta.get("evaluation_mode", "normal"),
+         meta.get("calibration_case_id"),
+         meta.get("scoring_profile_version", "v1"),
+         meta.get("calibration_tag"),
+         json_col(meta)),
     )
     conn.commit()
     return run_id
@@ -88,41 +96,32 @@ def list_runs(limit: int = 50) -> list[dict]:
 
 
 def set_run_cancel_requested(run_id: str, requested: bool = True) -> None:
-    run = get_run(run_id)
-    if not run:
-        return
-    metadata = run.get("metadata") or {}
-    metadata["cancel_requested"] = bool(requested)
     conn = get_conn()
     conn.execute(
-        "UPDATE test_runs SET metadata=? WHERE id=?",
-        (json_col(metadata), run_id),
+        "UPDATE test_runs SET cancel_requested=? WHERE id=?",
+        (1 if requested else 0, run_id),
     )
     conn.commit()
 
 
 def is_run_cancel_requested(run_id: str) -> bool:
-    run = get_run(run_id)
-    if not run:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT cancel_requested FROM test_runs WHERE id=?", (run_id,)
+    ).fetchone()
+    if not row:
         return False
-    metadata = run.get("metadata") or {}
-    return bool(metadata.get("cancel_requested", False))
+    return bool(row["cancel_requested"])
 
 
 def mark_run_retry(run_id: str) -> None:
-    run = get_run(run_id)
-    if not run:
-        return
-    metadata = run.get("metadata") or {}
-    metadata["cancel_requested"] = False
-    metadata["resume_from_existing"] = True
     conn = get_conn()
     conn.execute(
         """UPDATE test_runs
            SET status=?, started_at=NULL, completed_at=NULL,
-               error_message=NULL, metadata=?
+               error_message=NULL, cancel_requested=0, resume_from_existing=1
            WHERE id=?""",
-        ("queued", json_col(metadata), run_id),
+        ("queued", run_id),
     )
     conn.commit()
 

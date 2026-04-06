@@ -2,18 +2,19 @@
 
 ## Quick Start
 - `cd llm-inspector/backend && python -m app.main` — 启动服务（默认 :8000）
-- `PYTHONPATH=llm-inspector/backend python llm-inspector/backend/tests/test_all.py` — 运行测试（自制框架，非 pytest）
+- `pytest backend/tests/test_all.py` — 运行测试
 
 ## Tech Stack
-- **零框架后端**: Python stdlib（http.server + urllib + sqlite3 + dataclasses），唯一外部依赖 `cryptography`
-- **前端**: 单文件 SPA（frontend/index.html），纯 HTML/CSS/JS，无构建步骤
-- **数据库**: SQLite WAL 模式，11 张表，线程局部连接
-- **任务**: ThreadPoolExecutor(4 workers)，预留 Celery 支持
+- **后端**: Python stdlib（http.server + urllib + sqlite3 + dataclasses）
+- **外部依赖**: `cryptography`, `numpy`, `scikit-learn`, `pytest`
+- **前端**: 多文件 SPA（index.html + styles.css + app.js），纯 HTML/CSS/JS，无构建步骤
+- **数据库**: SQLite WAL 模式，12 张表，线程局部连接
+- **任务**: ThreadPoolExecutor(4 workers)，支持 Celery 分布式扩展
 
 ## Architecture
 ```
 HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
-  → Orchestrator: PreDetect(5层) → CaseExecutor → Judge(9种) → Analysis Pipeline
+  → Orchestrator: PreDetect(7层) → CaseExecutor → Judge(21种) → Analysis Pipeline
 ```
 - API 路由: 正则表达式路由表，`/api/v1/` 前缀，共 16 个端点
 - 预检测: 从 0 token 递增至 ~500 token，置信度 >=0.85 提前停止
@@ -29,11 +30,18 @@ HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
 - 类型注解: Python 3.10+ 风格（`str | None`）
 
 ## Testing
-- 自制测试框架（非 pytest/unittest），全局 PASS/FAIL 计数器
+- pytest 测试框架，41+ 测试用例
 - 测试用独立数据库 `test_inspector.db`，测试后自动清理
-- 10 个 section，~60+ 用例，覆盖 config/security/db/seeder/judge/analysis/repo/predetect/executor/http
+- 覆盖 config/security/db/seeder/judge/analysis/repo/predetect/executor/http
+
+## Task Queue Architecture
+- 本地模式: ThreadPoolExecutor（默认，零配置）
+- 分布式模式: Celery + Redis（设置 CELERY_BROKER_URL 环境变量）
+- 抽象接口: `app.tasks.queue.TaskQueue`
+- 切换方式: `from app.tasks.worker import init_distributed_queue; init_distributed_queue()`
 
 ## Gotchas
-- 无 requirements.txt/pyproject.toml，依赖仅在 README.md 中记录（cryptography, numpy, scikit-learn）
 - dev 模式下 ENCRYPTION_KEY 自动生成确定性密钥，生产环境必须手动设置
-- 前端是单文件 1080 行，修改时注意不要破坏内联 CSS/JS 结构
+- 前端文件已拆分为 index.html + styles.css + app.js，修改时注意保持引用关系
+- 数据库 schema 提供迁移函数 `migrate_json_columns_to_columns()`
+- `test_runs` 表的 `evaluation_mode`, `calibration_case_id`, `scoring_profile_version`, `calibration_tag` 已迁移为独立列

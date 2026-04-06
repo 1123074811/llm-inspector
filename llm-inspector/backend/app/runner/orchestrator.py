@@ -1001,14 +1001,15 @@ def _build_and_save_report(
     suite_version: str,
     precomputed_similarities: list | None = None,
 ) -> dict:
-    run_metadata = run.get("metadata") or {}
     """Extract features, score, similarity, risk, build report."""
-    # Feature extraction
     extractor = FeatureExtractor()
     features = extractor.extract(case_results)
     features.update(extra_features)
     if features:
         repo.save_features(run_id, features)
+
+    scoring_profile_version = run.get("scoring_profile_version", settings.CALIBRATION_VERSION)
+    calibration_tag = run.get("calibration_tag")
 
     # Scoring
     scorer = ScoreCalculator()
@@ -1152,8 +1153,8 @@ def _build_and_save_report(
         verdict=verdict,
         theta_report=theta_report,
         pairwise=pairwise,
-        scoring_profile_version=run_metadata.get("scoring_profile_version", settings.CALIBRATION_VERSION),
-        calibration_tag=run_metadata.get("calibration_tag"),
+        scoring_profile_version=scoring_profile_version,
+        calibration_tag=calibration_tag,
     )
     repo.save_report(run_id, report)
     return report

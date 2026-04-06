@@ -76,6 +76,7 @@ class Settings:
     THETA_DELTA_STOP: float = float(os.getenv("THETA_DELTA_STOP", "0.45"))
     THETA_SCALE_FOR_WIN_PROB: float = float(os.getenv("THETA_SCALE_FOR_WIN_PROB", "0.6"))
     CALIBRATION_VERSION: str = os.getenv("CALIBRATION_VERSION", "v1")
+    SUITE_VERSION: str = os.getenv("SUITE_VERSION", "v3")
 
     # Golden baseline compare thresholds (display-score units)
     BASELINE_MATCH_COSINE_THRESHOLD: float = float(
