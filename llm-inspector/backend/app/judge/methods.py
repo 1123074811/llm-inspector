@@ -63,6 +63,10 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _language_bias_detect(text, params)
     elif method == "tokenizer_fingerprint":
         passed, detail = _tokenizer_fingerprint(text, params)
+    elif method == "difficulty_ceiling":
+        passed, detail = _difficulty_ceiling(text, params)
+    elif method == "token_fingerprint":
+        passed, detail = _token_fingerprint_judge(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 
@@ -186,25 +190,20 @@ def _line_count(text: str, params: dict) -> tuple[bool, dict]:
 def _constraint_reasoning(text: str, params: dict) -> tuple[bool, dict]:
     """
     Constraint-first reasoning judge (upgraded).
-    Three validation layers:
+    passed判定只看最终答案是否正确，过程质量指标仅供参考。
+    Three validation layers (recorded only, not affecting passed):
       L1: key constraint keywords present
       L2: boundary-proof signals present
       L3: anti-pattern slip detection (with negation check)
-    Also verifies numeric answer appears in a conclusion context, not just anywhere.
     """
     lower_text = text.lower()
     key_constraints: list[str] = params.get("key_constraints", [])
     boundary_signals: list[str] = params.get("boundary_signals", [])
     anti_pattern_signals: list[str] = params.get("anti_pattern_signals", [])
 
-    # L1: key constraint hits
     constraint_hits = [kw for kw in key_constraints if kw.lower() in lower_text]
-
-    # L2: boundary signal hits
     boundary_hits = [kw for kw in boundary_signals if kw.lower() in lower_text]
 
-    # L3: anti-pattern slip detection with negation context window
-    # A hit only counts as a slip if NOT immediately preceded/followed by a negation word.
     NEGATION_WORDS = [
         "不", "非", "错", "否", "but", "not", "wrong", "incorrect",
         "however", "instead", "actually", "rather",
@@ -215,7 +214,6 @@ def _constraint_reasoning(text: str, params: dict) -> tuple[bool, dict]:
         ap_lower = ap.lower()
         idx = lower_text.find(ap_lower)
         while idx != -1:
-            # Check ±30 chars context for negation
             context = lower_text[max(0, idx - 30): idx + len(ap_lower) + 30]
             has_negation = any(neg in context for neg in NEGATION_WORDS)
             if has_negation:
@@ -225,51 +223,36 @@ def _constraint_reasoning(text: str, params: dict) -> tuple[bool, dict]:
                 break
             idx = lower_text.find(ap_lower, idx + 1)
 
-    # Numeric conclusion check: if target_pattern is a number,
-    # verify it appears in the last 40% of the response (conclusion zone),
-    # not just incidentally in the middle.
     target_pattern = params.get("target_pattern")
-    answer_found = None
+    answer_correct = None
     answer_in_conclusion = None
     if target_pattern:
         try:
-            answer_found = bool(re.search(target_pattern, text, re.IGNORECASE | re.MULTILINE))
-            if answer_found:
+            answer_correct = bool(re.search(target_pattern, text, re.IGNORECASE | re.MULTILINE))
+            if answer_correct:
                 conclusion_zone = text[int(len(text) * 0.6):]
                 answer_in_conclusion = bool(
                     re.search(target_pattern, conclusion_zone, re.IGNORECASE | re.MULTILINE)
                 )
         except re.error:
-            answer_found = False
+            answer_correct = False
 
-    # Verdict
-    min_constraints = int(params.get("min_constraint_hits", 1))
-    require_boundary = bool(params.get("require_boundary", True))
-    require_conclusion = bool(params.get("require_conclusion_zone", True))
-
-    constraints_ok = len(constraint_hits) >= min_constraints
-    boundary_ok = (len(boundary_hits) > 0) if require_boundary else True
-    anti_pattern_ok = len(anti_pattern_hits) == 0
-    answer_ok = True if answer_found is None else answer_found
-    conclusion_ok = (
-        True if (not require_conclusion or answer_in_conclusion is None)
-        else answer_in_conclusion
-    )
-
-    passed = constraints_ok and boundary_ok and anti_pattern_ok and answer_ok and conclusion_ok
+    passed = answer_correct if answer_correct is not None else True
 
     return passed, {
+        "answer_correct": answer_correct,
+        "target_found": answer_correct,
         "constraint_hits": constraint_hits,
         "boundary_hits": boundary_hits,
         "anti_pattern_hits": anti_pattern_hits,
         "anti_pattern_negated": anti_pattern_negated,
-        "constraints_ok": constraints_ok,
-        "boundary_ok": boundary_ok,
-        "anti_pattern_ok": anti_pattern_ok,
-        "answer_found": answer_found,
+        "constraints_ok": len(constraint_hits) >= int(params.get("min_constraint_hits", 1)),
+        "boundary_ok": len(boundary_hits) > 0 if params.get("require_boundary", True) else True,
+        "anti_pattern_ok": len(anti_pattern_hits) == 0,
         "answer_in_conclusion": answer_in_conclusion,
-        "conclusion_ok": conclusion_ok,
+        "conclusion_ok": answer_in_conclusion if answer_in_conclusion is not None else True,
         "reasoning_length": len(text),
+        "process_quality": len(constraint_hits) / max(len(key_constraints), 1),
     }
 
 
@@ -868,4 +851,56 @@ def _tokenizer_fingerprint(text: str, params: dict) -> tuple[bool, dict]:
         "reported_token_count": reported,
         "expected_by_tokenizer": expected_by_tokenizer,
         "matching_tokenizers": matches,
+    }
+
+
+def _difficulty_ceiling(text: str, params: dict) -> tuple[bool | None, dict]:
+    """
+    不做 pass/fail 判定，只记录在该难度级别是否回答正确。
+    配合 analysis pipeline 计算模型的 difficulty ceiling.
+    """
+    target = params.get("target_pattern", "")
+    difficulty = params.get("difficulty", 0.5)
+    found = bool(re.search(target, text)) if target else None
+    return found, {
+        "difficulty": difficulty,
+        "correct": found,
+        "response_length": len(text),
+    }
+
+
+def _token_fingerprint_judge(text: str, params: dict) -> tuple[bool | None, dict]:
+    """
+    提取文本的指纹特征用于模型识别。
+    不做 pass/fail 判定，只提取指纹特征。
+    """
+    words = text.split()
+    first_word = words[0].lower() if words else ""
+
+    formal_markers = ["certainly", "indeed", "however", "furthermore", "additionally"]
+    informal_markers = ["yeah", "ok", "sure", "cool", "awesome", "lol", "btw"]
+    all_words_lower = text.lower()
+    formal_count = sum(1 for w in formal_markers if w in all_words_lower)
+    informal_count = sum(1 for w in informal_markers if w in all_words_lower)
+    total_words = len(words)
+
+    formality_score = 0.5
+    if total_words > 0:
+        if formal_count > informal_count:
+            formality_score = min(1.0, 0.5 + (formal_count - informal_count) * 0.1)
+        elif informal_count > formal_count:
+            formality_score = max(0.0, 0.5 - (informal_count - formal_count) * 0.1)
+
+    starts_with_capital = bool(text) and text[0].isupper()
+    has_punctuation_end = text.endswith(('.', '!', '?', '。', '！', '？'))
+
+    return None, {
+        "first_word": first_word,
+        "response_length": len(text),
+        "word_count": total_words,
+        "starts_with_capital": starts_with_capital,
+        "has_punctuation_end": has_punctuation_end,
+        "formality_score": round(formality_score, 3),
+        "formal_marker_count": formal_count,
+        "informal_marker_count": informal_count,
     }

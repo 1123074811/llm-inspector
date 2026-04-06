@@ -189,6 +189,7 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
             weight=c.get("weight", 1.0),
             enabled=bool(c.get("enabled", 1)),
             suite_version=c.get("suite_version", "v1"),
+            difficulty=c.get("difficulty"),
         ))
     return cases
 

@@ -108,6 +108,7 @@ class TestCase:
     enabled: bool = True
     suite_version: str = "v1"
     note: str = ""
+    difficulty: float | None = None
 
 
 @dataclass

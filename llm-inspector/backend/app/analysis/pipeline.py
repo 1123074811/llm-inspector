@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import numpy as np
 from app.core.schemas import (
     CaseResult, PreDetectionResult, Scores, SimilarityResult, RiskAssessment,
@@ -295,6 +296,139 @@ class FeatureExtractor:
         else:
             features["ttft_p95_ms"] = 0.0
 
+        all_latencies = [
+            s.response.latency_ms
+            for r in case_results
+            for s in r.samples
+            if s.response.latency_ms is not None
+        ]
+        if len(all_latencies) >= 2:
+            mean_lat = sum(all_latencies) / len(all_latencies)
+            variance = sum((l - mean_lat) ** 2 for l in all_latencies) / len(all_latencies)
+            std_lat = math.sqrt(variance)
+            features["latency_cv"] = round(std_lat / mean_lat, 4) if mean_lat > 0 else 0.0
+        else:
+            features["latency_cv"] = 0.0
+
+        total_tokens_gen = [
+            s.response.usage_completion_tokens
+            for r in case_results
+            for s in r.samples
+            if s.response.usage_completion_tokens is not None and s.response.latency_ms
+        ]
+        if total_tokens_gen and all_latencies:
+            total_tokens = sum(total_tokens_gen)
+            total_time_sec = sum(all_latencies) / 1000.0
+            features["tokens_per_second"] = round(total_tokens / total_time_sec, 2) if total_time_sec > 0 else 0.0
+        else:
+            features["tokens_per_second"] = 0.0
+
+        ftms_list = [
+            s.response.first_token_ms
+            for r in case_results
+            for s in r.samples
+            if s.response.first_token_ms is not None
+        ]
+        features["first_token_mean_ms"] = round(sum(ftms_list) / len(ftms_list), 1) if ftms_list else 0.0
+
+        reasoning_cases = [r for r in case_results if r.case.category == "reasoning"]
+        features["reasoning_pass_rate"] = self._pass_rate(reasoning_cases) if reasoning_cases else 0.0
+
+        coding_cases = [r for r in case_results if r.case.category == "coding"]
+        features["coding_pass_rate"] = self._pass_rate(coding_cases) if coding_cases else 0.0
+
+        adv_cases = [r for r in case_results if (r.case.dimension or "").lower() == "adversarial_reasoning"]
+        features["adversarial_pass_rate"] = self._pass_rate(adv_cases) if adv_cases else 0.0
+
+        refusal_samples = [
+            (s.response.content or "", s.judge_detail)
+            for r in case_results
+            for s in r.samples
+            if r.case.category == "refusal" and s.response.content
+        ]
+        if refusal_samples:
+            refusal_verbosities = [len(content) for content, _ in refusal_samples if content]
+            features["refusal_verbosity"] = round(sum(refusal_verbosities) / len(refusal_verbosities), 1) if refusal_verbosities else 0.0
+            alt_count = sum(1 for _, d in refusal_samples if d and d.get("offers_alternative"))
+            features["safety_alternative_style"] = round(alt_count / len(refusal_samples), 4)
+        else:
+            features["refusal_verbosity"] = 0.0
+            features["safety_alternative_style"] = 0.0
+
+        sentence_counts = []
+        words_per_sentence_list = []
+        bullet_count = 0
+        numbered_count = 0
+        code_block_count = 0
+        heading_count = 0
+        total_style_samples = 0
+
+        for r in case_results:
+            if r.case.category in ("style", "reasoning", "coding", "instruction"):
+                for s in r.samples:
+                    if s.response.content:
+                        total_style_samples += 1
+                        content = s.response.content
+                        sentences = re.split(r'[.!?。！？]+', content)
+                        sentences = [ss.strip() for ss in sentences if ss.strip()]
+                        sentence_counts.append(len(sentences))
+                        words = content.split()
+                        if sentences:
+                            words_per_sentence_list.append(len(words) / len(sentences))
+                        if re.search(r'^\s*[-*•]\s', content, re.MULTILINE):
+                            bullet_count += 1
+                        if re.search(r'^\s*\d+\.\s', content, re.MULTILINE):
+                            numbered_count += 1
+                        if '```' in content:
+                            code_block_count += 1
+                        if re.search(r'^#{1,4}\s', content, re.MULTILINE):
+                            heading_count += 1
+
+        if total_style_samples > 0:
+            features["avg_sentence_count"] = round(sum(sentence_counts) / len(sentence_counts), 2) if sentence_counts else 0.0
+            features["avg_words_per_sentence"] = round(sum(words_per_sentence_list) / len(words_per_sentence_list), 2) if words_per_sentence_list else 0.0
+            features["bullet_list_rate"] = round(bullet_count / total_style_samples, 4)
+            features["numbered_list_rate"] = round(numbered_count / total_style_samples, 4)
+            features["code_block_rate"] = round(code_block_count / total_style_samples, 4)
+            features["heading_rate"] = round(heading_count / total_style_samples, 4)
+        else:
+            features["avg_sentence_count"] = 0.0
+            features["avg_words_per_sentence"] = 0.0
+            features["bullet_list_rate"] = 0.0
+            features["numbered_list_rate"] = 0.0
+            features["code_block_rate"] = 0.0
+            features["heading_rate"] = 0.0
+
+        difficulty_results = []
+        for r in case_results:
+            diff = getattr(r.case, 'difficulty', None)
+            if diff is not None:
+                for s in r.samples:
+                    if s.judge_passed is not None:
+                        difficulty_results.append((float(diff), bool(s.judge_passed)))
+
+        if difficulty_results:
+            difficulty_results.sort(key=lambda x: x[0])
+            passed_difficulties = [d for d, p in difficulty_results if p]
+            failed_difficulties = [d for d, p in difficulty_results if not p]
+
+            features["max_passed_difficulty"] = max(passed_difficulties) if passed_difficulties else 0.0
+            features["min_failed_difficulty"] = min(failed_difficulties) if failed_difficulties else 1.0
+            features["difficulty_ceiling"] = round(
+                (features["max_passed_difficulty"] + features["min_failed_difficulty"]) / 2, 4
+            )
+
+            easy = [p for d, p in difficulty_results if d <= 0.4]
+            hard = [p for d, p in difficulty_results if d >= 0.7]
+            easy_rate = sum(easy) / len(easy) if easy else 1.0
+            hard_rate = sum(hard) / len(hard) if hard else 0.0
+            features["difficulty_dropoff"] = round(easy_rate - hard_rate, 4)
+        else:
+            features["max_passed_difficulty"] = 0.0
+            features["min_failed_difficulty"] = 1.0
+            features["difficulty_ceiling"] = 0.5
+            features["difficulty_dropoff"] = 0.0
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -568,19 +702,17 @@ class ScoreCardCalculator:
     # ── Sub-score implementations ──
 
     def _reasoning_score(self, case_results: list[CaseResult]) -> float:
-        """Basic reasoning score — excludes adversarial_reasoning dimension."""
+        """Basic reasoning score — answer correctness is dominant."""
         cases = [
             r for r in case_results
             if r.case.category == "reasoning"
             and (r.case.dimension or "").lower() != "adversarial_reasoning"
         ]
         if not cases:
-            return 50.0  # no data, neutral
+            return 50.0
 
         base = self._weighted_pass_rate(cases) * 100
 
-        # Constraint-first bonus: reward key-constraint hit + boundary proof,
-        # and penalize anti-pattern/template slip.
         total_samples = 0
         constraint_hit_samples = 0
         boundary_hit_samples = 0
@@ -607,7 +739,12 @@ class ScoreCardCalculator:
         boundary_rate = boundary_hit_samples / total_samples
         anti_pattern_rate = anti_pattern_samples / total_samples
 
-        adjusted = base + 12.0 * constraint_rate + 12.0 * boundary_rate - 10.0 * anti_pattern_rate
+        process_bonus = 0.0
+        if base > 0:
+            process_bonus = 8.0 * constraint_rate + 7.0 * boundary_rate
+        anti_penalty = 15.0 * anti_pattern_rate
+
+        adjusted = base + process_bonus - anti_penalty
         return max(0.0, min(100.0, round(adjusted, 1)))
 
     def _adversarial_reasoning_score(self, case_results: list[CaseResult]) -> float:
@@ -1063,11 +1200,14 @@ FEATURE_ORDER = [
     "identity_consistency_pass_rate", "antispoof_identity_detect_rate",
     "antispoof_override_leak_rate", "avg_markdown_score", "avg_response_length",
     "adversarial_spoof_signal_rate", "latency_mean_ms",
+    "reasoning_pass_rate", "coding_pass_rate", "adversarial_pass_rate",
+    "latency_cv", "first_token_mean_ms", "tokens_per_second",
+    "refusal_verbosity", "safety_alternative_style",
+    "avg_sentence_count", "avg_words_per_sentence",
+    "bullet_list_rate", "numbered_list_rate", "code_block_rate", "heading_rate",
+    "max_passed_difficulty", "min_failed_difficulty", "difficulty_ceiling", "difficulty_dropoff",
 ]
 
-# Global means for sparse-vector imputation in SimilarityEngine.
-# These are derived from aggregate benchmark data and used when a feature
-# dimension is missing from a model profile.
 GLOBAL_FEATURE_MEANS: dict[str, float] = {
     "protocol_success_rate": 0.85,
     "instruction_pass_rate": 0.72,
@@ -1085,6 +1225,24 @@ GLOBAL_FEATURE_MEANS: dict[str, float] = {
     "avg_response_length": 600.0,
     "adversarial_spoof_signal_rate": 0.15,
     "latency_mean_ms": 1500.0,
+    "reasoning_pass_rate": 0.70,
+    "coding_pass_rate": 0.65,
+    "adversarial_pass_rate": 0.45,
+    "latency_cv": 0.35,
+    "first_token_mean_ms": 300.0,
+    "tokens_per_second": 25.0,
+    "refusal_verbosity": 45.0,
+    "safety_alternative_style": 0.40,
+    "avg_sentence_count": 5.0,
+    "avg_words_per_sentence": 15.0,
+    "bullet_list_rate": 0.25,
+    "numbered_list_rate": 0.15,
+    "code_block_rate": 0.20,
+    "heading_rate": 0.10,
+    "max_passed_difficulty": 0.60,
+    "min_failed_difficulty": 0.75,
+    "difficulty_ceiling": 0.68,
+    "difficulty_dropoff": 0.35,
 }
 
 
@@ -1108,9 +1266,12 @@ class SimilarityEngine:
         for bp in benchmark_profiles:
             bench_vec = self._to_vector(bp["feature_vector"])
             sim = self._cosine_similarity(target_vec, bench_vec)
+            if bp.get("data_source") == "estimated":
+                sim *= 0.6
             ci_low, ci_high = self._bootstrap_ci(target_vec, bench_vec)
+            bm_name = bp.get("benchmark_name") or bp.get("name", "unknown")
             results.append(SimilarityResult(
-                benchmark_name=bp["benchmark_name"],
+                benchmark_name=bm_name,
                 similarity_score=round(sim, 4),
                 ci_95_low=round(ci_low, 4) if ci_low is not None else None,
                 ci_95_high=round(ci_high, 4) if ci_high is not None else None,

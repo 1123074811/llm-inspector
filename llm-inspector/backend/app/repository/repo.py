@@ -140,6 +140,8 @@ def upsert_test_case(case: dict) -> None:
         "anchor": bool(meta.get("anchor", False)),
         "info_gain_prior": float(meta.get("info_gain_prior", case.get("weight", 1.0))),
     })
+    if "difficulty" in case:
+        meta["difficulty"] = case["difficulty"]
     params["_meta"] = meta
 
     conn.execute(
