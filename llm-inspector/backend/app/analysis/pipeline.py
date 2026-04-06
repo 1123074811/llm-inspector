@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import random
+import numpy as np
 from app.core.schemas import (
     CaseResult, PreDetectionResult, Scores, SimilarityResult, RiskAssessment,
     ScoreCard, TrustVerdict, ThetaReport, ThetaDimensionEstimate,
@@ -264,7 +265,6 @@ class FeatureExtractor:
         ]
 
         if len(ttfts) >= 8:
-            import numpy as np
             arr = np.array(sorted(ttfts))
             mid = len(arr) // 2
             low_half, high_half = arr[:mid], arr[mid:]

@@ -29,15 +29,21 @@ def _with_retry(fn, max_retries: int = _MAX_RETRIES):
     last_result = None
     for attempt in range(max_retries + 1):
         result = fn()
-        if result.ok:
+        if result is not None and result.ok:
             return result
-        if result.status_code not in _RETRYABLE_CODES:
+        if result is not None and result.status_code not in _RETRYABLE_CODES:
             return result
         if attempt < max_retries:
             delay = _RETRY_BASE_DELAY_SEC * (2 ** attempt)
             time.sleep(delay)
         last_result = result
-    return last_result
+    if last_result is not None:
+        return last_result
+    return LLMResponse(
+        error_type="unknown",
+        error_message="Retry loop exhausted without receiving response",
+        latency_ms=0,
+    )
 
 # Build a permissive SSL context (some self-hosted APIs use self-signed certs)
 _SSL_CTX = ssl.create_default_context()
@@ -333,15 +339,7 @@ class OpenAICompatibleAdapter:
                 )
 
         result = _with_retry(_do)
-        if result is not None:
-            return result
-
-        t0 = time.monotonic()
-        return LLMResponse(
-            error_type="unknown",
-            error_message="Retry loop returned None",
-            latency_ms=int((time.monotonic() - t0) * 1000),
-        )
+        return result
 
     def chat_stream(self, req: LLMRequest) -> StreamCaptureResult:
         """Streaming chat — captures SSE chunks up to MAX_STREAM_CHUNKS."""
