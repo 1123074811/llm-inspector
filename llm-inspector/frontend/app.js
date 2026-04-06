@@ -1251,13 +1251,6 @@ function renderRunsPage() {
     const statusDot = `<span class="status-dot dot-${r.status}"></span>`;
     const pre = r.predetect_identified ? '<span class="badge badge-blue" style="margin-left:6px">已识别</span>' : '';
     const canExport = ['completed','partial_failed'].includes(r.status);
-    const exportBtns = canExport
-      ? `<div style="display:flex;gap:6px;align-items:center">
-          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="exportReportPdfFromList(event, '${r.run_id}')">PDF 报告</button>
-          <button class="btn" style="padding:4px 8px;font-size:11px" onclick="quickExportRadar(event, '${r.run_id}')">雷达图</button>
-        </div>`
-      : '<div style="width:132px"></div>';
-
     const checked = _runSelected.has(r.run_id) ? 'checked' : '';
 
     return `
@@ -1266,9 +1259,11 @@ function renderRunsPage() {
         ${statusDot}
         <div class="run-model">${escHtml(r.model)}${pre}</div>
         <div class="run-url">${escHtml(r.base_url)}</div>
-        <div>${renderStatusBadge(r.status)}</div>
-        ${exportBtns}
-        <div class="run-time">${fmtTime(r.created_at)}</div>
+        <div style="width:80px">${renderStatusBadge(r.status)}</div>
+        <div style="display:flex;gap:6px;align-items:center;width:60px;justify-content:flex-end">
+          <button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="deleteRunFromList(event, '${r.run_id}')">删除</button>
+        </div>
+        <div class="run-time" style="width:80px;text-align:right">${fmtTime(r.created_at)}</div>
       </div>`;
   }).join('');
 
@@ -1317,6 +1312,38 @@ function batchExportZipAll() {
   }
   const url = `/api/v1/exports/runs.zip?run_ids=${encodeURIComponent(ids.join(','))}&types=csv,svg`;
   window.open(url, '_blank');
+}
+
+async function batchDeleteSelected() {
+  const ids = [..._runSelected];
+  if (!ids.length) {
+    alert('请先勾选至少一条记录');
+    return;
+  }
+
+  if (!confirm(`确定要删除选中的 ${ids.length} 条记录吗？此操作不可恢复。`)) return;
+
+  const {ok, data} = await api('POST', '/api/v1/runs/batch-delete', { run_ids: ids });
+  if (!ok) {
+    alert('批量删除失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+
+  alert(`成功删除 ${data.deleted_count} 条记录${data.errors && data.errors.length ? `，${data.errors.length} 条失败` : ''}`);
+  _runSelected.clear();
+  loadRuns();
+}
+
+async function deleteRunFromList(evt, runId) {
+  if (evt) evt.stopPropagation();
+  if (!confirm('确认删除该检测记录？此操作不可恢复。')) return;
+
+  const {ok, data} = await api('DELETE', '/api/v1/runs/' + runId);
+  if (!ok) {
+    alert('删除失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  loadRuns();
 }
 
 // ── Benchmarks ─────────────────────────────────────────────────────────────

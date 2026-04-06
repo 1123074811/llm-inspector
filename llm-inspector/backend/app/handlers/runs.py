@@ -134,8 +134,32 @@ def handle_delete_run(path, _qs, _body) -> tuple:
     run_id = _extract_id(path, r"/api/v1/runs/([^/]+)$")
     if not run_id:
         return _error("Invalid run ID", 400)
-    repo.delete_run(run_id)
+    try:
+        repo.delete_run(run_id)
+    except Exception as e:
+        return _error(f"Delete failed: {str(e)}", 500)
     return _json({"deleted": run_id})
+
+
+def handle_batch_delete_runs(_path, _qs, body: dict) -> tuple:
+    run_ids = body.get("run_ids")
+    if not run_ids or not isinstance(run_ids, list):
+        return _error("Invalid or empty run_ids list", 400)
+
+    deleted_count = 0
+    errors = []
+    for rid in run_ids:
+        try:
+            repo.delete_run(rid)
+            deleted_count += 1
+        except Exception as e:
+            errors.append({"run_id": rid, "error": str(e)})
+
+    return _json({
+        "deleted_count": deleted_count,
+        "total_requested": len(run_ids),
+        "errors": errors
+    })
 
 
 def handle_cancel_run(path, _qs, _body) -> tuple:

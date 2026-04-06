@@ -7,6 +7,7 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST",   r"^/api/v1/runs$",                    "app.handlers.runs:handle_create_run"),
     ("GET",    r"^/api/v1/runs/[^/]+$",             "app.handlers.runs:handle_get_run"),
     ("DELETE", r"^/api/v1/runs/[^/]+$",             "app.handlers.runs:handle_delete_run"),
+    ("POST",   r"^/api/v1/runs/batch-delete$",      "app.handlers.runs:handle_batch_delete_runs"),
     ("POST",   r"^/api/v1/runs/[^/]+/cancel$",      "app.handlers.runs:handle_cancel_run"),
     ("POST",   r"^/api/v1/runs/[^/]+/retry$",       "app.handlers.runs:handle_retry_run"),
     ("POST",   r"^/api/v1/runs/[^/]+/continue$",    "app.handlers.runs:handle_continue_run"),

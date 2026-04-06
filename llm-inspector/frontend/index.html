@@ -126,7 +126,7 @@
       <input id="runs-filter-model" type="text" placeholder="按模型关键字筛选（如 gpt / claude）" oninput="applyRunFilters()" />
       <div style="display:flex;gap:8px">
         <button class="btn" style="padding:6px 10px;font-size:12px" onclick="batchExportSelected('pdf')">批量PDF(zip)</button>
-        <button class="btn" style="padding:6px 10px;font-size:12px" onclick="batchExportZipAll()">批量全量(zip)</button>
+        <button class="btn danger" style="padding:6px 10px;font-size:12px" onclick="batchDeleteSelected()">批量删除</button>
       </div>
     </div>
     <div style="margin-top:8px;font-size:11px;color:var(--ink4)" id="runs-filter-hint">已选择 0 条</div>
