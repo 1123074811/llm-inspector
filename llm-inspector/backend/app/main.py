@@ -167,6 +167,7 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "calibration_case_id": metadata.get("calibration_case_id"),
         "scoring_profile_version": metadata.get("scoring_profile_version", settings.CALIBRATION_VERSION),
         "calibration_tag": metadata.get("calibration_tag"),
+        "has_baseline": repo.get_baseline_by_run_id(run_id) is not None,
     })
 
 
@@ -940,6 +941,30 @@ def handle_delete_baseline(path, _qs, _body) -> tuple:
     return 204, b"", "application/json"
 
 
+def handle_get_baseline(path, _qs, _body) -> tuple:
+    baseline_id = _extract_id(path, r"/api/v1/baselines/([^/]+)$")
+    if not baseline_id:
+        return _error("Invalid baseline ID", 400)
+
+    baseline = repo.get_baseline(baseline_id)
+    if not baseline:
+        return _error("Baseline not found", 404)
+
+    return _json({
+        "id": baseline["id"],
+        "model_name": baseline["model_name"],
+        "display_name": baseline.get("display_name", ""),
+        "source_run_id": baseline.get("source_run_id"),
+        "total_score": baseline.get("total_score"),
+        "capability_score": baseline.get("capability_score"),
+        "authenticity_score": baseline.get("authenticity_score"),
+        "performance_score": baseline.get("performance_score"),
+        "sample_count": baseline.get("sample_count", 1),
+        "notes": baseline.get("notes", ""),
+        "created_at": baseline.get("created_at"),
+    })
+
+
 def handle_static(path) -> tuple:
     """Serve the frontend single-page app."""
     frontend_dir = pathlib.Path(__file__).parent.parent.parent / "frontend"
@@ -1046,6 +1071,7 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/baselines$",               handle_list_baselines),
     ("POST",   r"^/api/v1/baselines/compare$",       handle_compare_baseline),
     ("DELETE", r"^/api/v1/baselines/[^/]+$",         handle_delete_baseline),
+    ("GET",    r"^/api/v1/baselines/[^/]+$",         handle_get_baseline),
     ("POST",   r"^/api/v1/compare-runs$",            handle_create_compare_run),
     ("GET",    r"^/api/v1/compare-runs$",            handle_list_compare_runs),
     ("GET",    r"^/api/v1/compare-runs/[^/]+$",      handle_get_compare_run),

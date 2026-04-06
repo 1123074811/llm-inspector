@@ -531,8 +531,27 @@ def get_leaderboard(sort_by: str = "total_score", limit: int = 50) -> list[dict]
 
 # ── Golden Baselines ────────────────────────────────────────────────────────
 
+def get_baseline_by_run_id(run_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM golden_baselines WHERE source_run_id=? AND is_active=1",
+        (run_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
 def create_baseline(run_id: str, model_name: str, display_name: str, notes: str = "") -> dict:
     conn = get_conn()
+
+    existing = conn.execute(
+        "SELECT id FROM golden_baselines WHERE source_run_id=? AND is_active=1",
+        (run_id,),
+    ).fetchone()
+    if existing:
+        raise ValueError("该报告已存在基准模型，无法重复创建")
+
     run = conn.execute(
         "SELECT id, suite_version, status FROM test_runs WHERE id=?",
         (run_id,),

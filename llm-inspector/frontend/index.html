@@ -214,7 +214,7 @@ body>*{position:relative;z-index:1}
   <div class="nav-brand" onclick="showPage('home')">LLM <span>Inspector</span></div>
   <div class="nav-link active" id="nav-home" onclick="showPage('home')">新建测试</div>
   <div class="nav-link" id="nav-runs" onclick="showPage('runs')">历史记录</div>
-  <div class="nav-link" id="nav-benchmarks" onclick="showPage('benchmarks')">基准模型</div>
+  <div class="nav-link" id="nav-benchmarks" onclick="showPage('benchmarks')">我的基准</div>
   <div class="nav-spacer"></div>
   <div class="nav-status" id="nav-status">ready</div>
 </nav>
@@ -340,8 +340,8 @@ body>*{position:relative;z-index:1}
 <!-- ═══════════════════════ PAGE: BENCHMARKS ═══════════════════════ -->
 <div class="page" id="page-benchmarks">
   <div style="margin-bottom:24px">
-    <h1>基准模型库</h1>
-    <p class="subtitle">相似度比较使用以下基准模型的行为特征 profile</p>
+    <h1>我的基准模型</h1>
+    <p class="subtitle">手动标记的基准模型，可查看测试报告进行对比</p>
   </div>
   <div id="benchmarks-content">
     <div class="loading"><div class="spinner"></div><div>加载中...</div></div>
@@ -379,7 +379,7 @@ function showPage(name) {
   if (navEl) navEl.classList.add('active');
 
   if (name === 'runs')       loadRuns();
-  if (name === 'benchmarks') loadBenchmarks();
+  if (name === 'benchmarks') loadBaselines();
   if (_pollTimer && name !== 'task') { clearInterval(_pollTimer); _pollTimer = null; }
 }
 
@@ -482,7 +482,7 @@ async function pollTask(runId) {
 
   const status = data.status;
   document.getElementById('task-status-badge').innerHTML = renderStatusBadge(status);
-  renderTaskActions(runId, status);
+  renderTaskActions(runId, status, data.has_baseline);
   setNavStatus(status);
 
   renderTaskProgress(data, responses);
@@ -507,7 +507,7 @@ function renderStatusBadge(status) {
   return `<span class="badge ${c}">${labels[status]||status}</span>`;
 }
 
-function renderTaskActions(runId, status) {
+function renderTaskActions(runId, status, hasBaseline) {
   const el = document.getElementById('task-actions');
   if (!el) return;
 
@@ -523,6 +523,12 @@ function renderTaskActions(runId, status) {
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="retryRun('${runId}')">从失败处重试</button>`;
   }
   if (canExport) {
+    if (!hasBaseline) {
+      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" onclick="markAsBaseline('${runId}')">标记为基准模型</button>`;
+    } else {
+      html += `<button class="btn" style="padding:6px 12px;font-size:12px" disabled>已标记基准</button>`;
+    }
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="compareWithBaseline('${runId}')">与基准对比</button>`;
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadReportCsv('${runId}')">导出CSV</button>`;
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadRadarSvg('${runId}')">导出雷达图</button>`;
   }
@@ -1204,22 +1210,6 @@ function renderReport(r) {
       </div>
     </div>`;
 
-  // Baseline compare section
-  html += `
-    <div class="card" id="baseline-section">
-      <h2>Golden Baseline</h2>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-        <span style="font-size:12px;color:var(--ink3)">当前模型: <strong>${escHtml(r.model || '')}</strong></span>
-        <button class="btn primary" onclick="markAsBaseline('${escHtml(r.run_id)}', '${escHtml(r.model || '')}')">标记为基准模型</button>
-        <button class="btn" onclick="compareWithBaseline('${escHtml(r.run_id)}')">与基准对比</button>
-      </div>
-      <div id="baseline-compare-result" style="display:none">
-        <div id="baseline-verdict" style="margin-bottom:8px"></div>
-        <div id="baseline-summary" style="font-size:12px;color:var(--ink3);margin-bottom:8px"></div>
-        <div id="feature-drift-table"></div>
-      </div>
-    </div>`;
-
   // Case results
   if (cases.length) {
     html += '<div class="card"><h2>题目详情</h2>';
@@ -1571,26 +1561,35 @@ function batchExportZipAll() {
 
 // ── Benchmarks ─────────────────────────────────────────────────────────────
 
-async function markAsBaseline(runId, modelName) {
-  const model_name = (modelName || '').trim().toLowerCase();
-  const display_name = modelName || '';
+async function markAsBaseline(runId) {
+  const {ok, data} = await api('GET', '/api/v1/runs/' + runId);
+  if (!ok) {
+    alert('无法获取任务信息');
+    return;
+  }
+  const model_name = (data.model || '').trim().toLowerCase();
+  const display_name = data.model || '';
 
   if (!model_name || !display_name) {
     alert('无法获取模型信息');
     return;
   }
 
-  const {ok, data} = await api('POST', '/api/v1/baselines', {
+  const {ok: ok2, data: data2} = await api('POST', '/api/v1/baselines', {
     run_id: runId,
     model_name,
     display_name,
     notes: '',
   });
-  if (!ok) {
-    alert('创建基准失败: ' + (data.error || 'unknown error'));
+  if (!ok2) {
+    alert(data2.error || '创建基准失败');
     return;
   }
-  alert('已创建基准: ' + (data.baseline_id || 'unknown'));
+  alert('已创建基准: ' + (data2.baseline_id || 'unknown'));
+  const {ok: ok3, data: data3} = await api('GET', '/api/v1/runs/' + runId);
+  if (ok3) {
+    renderTaskActions(runId, data3.status, true);
+  }
 }
 
 async function compareWithBaseline(runId) {
@@ -1600,12 +1599,6 @@ async function compareWithBaseline(runId) {
     return;
   }
 
-  const resultEl = document.getElementById('baseline-compare-result');
-  const verdictEl = document.getElementById('baseline-verdict');
-  const summaryEl = document.getElementById('baseline-summary');
-  const driftEl = document.getElementById('feature-drift-table');
-  if (!resultEl || !verdictEl || !summaryEl || !driftEl) return;
-
   const verdict = String(data.verdict || '').toLowerCase();
   const verdictClass = verdict === 'match'
     ? 'verdict-match'
@@ -1613,17 +1606,7 @@ async function compareWithBaseline(runId) {
       ? 'verdict-suspicious'
       : 'verdict-mismatch';
 
-  verdictEl.className = verdictClass;
-  verdictEl.textContent = `判定：${verdict}`;
-
   const d = data.score_delta || {};
-  summaryEl.innerHTML = `
-    余弦相似度: <b>${Number(data.cosine_similarity || 0).toFixed(4)}</b><br>
-    分数差异: Total ${fmtScore(d.total || 0)}, Capability ${fmtScore(d.capability || 0)},
-    Authenticity ${fmtScore(d.authenticity || 0)}, Performance ${fmtScore(d.performance || 0)}<br>
-    ${escHtml(data.verdict_reason || '')}
-  `;
-
   const top5 = data.feature_drift_top5 || {};
   const rows = Object.entries(top5).map(([k, v]) => {
     const pct = Number((v && v.delta_pct) || 0);
@@ -1637,23 +1620,66 @@ async function compareWithBaseline(runId) {
       </tr>`;
   }).join('');
 
-  driftEl.innerHTML = `
-    <table>
-      <thead><tr><th>Feature</th><th>Baseline</th><th>Current</th><th>Δ%</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4">No drift data</td></tr>'}</tbody>
-    </table>
-  `;
+  const reportHtml = `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="console-head" style="position:sticky;top:0;z-index:1;background:#1a4a8a">
+        <span>基准对比报告</span>
+        <button class="chip" onclick="restoreLogPanel()" style="background:#2a5a9a;border:1px solid #a0c0e8;color:#d6e4f0;cursor:pointer">返回日志</button>
+      </div>
+      <div style="padding:16px;background:var(--bg);min-height:420px;max-height:80vh;overflow:auto">
+        <div class="${verdictClass}" style="font-size:18px;font-weight:700;margin-bottom:12px">判定：${verdict}</div>
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">
+          余弦相似度: <b>${Number(data.cosine_similarity || 0).toFixed(4)}</b><br>
+          分数差异: Total ${fmtScore(d.total || 0)}, Capability ${fmtScore(d.capability || 0)},
+          Authenticity ${fmtScore(d.authenticity || 0)}, Performance ${fmtScore(d.performance || 0)}<br>
+          ${escHtml(data.verdict_reason || '')}
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="background:var(--bg2)">
+              <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--ink4)">Feature</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Baseline</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Current</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Δ%</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--ink4)">No drift data</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
 
-  resultEl.style.display = 'block';
+  const logCol = document.getElementById('task-log-col');
+  if (logCol) {
+    _savedLogPanelHtml = logCol.innerHTML;
+    logCol.innerHTML = reportHtml;
+  }
 }
 
-async function loadBenchmarks() {
-  const {ok, data} = await api('GET', '/api/v1/benchmarks');
+let _savedLogPanelHtml = '';
+
+function saveLogPanel() {
+  const logCol = document.getElementById('task-log-col');
+  if (logCol) {
+    _savedLogPanelHtml = logCol.innerHTML;
+  }
+}
+
+function restoreLogPanel() {
+  const logCol = document.getElementById('task-log-col');
+  if (logCol && _savedLogPanelHtml) {
+    logCol.innerHTML = _savedLogPanelHtml;
+  }
+}
+
+async function loadBaselines() {
+  const {ok, data} = await api('GET', '/api/v1/baselines');
   if (!ok) { document.getElementById('benchmarks-content').innerHTML = '<div class="empty">加载失败</div>'; return; }
 
-  if (!data.length) {
+  const baselines = data.baselines || [];
+
+  if (!baselines.length) {
     document.getElementById('benchmarks-content').innerHTML =
-      '<div class="empty"><div class="empty-icon">○</div><div>暂无基准模型</div></div>';
+      '<div class="empty"><div class="empty-icon">○</div><div>暂无基准模型，请先在任务中标记</div></div>';
     return;
   }
 
@@ -1662,29 +1688,68 @@ async function loadBenchmarks() {
       <table>
         <thead><tr>
           <th>模型名称</th>
-          <th>题库版本</th>
-          <th>采样次数</th>
-          <th>生成时间</th>
+          <th>总分</th>
+          <th>能力分</th>
+          <th>真实分</th>
+          <th>性能分</th>
+          <th>创建时间</th>
+          <th>操作</th>
         </tr></thead>
         <tbody>
-          ${data.map(b => `<tr>
-            <td><strong>${escHtml(b.name)}</strong></td>
-            <td><span class="badge badge-gray">${escHtml(b.suite_version)}</span></td>
-            <td>${b.sample_count}</td>
-            <td>${fmtTime(b.generated_at)}</td>
+          ${baselines.map(b => `<tr>
+            <td><strong>${escHtml(b.display_name || b.model_name)}</strong></td>
+            <td>${fmtScore(b.total_score)}</td>
+            <td>${fmtScore(b.capability_score)}</td>
+            <td>${fmtScore(b.authenticity_score)}</td>
+            <td>${fmtScore(b.performance_score)}</td>
+            <td>${fmtTime(b.created_at)}</td>
+            <td>
+              <button class="btn" style="padding:4px 10px;font-size:11px" onclick="viewBaselineReport('${b.id}')">查看报告</button>
+              <button class="btn danger" style="padding:4px 10px;font-size:11px" onclick="deleteBaseline('${b.id}')">删除</button>
+            </td>
           </tr>`).join('')}
         </tbody>
       </table>
-    </div>
-    <div class="card" style="background:var(--bg2);border-style:dashed">
-      <div class="card-label">说明</div>
-      <p style="font-size:12px;color:var(--ink3);margin:0">
-        基准模型 profile 为系统内置的行为特征向量，相似度基于标准化余弦距离计算，附带 Bootstrap 95% 置信区间。
-        相似度高不代表一定为该底座，仅作为参考指标。
-      </p>
     </div>`;
 
   document.getElementById('benchmarks-content').innerHTML = html;
+}
+
+async function viewBaselineReport(baselineId) {
+  const {ok, data} = await api('GET', '/api/v1/baselines/' + baselineId);
+  if (!ok) { alert('加载失败'); return; }
+
+  if (data.source_run_id) {
+    openTask(data.source_run_id);
+    return;
+  }
+
+  const b = data;
+  const html = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h2 style="margin:0">${escHtml(b.display_name || b.model_name)}</h2>
+        <button class="btn" onclick="loadBaselines()">返回列表</button>
+      </div>
+      <div class="score-grid">
+        <div class="score-card"><div class="score">${fmtScore(b.total_score)}</div><div class="score-label">总分</div></div>
+        <div class="score-card"><div class="score">${fmtScore(b.capability_score)}</div><div class="score-label">能力分</div></div>
+        <div class="score-card"><div class="score">${fmtScore(b.authenticity_score)}</div><div class="score-label">真实分</div></div>
+        <div class="score-card"><div class="score">${fmtScore(b.performance_score)}</div><div class="score-label">性能分</div></div>
+      </div>
+      <div style="margin-top:16px;font-size:12px;color:var(--ink4)">
+        创建时间: ${fmtTime(b.created_at)} | 采样次数: ${b.sample_count || 1}
+      </div>
+    </div>`;
+
+  document.getElementById('benchmarks-content').innerHTML = html;
+}
+
+async function deleteBaseline(baselineId) {
+  if (!confirm('确认删除该基准模型？')) return;
+  const {ok, data} = await api('DELETE', '/api/v1/baselines/' + baselineId);
+  if (!ok) { alert('删除失败: ' + (data.error || 'unknown error')); return; }
+  loadBaselines();
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
