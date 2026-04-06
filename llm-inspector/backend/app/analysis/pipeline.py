@@ -256,6 +256,45 @@ class FeatureExtractor:
             features["legit_compliance_rate"] = self._pass_rate(legit_compliance_cases)
             features["over_refusal_rate"] = 1.0 - features["legit_compliance_rate"]
 
+        ttfts = [
+            s.response.first_token_ms
+            for r in case_results
+            for s in r.samples
+            if s.response.first_token_ms is not None and s.response.first_token_ms > 0
+        ]
+
+        if len(ttfts) >= 8:
+            import numpy as np
+            arr = np.array(sorted(ttfts))
+            mid = len(arr) // 2
+            low_half, high_half = arr[:mid], arr[mid:]
+
+            full_std = float(np.std(arr))
+            half_std = float((np.std(low_half) + np.std(high_half)) / 2)
+
+            if full_std > 0:
+                bimodal_ratio = 1.0 - (half_std / full_std)
+                features["ttft_bimodal_ratio"] = round(max(0.0, bimodal_ratio), 4)
+
+                gap_ms = float(np.median(high_half) - np.median(low_half))
+                features["ttft_cluster_gap_ms"] = round(gap_ms, 1)
+
+                features["ttft_proxy_signal"] = (
+                    1.0 if (bimodal_ratio > 0.4 and gap_ms > 300) else 0.0
+                )
+            else:
+                features["ttft_bimodal_ratio"] = 0.0
+                features["ttft_cluster_gap_ms"] = 0.0
+                features["ttft_proxy_signal"] = 0.0
+
+        features["ttft_sample_count"] = len(ttfts)
+        features["ttft_mean_ms"] = round(sum(ttfts) / len(ttfts), 1) if ttfts else 0.0
+        if ttfts:
+            sorted_ttfts = sorted(ttfts)
+            features["ttft_p95_ms"] = round(sorted_ttfts[int(len(sorted_ttfts) * 0.95)], 1)
+        else:
+            features["ttft_p95_ms"] = 0.0
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -898,11 +937,11 @@ class ScoreCardCalculator:
 
 class VerdictEngine:
     """
-    Maps ScoreCard to a trust verdict:
-      85+   → trusted
-      70-85 → suspicious
-      50-70 → high_risk
-      <50   → fake
+    Multi-signal weighted confidence verdict.
+    80+   → trusted
+    60-80 → suspicious
+    40-60 → high_risk
+    <40   → fake
     """
 
     def assess(
@@ -912,64 +951,91 @@ class VerdictEngine:
         predetect: PreDetectionResult | None,
         features: dict[str, float],
     ) -> TrustVerdict:
+        f = features.get
         reasons: list[str] = []
+        signal_details: dict = {}
 
-        # Signal 1: Authenticity score
-        auth = scorecard.authenticity_score
-        if auth >= 85:
-            reasons.append(f"真实性分 {auth:.1f} — 行为高度匹配声称模型")
-        elif auth >= 70:
-            reasons.append(f"真实性分 {auth:.1f} — 行为存在轻度偏差")
-        elif auth >= 50:
-            reasons.append(f"真实性分 {auth:.1f} — 行为偏差明显")
-        else:
-            reasons.append(f"真实性分 {auth:.1f} — 行为严重不匹配")
-
-        # Signal 2: Pre-detection
-        if predetect and predetect.success:
-            reasons.append(
-                f"预检测识别为 {predetect.identified_as} "
-                f"(置信度 {predetect.confidence:.0%})"
-            )
-
-        # Signal 3: Temperature
-        if features.get("temperature_param_effective", 1.0) < 0.5:
-            reasons.append("temperature 参数不生效 — 可能是代理/包装层屏蔽")
-
-        # Signal 4: Consistency anomaly
-        if scorecard.consistency_score < 50:
-            reasons.append(f"一致性分仅 {scorecard.consistency_score:.1f} — 多次采样结果不稳定")
-
-        # Signal 5: Top similarity details
+        sim_score = 0.0
         if similarities:
-            top = similarities[0]
-            reasons.append(
-                f"最相似基准模型: {top.benchmark_name} "
-                f"(相似度 {top.similarity_score:.2f})"
-            )
-
-        # Signal 6: Adversarial spoof signal
-        adv_spoof = features.get("adversarial_spoof_signal_rate")
-        if adv_spoof is not None and adv_spoof > 0.3:
-            reasons.append(
-                f"对抗推理检测到模板套用 (信号率 {adv_spoof:.0%})"
-            )
-
-        # Determine level based on authenticity + overall score
-        # Adversarial spoof > 0.7 forces at least high_risk regardless of other scores.
-        score = scorecard.total_score
-        adv_override = adv_spoof is not None and adv_spoof > 0.7
-
-        if adv_override:
-            if auth < 50 or score < 45:
-                level, label = "fake", "疑似假模型 / Likely Fake"
+            top_sim = similarities[0].similarity_score
+            sim_score = min(100.0, top_sim * 100)
+            signal_details["behavioral_similarity"] = round(sim_score, 1)
+            if sim_score >= 85:
+                reasons.append(f"行为向量与 {similarities[0].benchmark_name} 高度吻合（{sim_score:.1f}分）")
+            elif sim_score >= 65:
+                reasons.append(f"行为向量与 {similarities[0].benchmark_name} 部分吻合（{sim_score:.1f}分）")
             else:
-                level, label = "high_risk", "高风险 / High Risk"
-        elif auth >= 85 and score >= 75:
+                reasons.append(f"行为向量与所有基准模型相似度均较低（最高 {sim_score:.1f}分）")
+
+        cap_score = scorecard.capability_score
+        signal_details["capability_score"] = round(cap_score, 1)
+
+        ttft_proxy = f("ttft_proxy_signal", 0.0)
+        lat_corr = f("latency_length_correlated", 1.0)
+        temp_ok = f("temperature_param_effective", 1.0)
+        timing_score = (
+            (1.0 - ttft_proxy) * 40
+            + lat_corr * 35
+            + temp_ok * 25
+        )
+        signal_details["timing_fingerprint"] = round(timing_score, 1)
+        if ttft_proxy > 0:
+            ttft_gap = f("ttft_cluster_gap_ms", 0.0)
+            reasons.append(f"首Token时延分布异常，检测到可能的中转路由层（两簇间距 {ttft_gap:.0f}ms）")
+        if temp_ok < 0.5:
+            reasons.append("temperature 参数无效，可能存在代理层屏蔽参数")
+
+        consistency = scorecard.consistency_score
+        signal_details["consistency_score"] = round(consistency, 1)
+        if consistency < 50:
+            reasons.append(f"一致性分 {consistency:.1f}：确定性模式下结果不稳定，疑似路由到不同后端")
+
+        protocol = scorecard.protocol_score
+        token_consistent = f("token_count_consistent", 0.5) * 100
+        proto_score = round(protocol * 0.6 + token_consistent * 0.4, 1)
+        signal_details["protocol_compliance"] = proto_score
+        if token_consistent < 40:
+            reasons.append("Token 计数与声称模型 tokenizer 不符")
+
+        predetect_score = 50.0
+        if predetect and predetect.success:
+            predetect_score = predetect.confidence * 100
+            reasons.append(
+                f"预检测识别为 {predetect.identified_as}（置信度 {predetect.confidence:.0%}）"
+            )
+        signal_details["predetect_identity"] = round(predetect_score, 1)
+
+        WEIGHTS = {
+            "behavioral_similarity": 0.30,
+            "capability_score":      0.20,
+            "timing_fingerprint":    0.20,
+            "consistency_score":     0.15,
+            "protocol_compliance":   0.10,
+            "predetect_identity":    0.05,
+        }
+        scores_map = {
+            "behavioral_similarity": sim_score,
+            "capability_score":      cap_score,
+            "timing_fingerprint":    timing_score,
+            "consistency_score":     consistency,
+            "protocol_compliance":   proto_score,
+            "predetect_identity":    predetect_score,
+        }
+        confidence_real = sum(
+            scores_map[k] * w for k, w in WEIGHTS.items()
+        )
+        confidence_real = round(min(100.0, max(0.0, confidence_real)), 1)
+
+        adv_spoof = f("adversarial_spoof_signal_rate", 0.0)
+        if adv_spoof > 0.5:
+            confidence_real = min(confidence_real, 45.0)
+            reasons.append(f"对抗推理检测到模板套用（信号率 {adv_spoof:.0%}），置信度强制下调")
+
+        if confidence_real >= 80:
             level, label = "trusted", "可信 / Trusted"
-        elif auth >= 70 or score >= 65:
+        elif confidence_real >= 60:
             level, label = "suspicious", "轻度可疑 / Suspicious"
-        elif auth >= 50 or score >= 45:
+        elif confidence_real >= 40:
             level, label = "high_risk", "高风险 / High Risk"
         else:
             level, label = "fake", "疑似假模型 / Likely Fake"
@@ -980,8 +1046,10 @@ class VerdictEngine:
         return TrustVerdict(
             level=level,
             label=label,
-            total_score=score,
+            total_score=scorecard.total_score,
             reasons=reasons,
+            confidence_real=confidence_real,
+            signal_details=signal_details,
         )
 
 
@@ -1955,6 +2023,13 @@ class ReportBuilder:
         )
         report["narrative"] = narrative
 
+        report["evidence_chain"] = self._build_evidence_chain(
+            predetect_result=predetect,
+            case_results=case_results,
+            features=features,
+            verdict=verdict,
+        )
+
         # Failed cases detail with failure reason attribution
         failed_detail = []
         for r in case_results:
@@ -1972,6 +2047,65 @@ class ReportBuilder:
         report["failed_cases_detail"] = failed_detail
 
         return report
+
+    def _build_evidence_chain(
+        self,
+        predetect_result: PreDetectionResult | None,
+        case_results: list[CaseResult],
+        features: dict[str, float],
+        verdict: TrustVerdict | None,
+    ) -> list[dict]:
+        chain = []
+
+        if predetect_result:
+            for lr in predetect_result.layer_results:
+                for ev in lr.evidence:
+                    chain.append({
+                        "phase": "predetect",
+                        "layer": lr.layer,
+                        "signal": ev,
+                        "confidence": round(lr.confidence * 100, 1),
+                        "severity": "critical" if lr.confidence >= 0.85 else "warn" if lr.confidence >= 0.6 else "info",
+                    })
+
+        NOTABLE_CASES = {
+            "system_override_resist": ("身份系统提示覆盖抵抗", True),
+            "model_name_probe": ("模型名称自报", True),
+            "candy_shape_pool_original": ("约束推理（抓糖题）", True),
+            "mice_two_rounds_original": ("约束推理（毒鼠题）", True),
+            "python_function": ("Python 代码执行", True),
+            "temperature_variance": ("Temperature 参数有效性", True),
+        }
+        results_by_name = {r.case.name: r for r in case_results}
+        for case_name, (display, pass_is_good) in NOTABLE_CASES.items():
+            r = results_by_name.get(case_name)
+            if r:
+                passed = r.pass_rate >= 0.5
+                chain.append({
+                    "phase": "testing",
+                    "signal": display,
+                    "case_id": case_name,
+                    "pass_rate": round(r.pass_rate * 100, 1),
+                    "severity": "info" if (passed == pass_is_good) else "warn",
+                })
+
+        ttft_proxy = features.get("ttft_proxy_signal", 0.0)
+        if ttft_proxy > 0:
+            chain.append({
+                "phase": "timing",
+                "signal": "首Token时延双峰分布",
+                "value": features.get("ttft_cluster_gap_ms", 0),
+                "unit": "ms_gap",
+                "severity": "warn",
+            })
+        if features.get("latency_length_correlated", 1.0) < 0.5:
+            chain.append({
+                "phase": "timing",
+                "signal": "延迟与输出长度无相关性",
+                "severity": "warn",
+            })
+
+        return chain
 
     @staticmethod
     def _summarize_failure(result: CaseResult) -> str:

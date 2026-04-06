@@ -334,6 +334,11 @@ def init_db() -> None:
     """Create all tables (idempotent)."""
     conn = get_conn()
     conn.executescript(SCHEMA_SQL)
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_features_run ON extracted_features(run_id);
+        CREATE INDEX IF NOT EXISTS idx_scores_run ON score_breakdown(run_id);
+        CREATE INDEX IF NOT EXISTS idx_similarity_run ON similarity_results(run_id);
+    """)
     conn.commit()
 
 

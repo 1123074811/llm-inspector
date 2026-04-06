@@ -21,6 +21,24 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+_RETRYABLE_CODES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY_SEC = 1.0
+
+def _with_retry(fn, max_retries: int = _MAX_RETRIES):
+    last_result = None
+    for attempt in range(max_retries + 1):
+        result = fn()
+        if result.ok:
+            return result
+        if result.status_code not in _RETRYABLE_CODES:
+            return result
+        if attempt < max_retries:
+            delay = _RETRY_BASE_DELAY_SEC * (2 ** attempt)
+            time.sleep(delay)
+        last_result = result
+    return last_result
+
 # Build a permissive SSL context (some self-hosted APIs use self-signed certs)
 _SSL_CTX = ssl.create_default_context()
 
@@ -254,69 +272,76 @@ class OpenAICompatibleAdapter:
 
     def chat(self, req: LLMRequest) -> LLMResponse:
         """Synchronous non-streaming chat completion with internal caching."""
-        # 1. Check cache
         cache_key = self._get_cache_key(req)
         cached = self._get_cache(cache_key)
         if cached:
             logger.info("Cache hit for LLM request", model=req.model)
             return cached
 
-        # 2. Real API call
-        url = f"{self.base_url}/chat/completions"
-        payload = json.dumps(req.to_payload()).encode("utf-8")
-        t0 = time.monotonic()
-        try:
-            http_req = urllib.request.Request(
-                url, data=payload, headers=self._auth_headers(), method="POST"
-            )
-            with urllib.request.urlopen(
-                http_req, context=_SSL_CTX, timeout=req.timeout_sec
-            ) as resp:
-                latency = int((time.monotonic() - t0) * 1000)
-                raw_body = resp.read()
-                try:
-                    body = json.loads(raw_body.decode("utf-8"))
-                except Exception as e:
-                    return LLMResponse(
-                        error_type="parse_error",
-                        error_message=f"JSON parse error: {str(e)[:100]}. Body: {raw_body.decode('utf-8', errors='replace')[:200]}",
-                        status_code=resp.status,
-                        headers=dict(resp.headers),
-                        latency_ms=latency,
-                    )
-                parsed_resp = self._parse_response(body, resp.status,
-                                                  dict(resp.headers), latency)
-                
-                # 3. Save to cache
-                self._save_cache(cache_key, parsed_resp)
-                return parsed_resp
-
-        except urllib.error.HTTPError as e:
-            latency = int((time.monotonic() - t0) * 1000)
+        def _do():
+            url = f"{self.base_url}/chat/completions"
+            payload = json.dumps(req.to_payload()).encode("utf-8")
+            t0 = time.monotonic()
             try:
-                body = json.loads(e.read().decode())
-            except Exception:
-                body = {}
-            error_type = "rate_limit" if e.code == 429 else "http_error"
-            return LLMResponse(
-                status_code=e.code, latency_ms=latency,
-                headers=dict(e.headers),
-                error_type=error_type,
-                error_message=body.get("error", {}).get("message", e.reason)
-                if isinstance(body.get("error"), dict) else str(body)[:300],
-            )
-        except TimeoutError:
-            return LLMResponse(
-                error_type="timeout",
-                error_message=f"Timed out after {req.timeout_sec}s",
-                latency_ms=int((time.monotonic() - t0) * 1000),
-            )
-        except Exception as e:
-            return LLMResponse(
-                error_type="parse_error",
-                error_message=str(e)[:300],
-                latency_ms=int((time.monotonic() - t0) * 1000),
-            )
+                http_req = urllib.request.Request(
+                    url, data=payload, headers=self._auth_headers(), method="POST"
+                )
+                with urllib.request.urlopen(
+                    http_req, context=_SSL_CTX, timeout=req.timeout_sec
+                ) as resp:
+                    latency = int((time.monotonic() - t0) * 1000)
+                    raw_body = resp.read()
+                    try:
+                        body = json.loads(raw_body.decode("utf-8"))
+                    except Exception as e:
+                        return LLMResponse(
+                            error_type="parse_error",
+                            error_message=f"JSON parse error: {str(e)[:100]}. Body: {raw_body.decode('utf-8', errors='replace')[:200]}",
+                            status_code=resp.status,
+                            headers=dict(resp.headers),
+                            latency_ms=latency,
+                        )
+                    parsed_resp = self._parse_response(body, resp.status,
+                                                      dict(resp.headers), latency)
+                    self._save_cache(cache_key, parsed_resp)
+                    return parsed_resp
+            except urllib.error.HTTPError as e:
+                latency = int((time.monotonic() - t0) * 1000)
+                try:
+                    body = json.loads(e.read().decode())
+                except Exception:
+                    body = {}
+                error_type = "rate_limit" if e.code == 429 else "http_error"
+                return LLMResponse(
+                    status_code=e.code, latency_ms=latency,
+                    headers=dict(e.headers),
+                    error_type=error_type,
+                    error_message=body.get("error", {}).get("message", e.reason)
+                    if isinstance(body.get("error"), dict) else str(body)[:300],
+                )
+            except TimeoutError:
+                return LLMResponse(
+                    error_type="timeout",
+                    error_message=f"Timed out after {req.timeout_sec}s",
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                )
+            except Exception as e:
+                return LLMResponse(
+                    error_type="parse_error",
+                    error_message=str(e)[:300],
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                )
+
+        result = _with_retry(_do)
+        if result is not None:
+            return result
+
+        t0 = time.monotonic()
+        return LLMResponse(
+            error_type="unknown",
+            error_message="Retry loop returned None",
+            latency_ms=int((time.monotonic() - t0) * 1000),
+        )
 
     def chat_stream(self, req: LLMRequest) -> StreamCaptureResult:
         """Streaming chat — captures SSE chunks up to MAX_STREAM_CHUNKS."""

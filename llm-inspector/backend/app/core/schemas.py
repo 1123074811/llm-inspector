@@ -251,12 +251,16 @@ class TrustVerdict:
         " / Benchmark scores are based on behavioural comparison and "
         "do not constitute definitive proof."
     )
+    confidence_real: float = 0.0
+    signal_details: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "level": self.level,
             "label": self.label,
             "total_score": round(self.total_score * 100),
+            "confidence_real": self.confidence_real,
+            "signal_details": self.signal_details,
             "reasons": self.reasons,
             "disclaimer": self.disclaimer,
         }
