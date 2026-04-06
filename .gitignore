@@ -45,3 +45,9 @@ build/
 
 # Claude Code
 .claude/
+
+# Local backup files
+llm-inspector/backend/app/fixtures/benchmarks/default_profiles.json.bak
+
+# Documentation
+docs/

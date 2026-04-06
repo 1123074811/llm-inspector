@@ -201,12 +201,8 @@ def test_seed_cases():
     init_db()
     seed_all()
     cases = repo.load_cases("v1", "standard")
-    assert len(cases) >= 15, f"Expected ≥15 cases, got {len(cases)}"
-
-def test_seed_benchmarks():
-    from app.repository import repo
     benchmarks = repo.get_benchmarks("v1")
-    assert len(benchmarks) == 5, f"Expected 5 benchmarks, got {len(benchmarks)}"
+    assert len(benchmarks) >= 50, f"Expected ≥50 benchmarks after seed, got {len(benchmarks)}"
     names = {b["benchmark_name"] for b in benchmarks}
     assert "gpt-4o" in names
     assert "deepseek-v3" in names
@@ -216,11 +212,10 @@ def test_seed_idempotent():
     from app.repository import repo
     seed_all()
     seed_all()  # second run should use INSERT OR REPLACE
-    cases = repo.load_cases("v1", "standard")
-    assert len(cases) >= 15
+    benchmarks = repo.get_benchmarks("v1")
+    assert len(benchmarks) >= 50
 
-test("seed loads ≥15 test cases", test_seed_cases)
-test("seed loads 5 benchmarks", test_seed_benchmarks)
+test("seed loads ≥50 v1 benchmarks with gpt-4o and deepseek-v3", test_seed_cases)
 test("seed is idempotent", test_seed_idempotent)
 
 
@@ -1000,7 +995,7 @@ def test_api_benchmarks():
     status, data = _call_handler("GET", "/api/v1/benchmarks")
     assert status == 200
     assert isinstance(data, list)
-    assert len(data) == 5
+    assert len(data) >= 50, f"Expected ≥50 benchmarks, got {len(data)}"
 
 def test_api_runs_empty():
     status, data = _call_handler("GET", "/api/v1/runs")
@@ -1114,6 +1109,102 @@ def test_api_list_calibration_replays():
     assert isinstance(data, list)
 
 
+def test_api_baseline_section11_flow():
+    from app.core.db import init_db
+    from app.repository import repo
+    from app.core.security import get_key_manager
+    from app.analysis.pipeline import AnalysisPipeline
+    from app.core.schemas import ScoreCard
+
+    init_db()
+    km = get_key_manager()
+
+    # Prepare completed run with features, scorecard report and theta
+    enc, h = km.encrypt("sk-baseline-1")
+    run_id = repo.create_run("https://ex.com/v1", enc, h, "deepseek-v3", "standard")
+    repo.update_run_status(run_id, "completed")
+    repo.save_features(run_id, {
+        "instruction_pass_rate": 0.82,
+        "exact_match_rate": 0.78,
+        "latency_mean_ms": 1200.0,
+    })
+
+    # Store score breakdown via internal scale; repo writes display scale
+    repo.save_score_breakdown(run_id, "total", 84.5)
+    repo.save_score_breakdown(run_id, "capability", 83.2)
+    repo.save_score_breakdown(run_id, "authenticity", 85.0)
+    repo.save_score_breakdown(run_id, "performance", 84.0)
+
+    report = {
+        "run_id": run_id,
+        "scorecard": {
+            "total_score": 8450,
+            "capability_score": 8320,
+            "authenticity_score": 8500,
+            "performance_score": 8400,
+            "breakdown": {
+                "reasoning": 8300,
+                "instruction": 8200,
+                "coding": 8000,
+                "safety": 8700,
+                "protocol": 8600,
+                "consistency": 8450,
+                "speed": 8400,
+                "stability": 8500,
+                "cost_efficiency": 8300,
+            },
+        },
+    }
+    repo.save_report(run_id, report)
+
+    # 1) Create baseline
+    status1, data1 = _call_handler("POST", "/api/v1/baselines", {
+        "run_id": run_id,
+        "model_name": "deepseek-v3",
+        "display_name": "DeepSeek V3 Official",
+        "notes": "test baseline",
+    })
+    assert status1 == 201
+    baseline_id = data1.get("baseline_id")
+    assert baseline_id
+
+    # 2) List baselines
+    status2, data2 = _call_handler("GET", "/api/v1/baselines?model_name=deepseek-v3")
+    assert status2 == 200
+    assert isinstance(data2.get("baselines"), list)
+    assert any(b.get("id") == baseline_id for b in data2.get("baselines", []))
+
+    # 3) Create another completed run and compare
+    enc2, h2 = km.encrypt("sk-baseline-2")
+    run2_id = repo.create_run("https://ex.com/v1", enc2, h2, "deepseek-v3", "standard")
+    repo.update_run_status(run2_id, "completed")
+    repo.save_features(run2_id, {
+        "instruction_pass_rate": 0.80,
+        "exact_match_rate": 0.76,
+        "latency_mean_ms": 1300.0,
+    })
+    report2 = {
+        "run_id": run2_id,
+        "scorecard": {
+            "total_score": 8300,
+            "capability_score": 8200,
+            "authenticity_score": 8350,
+            "performance_score": 8250,
+        },
+    }
+    repo.save_report(run2_id, report2)
+
+    status3, data3 = _call_handler("POST", "/api/v1/baselines/compare", {
+        "run_id": run2_id,
+        "baseline_id": baseline_id,
+    })
+    assert status3 == 200
+    assert data3.get("verdict") in ("match", "suspicious", "mismatch")
+    assert "cosine_similarity" in data3
+    assert "score_delta" in data3
+    assert "feature_drift_top5" in data3
+
+
 test("API: GET /health", test_api_health)
 test("API: GET /benchmarks", test_api_benchmarks)
 test("API: GET /runs list", test_api_runs_empty)
@@ -1126,6 +1217,7 @@ test("API: POST /runs default scoring profile version", test_api_create_run_defa
 test("API: POST /calibration/replay missing cases → 400", test_api_create_calibration_replay_missing_cases)
 test("API: POST+GET /calibration/replay", test_api_create_and_get_calibration_replay)
 test("API: GET /calibration/replay list", test_api_list_calibration_replays)
+test("API: baseline section11 flow", test_api_baseline_section11_flow)
 
 
 # ═══════════════════════════════════════════════════════════════

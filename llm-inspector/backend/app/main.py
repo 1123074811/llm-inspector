@@ -16,6 +16,8 @@ from app.core.config import settings
 from app.core.db import init_db
 from app.core.logging import setup_logging, get_logger
 from app.core.security import validate_and_sanitize_url, get_key_manager
+from app.core.schemas import ScoreCard
+from app.analysis.pipeline import AnalysisPipeline
 from app.tasks.seeder import seed_all
 from app.tasks.calibration import recalibrate_and_snapshot, snapshot_calibration
 from app.tasks.worker import submit_run, submit_compare, submit_calibration_replay, submit_continue, submit_skip_testing, active_count
@@ -93,9 +95,9 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
 
     calibration_case_id = body.get("calibration_case_id")
 
-    suite_version = body.get("suite_version", "v2")
-    # Project now uses v2 suite by default for all runs
-    suite_version = "v2"
+    suite_version = body.get("suite_version", "v3")
+    # Project now uses v3 suite by default for all runs
+    suite_version = "v3"
 
     run_metadata = {
         "evaluation_mode": evaluation_mode,
@@ -289,8 +291,8 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
         return cx + r * math.cos(a), cy + r * math.sin(a)
 
     rings = []
-    for lv in [20, 40, 60, 80, 100]:
-        r = max_r * lv / 100
+    for lv in [2000, 4000, 6000, 8000, 10000]:
+        r = max_r * lv / 10000
         pts = ["{:.1f},{:.1f}".format(*p2xy(r, a)) for a in angles]
         rings.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="#ddd" stroke-width="1" />')
 
@@ -303,7 +305,7 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
         axes.append(f'<line x1="{cx}" y1="{cy}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#bbb" stroke-width="1" />')
         lx, ly = p2xy(max_r + 24, a)
         labels.append(f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="14" fill="#333" text-anchor="middle">{name}</text>')
-        r = max_r * max(0.0, min(100.0, val)) / 100
+        r = max_r * max(0.0, min(10000.0, val)) / 10000
         x, y = p2xy(r, a)
         poly_pts.append(f"{x:.1f},{y:.1f}")
         dots.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#2563eb" />')
@@ -789,6 +791,155 @@ def handle_generate_isomorphic(_path, qs, _body) -> tuple:
     })
 
 
+def handle_create_baseline(_path, _qs, body: dict) -> tuple:
+    run_id = (body.get("run_id") or "").strip()
+    model_name = (body.get("model_name") or "").strip().lower()
+    display_name = (body.get("display_name") or "").strip()
+    notes = (body.get("notes") or "").strip()
+
+    if not run_id or not model_name or not display_name:
+        return _error("Missing required field: run_id/model_name/display_name", 400)
+
+    try:
+        baseline = repo.create_baseline(
+            run_id=run_id,
+            model_name=model_name,
+            display_name=display_name,
+            notes=notes,
+        )
+    except ValueError as e:
+        return _error(str(e), 400)
+
+    return _json(
+        {
+            "baseline_id": baseline["id"],
+            "model_name": baseline["model_name"],
+            "display_name": baseline["display_name"],
+            "total_score": baseline["total_score"],
+            "created_at": baseline["created_at"],
+        },
+        201,
+    )
+
+
+def handle_list_baselines(_path, qs, _body) -> tuple:
+    model_name = (qs.get("model_name", [""])[0] or "").strip().lower() or None
+    active_only = (qs.get("active_only", ["true"])[0] or "true").lower() == "true"
+
+    baselines = repo.list_baselines(model_name=model_name, active_only=active_only)
+    return _json(
+        {
+            "baselines": [
+                {
+                    "id": b["id"],
+                    "model_name": b["model_name"],
+                    "display_name": b["display_name"],
+                    "total_score": b["total_score"],
+                    "capability_score": b["capability_score"],
+                    "authenticity_score": b["authenticity_score"],
+                    "performance_score": b["performance_score"],
+                    "sample_count": b.get("sample_count", 1),
+                    "notes": b.get("notes", ""),
+                    "created_at": b.get("created_at"),
+                }
+                for b in baselines
+            ]
+        }
+    )
+
+
+def handle_compare_baseline(_path, _qs, body: dict) -> tuple:
+    run_id = (body.get("run_id") or "").strip()
+    baseline_id = (body.get("baseline_id") or "").strip() or None
+    if not run_id:
+        return _error("Missing required field: run_id", 400)
+
+    run = repo.get_run(run_id)
+    if not run:
+        return _error("Run not found", 404)
+    if run.get("status") not in ("completed", "partial_failed"):
+        return _error("Run is not completed", 400)
+
+    features = repo.get_features(run_id)
+    report_row = repo.get_report(run_id)
+    if not report_row:
+        return _error("Report not found", 404)
+    details = report_row.get("details") or {}
+    scorecard = details.get("scorecard") or {}
+
+    current_card = ScoreCard(
+        total_score=float(scorecard.get("total_score", 0.0)) / 100.0,
+        capability_score=float(scorecard.get("capability_score", 0.0)) / 100.0,
+        authenticity_score=float(scorecard.get("authenticity_score", 0.0)) / 100.0,
+        performance_score=float(scorecard.get("performance_score", 0.0)) / 100.0,
+    )
+
+    baseline = repo.get_baseline(baseline_id) if baseline_id else None
+    if not baseline:
+        baseline = repo.get_latest_active_baseline((run.get("model_name") or "").strip().lower())
+    if not baseline:
+        return _error("No active baseline found", 404)
+
+    cmp = AnalysisPipeline.compare_with_baseline(
+        current_features=features,
+        baseline_feature_vector=baseline.get("feature_vector") or {},
+        current_card=current_card,
+        baseline_scores={
+            "total_score": float(baseline.get("total_score", 0.0)),
+            "capability_score": float(baseline.get("capability_score", 0.0)),
+            "authenticity_score": float(baseline.get("authenticity_score", 0.0)),
+            "performance_score": float(baseline.get("performance_score", 0.0)),
+        },
+    )
+
+    reason = (
+        f"余弦相似度 {cmp['cosine_similarity']:.3f}，总分偏差 {cmp['score_delta']['total']:+d}，"
+        f"判定为 {cmp['verdict']}。"
+    )
+
+    comparison_id = repo.save_baseline_comparison(
+        run_id=run_id,
+        baseline_id=baseline["id"],
+        cosine_similarity=float(cmp["cosine_similarity"]),
+        score_delta_total=float(cmp["score_delta"]["total"]) / 100.0,
+        score_delta_capability=float(cmp["score_delta"]["capability"]) / 100.0,
+        score_delta_authenticity=float(cmp["score_delta"]["authenticity"]) / 100.0,
+        score_delta_performance=float(cmp["score_delta"]["performance"]) / 100.0,
+        verdict=cmp["verdict"],
+        details={
+            "feature_drift_top5": cmp["feature_drift_top5"],
+            "score_delta": cmp["score_delta"],
+            "baseline_id": baseline["id"],
+            "baseline_model_name": baseline.get("model_name"),
+            "verdict_reason": reason,
+        },
+    )
+
+    return _json(
+        {
+            "comparison_id": comparison_id,
+            "verdict": cmp["verdict"],
+            "cosine_similarity": cmp["cosine_similarity"],
+            "score_delta": cmp["score_delta"],
+            "feature_drift_top5": cmp["feature_drift_top5"],
+            "verdict_reason": reason,
+        }
+    )
+
+
+def handle_delete_baseline(path, _qs, _body) -> tuple:
+    baseline_id = _extract_id(path, r"/api/v1/baselines/([^/]+)$")
+    if not baseline_id:
+        return _error("Invalid baseline ID", 400)
+
+    baseline = repo.get_baseline(baseline_id)
+    if not baseline:
+        return _error("Baseline not found", 404)
+
+    repo.deactivate_baseline(baseline_id)
+    return 204, b"", "application/json"
+
+
 def handle_static(path) -> tuple:
     """Serve the frontend single-page app."""
     frontend_dir = pathlib.Path(__file__).parent.parent.parent / "frontend"
@@ -891,6 +1042,10 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/runs/[^/]+/theta-report$", handle_get_theta_report),
     ("GET",    r"^/api/v1/runs/[^/]+/pairwise$",     handle_get_pairwise),
     ("GET",    r"^/api/v1/benchmarks$",              handle_benchmarks),
+    ("POST",   r"^/api/v1/baselines$",               handle_create_baseline),
+    ("GET",    r"^/api/v1/baselines$",               handle_list_baselines),
+    ("POST",   r"^/api/v1/baselines/compare$",       handle_compare_baseline),
+    ("DELETE", r"^/api/v1/baselines/[^/]+$",         handle_delete_baseline),
     ("POST",   r"^/api/v1/compare-runs$",            handle_create_compare_run),
     ("GET",    r"^/api/v1/compare-runs$",            handle_list_compare_runs),
     ("GET",    r"^/api/v1/compare-runs/[^/]+$",      handle_get_compare_run),

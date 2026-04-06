@@ -24,7 +24,17 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
     if "also_run_at" in case.params:
         return _execute_param_comparison(adapter, model_name, case)
 
+    consecutive_truncations = 0
     for i in range(case.n_samples):
+        # Early-stop: if 2+ consecutive responses were truncated, skip remaining
+        # samples — they will almost certainly truncate too, wasting tokens.
+        if consecutive_truncations >= 2:
+            logger.info(
+                "Skipping remaining samples due to consecutive truncations",
+                case_id=case.id, skipped_from=i, total=case.n_samples,
+            )
+            break
+
         messages = []
         if case.system_prompt:
             messages.append(Message("system", case.system_prompt))
@@ -57,14 +67,37 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
         if i < case.n_samples - 1:
             time.sleep(0.3)
 
-        passed, detail = judge(case.judge_method, resp.content, case.params)
+        # Detect truncated responses (finish_reason == "length")
+        truncated = resp.finish_reason == "length"
+        if truncated:
+            consecutive_truncations += 1
+            logger.warning(
+                "Response truncated (finish_reason=length)",
+                case_id=case.id, sample=i, max_tokens=case.max_tokens,
+            )
+            # Mark as failed with truncation detail — don't waste judge on
+            # incomplete text that will almost certainly miss key signals.
+            result.samples.append(SampleResult(
+                sample_index=i,
+                response=resp,
+                judge_passed=False,
+                judge_detail={
+                    "truncated": True,
+                    "reason": "response truncated (finish_reason=length), "
+                              "output incomplete — judge skipped",
+                    "max_tokens": case.max_tokens,
+                },
+            ))
+        else:
+            consecutive_truncations = 0
+            passed, detail = judge(case.judge_method, resp.content, case.params)
 
-        result.samples.append(SampleResult(
-            sample_index=i,
-            response=resp,
-            judge_passed=passed,
-            judge_detail=detail,
-        ))
+            result.samples.append(SampleResult(
+                sample_index=i,
+                response=resp,
+                judge_passed=passed,
+                judge_detail=detail,
+            ))
 
     return result
 

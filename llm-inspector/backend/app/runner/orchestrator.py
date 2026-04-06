@@ -30,6 +30,97 @@ logger = get_logger(__name__)
 
 _FIXTURES_DIR = pathlib.Path(__file__).parent.parent / "fixtures"
 
+# Model family discriminators for smart mode
+FAMILY_DISCRIMINATORS: dict[str, list[str]] = {
+    "openai": ["reason_001", "code_001"],
+    "anthropic": ["refusal_001", "reason_001"],
+    "google": ["code_001", "instr_004"],
+    "deepseek": ["reason_001", "reason_candy_001"],
+    "alibaba": ["instr_token_001", "style_004"],
+    "zhipu": ["instr_token_001", "antispoof_001"],
+    "meta": ["refusal_001", "code_001"],
+    "mistral": ["instr_004", "reason_001"],
+}
+
+
+class SmartBudget:
+    def __init__(
+        self,
+        token_budget: int,
+        phase1_size: int,
+        phase2_size: int,
+        phase3_size: int,
+        case_filter: list[str] | None,
+        description: str,
+    ):
+        self.token_budget = token_budget
+        self.phase1_size = phase1_size
+        self.phase2_size = phase2_size
+        self.phase3_size = phase3_size
+        self.case_filter = case_filter
+        self.description = description
+
+
+class SmartModeStrategy:
+    def decide_budget(self, pre_result: PreDetectionResult) -> SmartBudget:
+        conf = pre_result.confidence
+        identified = pre_result.identified_as or ""
+
+        if conf >= 0.90:
+            return SmartBudget(
+                token_budget=8_000,
+                phase1_size=6,
+                phase2_size=0,
+                phase3_size=0,
+                case_filter=self._confirmation_cases(identified),
+                description="High confidence verification mode",
+            )
+        elif conf >= 0.70:
+            return SmartBudget(
+                token_budget=15_000,
+                phase1_size=10,
+                phase2_size=4,
+                phase3_size=0,
+                case_filter=self._discriminative_cases(identified),
+                description="Targeted discrimination mode",
+            )
+        elif conf >= 0.50:
+            return SmartBudget(
+                token_budget=25_000,
+                phase1_size=12,
+                phase2_size=8,
+                phase3_size=4,
+                case_filter=None,
+                description="Standard detection mode",
+            )
+        else:
+            return SmartBudget(
+                token_budget=35_000,
+                phase1_size=14,
+                phase2_size=10,
+                phase3_size=6,
+                case_filter=None,
+                description="Full detection mode",
+            )
+
+    def _confirmation_cases(self, model_family: str) -> list[str]:
+        common = [
+            "antispoof_001", "antispoof_002",
+            "instr_001", "refusal_001",
+        ]
+        family_specific = FAMILY_DISCRIMINATORS.get(model_family.lower(), [])[:2]
+        return common + family_specific
+
+    def _discriminative_cases(self, model_family: str) -> list[str]:
+        common = [
+            "antispoof_001", "antispoof_002",
+            "instr_001", "instr_004",
+            "refusal_001", "reason_001",
+            "sys_001", "consist_001",
+        ]
+        family_specific = FAMILY_DISCRIMINATORS.get(model_family.lower(), [])[:2]
+        return common + family_specific
+
 
 # ── Token Budget Guard ─────────────────────────────────────────────────────────
 
@@ -187,6 +278,31 @@ def _case_value(c: TestCase) -> float:
     return (info_gain * max(0.2, c.weight)) / est_cost
 
 
+def _adaptive_samples(case: TestCase, mode: str) -> int:
+    judge = case.judge_method
+
+    DETERMINISTIC_JUDGES = {
+        "exact_match", "regex_match", "json_schema", "line_count",
+        "text_constraints", "tokenizer_fingerprint", "spec_contradiction_check",
+    }
+    if judge in DETERMINISTIC_JUDGES:
+        return 1
+
+    EXTRACTION_JUDGES = {
+        "prompt_leak_detect", "forbidden_word_extract", "path_leak_detect",
+        "tool_config_leak_detect", "memory_leak_detect",
+    }
+    if judge in EXTRACTION_JUDGES:
+        return 1
+
+    if mode == "quick":
+        return 1
+    elif mode == "standard":
+        return min(case.n_samples, 2)
+    else:
+        return case.n_samples
+
+
 # -- Categories that best discriminate each model family.
 # When predetect identifies a candidate, these are the test dimensions
 # that differ most between the candidate and its close alternatives.
@@ -283,20 +399,20 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
         "exact_match":          15,   # single token/word ("7", "OK", "Paris")
         "json_schema":         120,   # small JSON objects
         "line_count":          100,   # 3-5 short lines
-        "code_execution":      400,   # function definitions
-        "regex_match":         250,   # reasoning chain + numeric answer
-        "refusal_detect":      200,   # refusal + brief explanation
-        "constraint_reasoning": 500,  # multi-step reasoning with boundary proof
+        "code_execution":      300,   # function definitions (reduced from 400)
+        "regex_match":         150,   # pattern matching (reduced from 250)
+        "refusal_detect":      150,   # refusal + brief explanation (reduced from 200)
+        "constraint_reasoning": 700,  # multi-step reasoning (reduced from 1200)
         "text_constraints":    150,   # CJK char-count constrained output
-        "identity_consistency": 250,  # model identity / consistency probes
-        "heuristic_style":     350,   # style analysis, disclaimers, format
-        "any_text":            250,   # general text responses
+        "identity_consistency": 150,  # identity response (reduced from 250)
+        "heuristic_style":     250,  # style analysis (reduced from 350)
+        "any_text":            180,   # general text (reduced from 250)
         # Extraction judges — need generous limits for prompt leak content
-        "prompt_leak_detect":   2000,
+        "prompt_leak_detect":   1200, # reduced from 2000
         "forbidden_word_extract": 500,
         "path_leak_detect":     500,
-        "tool_config_leak_detect": 1000,
-        "memory_leak_detect":   1000,
+        "tool_config_leak_detect": 600, # reduced from 1000
+        "memory_leak_detect":   500,   # reduced from 1000
         "denial_pattern_detect": 200,
         "spec_contradiction_check": 50,
         "refusal_style_fingerprint": 300,
@@ -332,21 +448,9 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
         if c.id == "perf_002":
             c.max_tokens = min(c.max_tokens, settings.LONG_FORM_MAX_TOKENS_CAP)
 
-        # 2. Adaptive sampling reduction
-        # In quick/standard mode, reduce samples for deterministic instruction following
-        if test_mode in ("quick", "standard"):
-            if c.category in ("style", "protocol", "instruction", "system", "param"):
-                # If temperature is 0, one sample is usually enough for these categories
-                if getattr(c, 'temperature', 0.0) == 0.0:
-                    c.n_samples = 1
-                else:
-                    c.n_samples = min(c.n_samples, 2)
-        
-        # Quick mode is even more aggressive
-        if test_mode == "quick":
-            if c.category != "consistency":
-                c.n_samples = 1
-
+        # 2. Adaptive sampling via _adaptive_samples
+        for c in ordered:
+            c.n_samples = _adaptive_samples(c, test_mode)
 
     # In non-full modes, keep only top-2 core code execution cases.
     if test_mode != "full":
@@ -411,6 +515,9 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     if not case_results:
         return False, features_cache, sims_cache, scorecard_cache
 
+    if len(case_results) < 6:
+        return False, features_cache, sims_cache, scorecard_cache
+
     extractor = FeatureExtractor()
     features = extractor.extract(case_results)
     if not features:
@@ -428,12 +535,9 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     second = similarities[1] if len(similarities) > 1 else None
     delta = (top.similarity_score - second.similarity_score) if second else 1.0
 
-    # quick: stop on strong separation
     if test_mode == "quick":
-        # More aggressive: 0.82 similarity and 0.12 delta
-        return (top.similarity_score >= 0.82 and delta >= 0.12), features, similarities, scorecard_cache
+        return (top.similarity_score >= 0.78 and delta >= 0.10), features, similarities, scorecard_cache
 
-    # standard: compute confidence via scorecard + similarity separation
     if test_mode == "standard":
         sc = scorecard_cache
         if sc is None:
@@ -444,14 +548,15 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
                 predetect=None,
                 claimed_model=None,
             )
-        # Wider permissive boundary, lower separation requirement
-        near_boundary = abs(sc.total_score - 70.0) <= 3.0 or abs(sc.authenticity_score - 70.0) <= 4.0
-        strong_sep = top.similarity_score >= 0.88 and delta >= 0.15
-        unstable = delta < 0.05
-        # Stop when strong confidence and not near threshold boundary.
-        should_stop = strong_sep and not near_boundary and not unstable
-        return should_stop, features, similarities, sc
 
+        if top.similarity_score >= 0.85 and delta >= 0.12:
+            near_boundary = abs(sc.total_score - 70.0) <= 5.0 or abs(sc.authenticity_score - 70.0) <= 6.0
+            unstable = delta < 0.05
+            if not near_boundary and not unstable:
+                return True, features, similarities, sc
+
+        if top.similarity_score >= 0.92 and delta >= 0.08:
+            return True, features, similarities, sc
 
     return False, features, similarities, scorecard_cache
 
@@ -719,9 +824,24 @@ def run_pipeline(run_id: str) -> None:
         "quick":      settings.TOKEN_BUDGET_QUICK,
         "standard":   settings.TOKEN_BUDGET_STANDARD,
         "full":       settings.TOKEN_BUDGET_FULL,
-        "extraction": settings.TOKEN_BUDGET_FULL,  # extraction needs generous budget
+        "extraction": settings.TOKEN_BUDGET_FULL,
+        "smart":      13_000,  # Smart mode default budget
     }
-    budget_guard = TokenBudgetGuard(budget_map.get(test_mode, settings.TOKEN_BUDGET_STANDARD))
+    if test_mode == "smart" and pre_result.confidence > 0:
+        smart_strategy = SmartModeStrategy()
+        smart_budget = smart_strategy.decide_budget(pre_result)
+        budget_guard = TokenBudgetGuard(smart_budget.token_budget)
+        logger.info(
+            "Smart mode budget allocated",
+            run_id=run_id,
+            budget=smart_budget.token_budget,
+            description=smart_budget.description,
+            phase1=smart_budget.phase1_size,
+            phase2=smart_budget.phase2_size,
+            phase3=smart_budget.phase3_size,
+        )
+    else:
+        budget_guard = TokenBudgetGuard(budget_map.get(test_mode, settings.TOKEN_BUDGET_STANDARD))
     logger.info(
         "Executing test cases",
         run_id=run_id,

@@ -1141,6 +1141,29 @@ class PreDetectionPipeline:
         if r2.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r2, layer_results, total_tokens)
 
+        # Early skip decision: if Layer 0-2 already have high confidence, jump to Layer 6
+        current_conf = self._merge_confidences(layer_results)
+        if current_conf >= 0.70:
+            logger.info("PreDetect: High confidence from Layer 0-2, skipping to Layer 6", confidence=current_conf)
+            r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
+            layer_results.append(r6)
+            total_tokens += r6.tokens_used
+            if r6.confidence >= CONFIDENCE_THRESHOLD:
+                return self._build_result(True, r6, layer_results, total_tokens)
+            best = max(layer_results, key=lambda r: r.confidence)
+            merged_conf = self._merge_confidences(layer_results)
+            identified = best.identified_as if merged_conf >= 0.50 else None
+            return PreDetectionResult(
+                success=merged_conf >= 0.60,
+                identified_as=identified,
+                confidence=merged_conf,
+                layer_stopped="early_skip",
+                layer_results=layer_results,
+                total_tokens_used=total_tokens,
+                should_proceed_to_testing=merged_conf < CONFIDENCE_THRESHOLD,
+                routing_info=routing_info,
+            )
+
         # Layer 3 — Knowledge cutoff
         logger.info("PreDetect Layer3: Knowledge probes", model=model_name)
         r3 = Layer3Knowledge().run(adapter, model_name, layer3_extra)
@@ -1148,6 +1171,28 @@ class PreDetectionPipeline:
         total_tokens += r3.tokens_used
         if r3.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r3, layer_results, total_tokens)
+
+        # If Layer 0-3 merged confidence >= 0.75, skip Layer 4-5 and go to Layer 6
+        if self._merge_confidences(layer_results) >= 0.75:
+            logger.info("PreDetect: Good confidence from Layer 0-3, skipping to Layer 6", confidence=current_conf)
+            r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
+            layer_results.append(r6)
+            total_tokens += r6.tokens_used
+            if r6.confidence >= CONFIDENCE_THRESHOLD:
+                return self._build_result(True, r6, layer_results, total_tokens)
+            best = max(layer_results, key=lambda r: r.confidence)
+            merged_conf = self._merge_confidences(layer_results)
+            identified = best.identified_as if merged_conf >= 0.50 else None
+            return PreDetectionResult(
+                success=merged_conf >= 0.60,
+                identified_as=identified,
+                confidence=merged_conf,
+                layer_stopped="early_skip",
+                layer_results=layer_results,
+                total_tokens_used=total_tokens,
+                should_proceed_to_testing=merged_conf < CONFIDENCE_THRESHOLD,
+                routing_info=routing_info,
+            )
 
         # Layer 4 — Bias / format
         logger.info("PreDetect Layer4: Bias fingerprint", model=model_name)

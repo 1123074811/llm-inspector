@@ -211,6 +211,7 @@ class ScoreCard:
     consistency_score: float = 0.0
     temperature_effectiveness: float = 0.0
     usage_fingerprint_match: float = 0.0
+    behavioral_invariant_score: float = 0.0
     # Performance sub-scores
     speed_score: float = 0.0
     stability_score: float = 0.0
@@ -218,21 +219,22 @@ class ScoreCard:
 
     def to_dict(self) -> dict:
         return {
-            "total_score": round(self.total_score, 1),
-            "capability_score": round(self.capability_score, 1),
-            "authenticity_score": round(self.authenticity_score, 1),
-            "performance_score": round(self.performance_score, 1),
+            "total_score": round(self.total_score * 100),
+            "capability_score": round(self.capability_score * 100),
+            "authenticity_score": round(self.authenticity_score * 100),
+            "performance_score": round(self.performance_score * 100),
             "breakdown": {
-                "reasoning": round(self.reasoning_score, 1),
-                "adversarial_reasoning": round(self.adversarial_reasoning_score, 1),
-                "instruction": round(self.instruction_score, 1),
-                "coding": round(self.coding_score, 1),
-                "safety": round(self.safety_score, 1),
-                "protocol": round(self.protocol_score, 1),
-                "consistency": round(self.consistency_score, 1),
-                "speed": round(self.speed_score, 1),
-                "stability": round(self.stability_score, 1),
-                "cost_efficiency": round(self.cost_efficiency, 1),
+                "reasoning": round(self.reasoning_score * 100),
+                "adversarial_reasoning": round(self.adversarial_reasoning_score * 100),
+                "instruction": round(self.instruction_score * 100),
+                "coding": round(self.coding_score * 100),
+                "safety": round(self.safety_score * 100),
+                "protocol": round(self.protocol_score * 100),
+                "consistency": round(self.consistency_score * 100),
+                "speed": round(self.speed_score * 100),
+                "stability": round(self.stability_score * 100),
+                "cost_efficiency": round(self.cost_efficiency * 100),
+                "behavioral_invariant": round(self.behavioral_invariant_score, 1),
             },
         }
 
@@ -254,7 +256,7 @@ class TrustVerdict:
         return {
             "level": self.level,
             "label": self.label,
-            "total_score": round(self.total_score, 1),
+            "total_score": round(self.total_score * 100),
             "reasons": self.reasons,
             "disclaimer": self.disclaimer,
         }
@@ -264,8 +266,8 @@ class TrustVerdict:
 class SimilarityResult:
     benchmark_name: str
     similarity_score: float
-    ci_95_low: float
-    ci_95_high: float
+    ci_95_low: float | None
+    ci_95_high: float | None
     rank: int
 
 

@@ -406,13 +406,14 @@ def get_report(run_id: str) -> dict | None:
 # ── Score Breakdown ──────────────────────────────────────────────────────────
 
 def save_score_breakdown(run_id: str, dimension: str, score: float,
-                         max_score: float = 100.0, details: dict | None = None) -> None:
+                         max_score: float = 10000.0, details: dict | None = None) -> None:
     conn = get_conn()
+    display_score = round(float(score) * 100)
     conn.execute(
         """INSERT OR REPLACE INTO score_breakdown
            (id, run_id, dimension, score, max_score, details, created_at)
            VALUES (?,?,?,?,?,?,?)""",
-        (new_id(), run_id, dimension, score, max_score,
+        (new_id(), run_id, dimension, display_score, max_score,
          json_col(details) if details else None, now_iso()),
     )
     conn.commit()
@@ -491,7 +492,11 @@ def save_score_history(model_name: str, base_url: str, run_id: str,
             capability, authenticity, performance, recorded_at)
            VALUES (?,?,?,?,?,?,?,?,?)""",
         (new_id(), model_name, base_url, run_id,
-         total, capability, authenticity, performance, now_iso()),
+         round(float(total) * 100),
+         round(float(capability) * 100),
+         round(float(authenticity) * 100),
+         round(float(performance) * 100),
+         now_iso()),
     )
     conn.commit()
 
@@ -522,6 +527,188 @@ def get_leaderboard(sort_by: str = "total_score", limit: int = 50) -> list[dict]
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Golden Baselines ────────────────────────────────────────────────────────
+
+def create_baseline(run_id: str, model_name: str, display_name: str, notes: str = "") -> dict:
+    conn = get_conn()
+    run = conn.execute(
+        "SELECT id, suite_version, status FROM test_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if not run:
+        raise ValueError("run_id not found")
+    if run["status"] not in ("completed", "partial_failed"):
+        raise ValueError("run is not completed")
+
+    feature_rows = conn.execute(
+        "SELECT feature_name, feature_value FROM extracted_features WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    if not feature_rows:
+        raise ValueError("no extracted_features found for run")
+    feature_vector = {r["feature_name"]: float(r["feature_value"] or 0.0) for r in feature_rows}
+
+    score_rows = conn.execute(
+        "SELECT dimension, score FROM score_breakdown WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    score_map_display = {r["dimension"]: float(r["score"] or 0.0) for r in score_rows}
+    score_map_internal = {k: v / 100.0 for k, v in score_map_display.items()}
+
+    theta_row = conn.execute(
+        "SELECT theta_global FROM model_theta_history WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    theta = float(theta_row["theta_global"]) if theta_row and theta_row["theta_global"] is not None else None
+
+    bid = new_id()
+    ts = now_iso()
+    conn.execute(
+        """INSERT INTO golden_baselines
+           (id, model_name, display_name, source_run_id, suite_version,
+            feature_vector, total_score, capability_score, authenticity_score,
+            performance_score, score_breakdown, theta, sample_count, notes,
+            created_at, updated_at, is_active)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            bid,
+            model_name,
+            display_name,
+            run_id,
+            run["suite_version"],
+            json_col(feature_vector),
+            score_map_internal.get("total", 0.0),
+            score_map_internal.get("capability", 0.0),
+            score_map_internal.get("authenticity", 0.0),
+            score_map_internal.get("performance", 0.0),
+            json_col(score_map_internal),
+            theta,
+            1,
+            notes,
+            ts,
+            ts,
+            1,
+        ),
+    )
+    conn.commit()
+    return {
+        "id": bid,
+        "model_name": model_name,
+        "display_name": display_name,
+        "total_score": round(score_map_internal.get("total", 0.0) * 100),
+        "capability_score": round(score_map_internal.get("capability", 0.0) * 100),
+        "authenticity_score": round(score_map_internal.get("authenticity", 0.0) * 100),
+        "performance_score": round(score_map_internal.get("performance", 0.0) * 100),
+        "sample_count": 1,
+        "notes": notes,
+        "created_at": ts,
+    }
+
+
+def list_baselines(model_name: str | None = None, active_only: bool = True) -> list[dict]:
+    conn = get_conn()
+    where = []
+    vals: list = []
+    if model_name:
+        where.append("model_name=?")
+        vals.append(model_name)
+    if active_only:
+        where.append("is_active=1")
+    sql = "SELECT * FROM golden_baselines"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC"
+    rows = conn.execute(sql, tuple(vals)).fetchall()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["feature_vector"] = from_json_col(d.get("feature_vector")) or {}
+        d["score_breakdown"] = from_json_col(d.get("score_breakdown")) or {}
+        d["total_score"] = round(float(d.get("total_score", 0.0)) * 100)
+        d["capability_score"] = round(float(d.get("capability_score", 0.0)) * 100)
+        d["authenticity_score"] = round(float(d.get("authenticity_score", 0.0)) * 100)
+        d["performance_score"] = round(float(d.get("performance_score", 0.0)) * 100)
+        out.append(d)
+    return out
+
+
+def get_baseline(baseline_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM golden_baselines WHERE id=?", (baseline_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["feature_vector"] = from_json_col(d.get("feature_vector")) or {}
+    d["score_breakdown"] = from_json_col(d.get("score_breakdown")) or {}
+    return d
+
+
+def get_latest_active_baseline(model_name: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT * FROM golden_baselines
+           WHERE model_name=? AND is_active=1
+           ORDER BY created_at DESC LIMIT 1""",
+        (model_name,),
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["feature_vector"] = from_json_col(d.get("feature_vector")) or {}
+    d["score_breakdown"] = from_json_col(d.get("score_breakdown")) or {}
+    return d
+
+
+def deactivate_baseline(baseline_id: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE golden_baselines SET is_active=0, updated_at=? WHERE id=?",
+        (now_iso(), baseline_id),
+    )
+    conn.commit()
+
+
+def save_baseline_comparison(
+    run_id: str,
+    baseline_id: str,
+    cosine_similarity: float,
+    score_delta_total: float,
+    score_delta_capability: float,
+    score_delta_authenticity: float,
+    score_delta_performance: float,
+    verdict: str,
+    details: dict,
+    p_value: float | None = None,
+) -> str:
+    cid = new_id()
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO baseline_comparisons
+           (id, run_id, baseline_id, cosine_similarity,
+            score_delta_total, score_delta_capability,
+            score_delta_authenticity, score_delta_performance,
+            verdict, p_value, details, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            cid,
+            run_id,
+            baseline_id,
+            cosine_similarity,
+            score_delta_total,
+            score_delta_capability,
+            score_delta_authenticity,
+            score_delta_performance,
+            verdict,
+            p_value,
+            json_col(details),
+            now_iso(),
+        ),
+    )
+    conn.commit()
+    return cid
 
 
 # ── Item bank / IRT stats / Theta history / Pairwise ───────────────────────

@@ -76,7 +76,7 @@ h3{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px}
 /* SCORE CARDS */
 .score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
 .score-card{background:var(--bg2);border-radius:var(--radius);padding:16px;text-align:center}
-.score-card .score{font-family:var(--mono);font-size:26px;font-weight:300;color:var(--ink)}
+.score-card .score{font-family:var(--mono);font-size:26px;font-weight:300;color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums}
 .score-card .score-label{font-size:11px;color:var(--ink4);margin-top:4px;line-height:1.3}
 
 /* PROGRESS BAR */
@@ -166,6 +166,12 @@ tr:nth-child(even) td{background:var(--bg)}
 /* PROCESS EXPERIENCE */
 .hero-glow{position:fixed;inset:-20% -10% auto -10%;height:280px;background:radial-gradient(ellipse at 30% 20%,rgba(200,64,26,.12),transparent 60%),radial-gradient(ellipse at 70% 30%,rgba(26,74,138,.10),transparent 65%);pointer-events:none;z-index:0;filter:blur(20px)}
 body>*{position:relative;z-index:1}
+
+.verdict-match       { color: #16a34a; font-weight: bold; font-size: 1.2em; }
+.verdict-suspicious  { color: #d97706; font-weight: bold; font-size: 1.2em; }
+.verdict-mismatch    { color: #dc2626; font-weight: bold; font-size: 1.2em; }
+.drift-high          { background: #fef2f2; }
+.drift-low           { background: #f0fdf4; }
 
 .stage-card{background:linear-gradient(180deg,#fff,#f9f7f2);border:1px solid var(--rule);border-radius:12px;padding:16px 18px;margin-bottom:14px}
 .stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
@@ -1110,21 +1116,21 @@ function renderReport(r) {
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
           <div class="score-card" style="text-align:left">
             <div class="card-label">能力细分</div>
-            <div style="font-size:12px;color:var(--ink3)">推理能力: ${Math.round(b.reasoning||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">指令遵循: ${Math.round(b.instruction||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">编程能力: ${Math.round(b.coding||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">安全性: ${Math.round(b.safety||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">协议兼容: ${Math.round(b.protocol||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">推理能力: ${fmtScore(b.reasoning||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">指令遵循: ${fmtScore(b.instruction||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">编程能力: ${fmtScore(b.coding||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">安全性: ${fmtScore(b.safety||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">协议兼容: ${fmtScore(b.protocol||0)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">真实性信号</div>
-            <div style="font-size:12px;color:var(--ink3)">一致性: ${Math.round(b.consistency||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">一致性: ${fmtScore(b.consistency||0)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">性能信号</div>
-            <div style="font-size:12px;color:var(--ink3)">响应速度: ${Math.round(b.speed||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">稳定性: ${Math.round(b.stability||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">成本效率: ${Math.round(b.cost_efficiency||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">响应速度: ${fmtScore(b.speed||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">稳定性: ${fmtScore(b.stability||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">成本效率: ${fmtScore(b.cost_efficiency||0)}</div>
           </div>
         </div>
       </div>`;
@@ -1173,8 +1179,8 @@ function renderReport(r) {
                 <div class="sim-bar" style="width:${pct}%;background:${barColor}"></div>
                 <div class="sim-ci" style="left:${ciLo}%;width:${Math.max(1, ciHi-ciLo)}%;background:${barColor}"></div>
               </div>
-              <div class="sim-score">${pct}%</div>
-              <div style="font-size:10px;color:var(--ink4);min-width:80px">[${ciLo}–${ciHi}%]</div>
+              <div class="sim-score">${fmtScore(pct)}%</div>
+              <div style="font-size:10px;color:var(--ink4);min-width:80px">[${fmtScore(ciLo)}–${fmtScore(ciHi)}%]</div>
             </div>`;
         }).join('')}
         <div style="font-size:11px;color:var(--ink4);margin-top:8px">[ ] 为 95% 置信区间</div>
@@ -1198,6 +1204,22 @@ function renderReport(r) {
       </div>
     </div>`;
 
+  // Baseline compare section
+  html += `
+    <div class="card" id="baseline-section">
+      <h2>Golden Baseline</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <span style="font-size:12px;color:var(--ink3)">当前模型: <strong>${escHtml(r.model || '')}</strong></span>
+        <button class="btn primary" onclick="markAsBaseline('${escHtml(r.run_id)}', '${escHtml(r.model || '')}')">标记为基准模型</button>
+        <button class="btn" onclick="compareWithBaseline('${escHtml(r.run_id)}')">与基准对比</button>
+      </div>
+      <div id="baseline-compare-result" style="display:none">
+        <div id="baseline-verdict" style="margin-bottom:8px"></div>
+        <div id="baseline-summary" style="font-size:12px;color:var(--ink3);margin-bottom:8px"></div>
+        <div id="feature-drift-table"></div>
+      </div>
+    </div>`;
+
   // Case results
   if (cases.length) {
     html += '<div class="card"><h2>题目详情</h2>';
@@ -1215,7 +1237,9 @@ function renderReport(r) {
 }
 
 function scoreCard(val, label) {
-  const v = val != null ? (typeof val === 'number' ? Math.round(val) : val) : '–';
+  const v = val != null
+    ? (typeof val === 'number' ? fmtScore(val) : val)
+    : '–';
   return `<div class="score-card"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
 }
 
@@ -1547,6 +1571,82 @@ function batchExportZipAll() {
 
 // ── Benchmarks ─────────────────────────────────────────────────────────────
 
+async function markAsBaseline(runId, modelName) {
+  const model_name = (modelName || '').trim().toLowerCase();
+  const display_name = modelName || '';
+
+  if (!model_name || !display_name) {
+    alert('无法获取模型信息');
+    return;
+  }
+
+  const {ok, data} = await api('POST', '/api/v1/baselines', {
+    run_id: runId,
+    model_name,
+    display_name,
+    notes: '',
+  });
+  if (!ok) {
+    alert('创建基准失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+  alert('已创建基准: ' + (data.baseline_id || 'unknown'));
+}
+
+async function compareWithBaseline(runId) {
+  const {ok, data} = await api('POST', '/api/v1/baselines/compare', { run_id: runId });
+  if (!ok) {
+    alert('基准对比失败: ' + (data.error || 'unknown error'));
+    return;
+  }
+
+  const resultEl = document.getElementById('baseline-compare-result');
+  const verdictEl = document.getElementById('baseline-verdict');
+  const summaryEl = document.getElementById('baseline-summary');
+  const driftEl = document.getElementById('feature-drift-table');
+  if (!resultEl || !verdictEl || !summaryEl || !driftEl) return;
+
+  const verdict = String(data.verdict || '').toLowerCase();
+  const verdictClass = verdict === 'match'
+    ? 'verdict-match'
+    : verdict === 'suspicious'
+      ? 'verdict-suspicious'
+      : 'verdict-mismatch';
+
+  verdictEl.className = verdictClass;
+  verdictEl.textContent = `判定：${verdict}`;
+
+  const d = data.score_delta || {};
+  summaryEl.innerHTML = `
+    余弦相似度: <b>${Number(data.cosine_similarity || 0).toFixed(4)}</b><br>
+    分数差异: Total ${fmtScore(d.total || 0)}, Capability ${fmtScore(d.capability || 0)},
+    Authenticity ${fmtScore(d.authenticity || 0)}, Performance ${fmtScore(d.performance || 0)}<br>
+    ${escHtml(data.verdict_reason || '')}
+  `;
+
+  const top5 = data.feature_drift_top5 || {};
+  const rows = Object.entries(top5).map(([k, v]) => {
+    const pct = Number((v && v.delta_pct) || 0);
+    const cls = Math.abs(pct) > 20 ? 'drift-high' : 'drift-low';
+    return `
+      <tr class="${cls}">
+        <td>${escHtml(k)}</td>
+        <td>${Number((v && v.baseline) || 0).toFixed(4)}</td>
+        <td>${Number((v && v.current) || 0).toFixed(4)}</td>
+        <td>${pct.toFixed(2)}%</td>
+      </tr>`;
+  }).join('');
+
+  driftEl.innerHTML = `
+    <table>
+      <thead><tr><th>Feature</th><th>Baseline</th><th>Current</th><th>Δ%</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4">No drift data</td></tr>'}</tbody>
+    </table>
+  `;
+
+  resultEl.style.display = 'block';
+}
+
 async function loadBenchmarks() {
   const {ok, data} = await api('GET', '/api/v1/benchmarks');
   if (!ok) { document.getElementById('benchmarks-content').innerHTML = '<div class="empty">加载失败</div>'; return; }
@@ -1593,6 +1693,10 @@ function escHtml(s) {
   return String(s||'')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function fmtScore(v) {
+  return Math.round(Number(v || 0)).toLocaleString('en-US');
 }
 
 function fmtTime(iso) {

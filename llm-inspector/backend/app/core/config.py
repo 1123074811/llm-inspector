@@ -71,10 +71,19 @@ class Settings:
     # Theta / relative scale
     THETA_METHOD: str = os.getenv("THETA_METHOD", "rasch_1pl")
     THETA_BOOTSTRAP_B: int = int(os.getenv("THETA_BOOTSTRAP_B", "200"))
-    THETA_CI_STOP_WIDTH: float = float(os.getenv("THETA_CI_STOP_WIDTH", "0.35"))
+    THETA_BOOTSTRAP_B_MIN: int = int(os.getenv("THETA_BOOTSTRAP_B_MIN", "50"))
+    THETA_CI_STOP_WIDTH: float = float(os.getenv("THETA_CI_STOP_WIDTH", "0.25"))
     THETA_DELTA_STOP: float = float(os.getenv("THETA_DELTA_STOP", "0.45"))
     THETA_SCALE_FOR_WIN_PROB: float = float(os.getenv("THETA_SCALE_FOR_WIN_PROB", "0.6"))
     CALIBRATION_VERSION: str = os.getenv("CALIBRATION_VERSION", "v1")
+
+    # Golden baseline compare thresholds (display-score units)
+    BASELINE_MATCH_COSINE_THRESHOLD: float = float(
+        os.getenv("BASELINE_MATCH_COSINE_THRESHOLD", "0.95")
+    )
+    BASELINE_MATCH_SCORE_DELTA_MAX: int = int(
+        os.getenv("BASELINE_MATCH_SCORE_DELTA_MAX", "500")
+    )
 
     def _ensure_encryption_key(self) -> bytes:
         """Return 32-byte AES key, auto-generating one if not set."""

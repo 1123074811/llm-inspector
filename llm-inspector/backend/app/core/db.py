@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS score_breakdown (
     run_id      TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
     dimension   TEXT NOT NULL,
     score       REAL NOT NULL,
-    max_score   REAL NOT NULL DEFAULT 100.0,
+    max_score   REAL NOT NULL DEFAULT 10000.0,
     details     TEXT,
     created_at  TEXT NOT NULL,
     UNIQUE(run_id, dimension)
@@ -201,6 +201,45 @@ CREATE TABLE IF NOT EXISTS model_scores_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scores_model ON model_scores_history(model_name, recorded_at);
+
+CREATE TABLE IF NOT EXISTS golden_baselines (
+    id                  TEXT PRIMARY KEY,
+    model_name          TEXT NOT NULL,
+    display_name        TEXT NOT NULL,
+    source_run_id       TEXT NOT NULL REFERENCES test_runs(id) ON DELETE RESTRICT,
+    suite_version       TEXT NOT NULL,
+    feature_vector      TEXT NOT NULL,
+    total_score         REAL NOT NULL,
+    capability_score    REAL NOT NULL,
+    authenticity_score  REAL NOT NULL,
+    performance_score   REAL NOT NULL,
+    score_breakdown     TEXT NOT NULL,
+    theta               REAL,
+    sample_count        INTEGER NOT NULL DEFAULT 1,
+    notes               TEXT DEFAULT '',
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    is_active           INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_golden_baselines_model ON golden_baselines(model_name, is_active);
+
+CREATE TABLE IF NOT EXISTS baseline_comparisons (
+    id                        TEXT PRIMARY KEY,
+    run_id                    TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    baseline_id               TEXT NOT NULL REFERENCES golden_baselines(id),
+    cosine_similarity         REAL NOT NULL,
+    score_delta_total         REAL NOT NULL,
+    score_delta_capability    REAL NOT NULL,
+    score_delta_authenticity  REAL NOT NULL,
+    score_delta_performance   REAL NOT NULL,
+    verdict                   TEXT NOT NULL,
+    p_value                   REAL,
+    details                   TEXT NOT NULL,
+    created_at                TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_baseline_comparisons_run ON baseline_comparisons(run_id);
 
 CREATE TABLE IF NOT EXISTS item_bank (
     item_id          TEXT PRIMARY KEY,
