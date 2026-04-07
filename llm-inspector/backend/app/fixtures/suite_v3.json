@@ -441,7 +441,8 @@
           "mode_level": "quick"
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.25
     },
     {
       "id": "reason_004",
@@ -476,7 +477,8 @@
           "mode_level": "standard"
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.38
     },
     {
       "id": "reason_candy_001",
@@ -520,7 +522,8 @@
           "mode_level": "quick"
         }
       },
-      "weight": 3.0
+      "weight": 3.0,
+      "difficulty": 0.62
     },
     {
       "id": "reason_candy_iso_007",
@@ -564,7 +567,8 @@
           "mode_level": "standard"
         }
       },
-      "weight": 2.4
+      "weight": 2.4,
+      "difficulty": 0.62
     },
     {
       "id": "reason_rope_iso_007",
@@ -606,7 +610,8 @@
           "mode_level": "standard"
         }
       },
-      "weight": 2.4
+      "weight": 2.4,
+      "difficulty": 0.68
     },
     {
       "id": "reason_mice_iso_007",
@@ -649,7 +654,8 @@
           "mode_level": "deep"
         }
       },
-      "weight": 2.4
+      "weight": 2.4,
+      "difficulty": 0.72
     },
     {
       "id": "code_001",
@@ -704,7 +710,8 @@
           "mode_level": "quick"
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.28
     },
     {
       "id": "code_002",
@@ -738,7 +745,8 @@
           "mode_level": "standard"
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.48
     },
     {
       "id": "code_003",
@@ -765,7 +773,8 @@
           "mode_level": "standard"
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.32
     },
     {
       "id": "consist_001",
@@ -1531,7 +1540,8 @@
           "difficulty": 0.5
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.42
     },
     {
       "id": "reason_multistep_002",
@@ -1562,7 +1572,8 @@
           "difficulty": 0.7
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.58
     },
     {
       "id": "reason_multistep_003",
@@ -1593,7 +1604,8 @@
           "difficulty": 0.9
         }
       },
-      "weight": 3.0
+      "weight": 3.0,
+      "difficulty": 0.78
     },
     {
       "id": "reason_spatial_001",
@@ -1614,7 +1626,8 @@
           "difficulty": 0.6
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.52
     },
     {
       "id": "reason_causal_001",
@@ -1641,7 +1654,8 @@
           "difficulty": 0.5
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.48
     },
     {
       "id": "reason_trap_002",
@@ -1667,7 +1681,8 @@
           "difficulty": 0.6
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.68
     },
     {
       "id": "code_debug_001",
@@ -1706,7 +1721,8 @@
           "difficulty": 0.5
         }
       },
-      "weight": 2.5
+      "weight": 2.5,
+      "difficulty": 0.58
     },
     {
       "id": "code_refactor_001",
@@ -1745,7 +1761,8 @@
           "difficulty": 0.6
         }
       },
-      "weight": 2.0
+      "weight": 2.0,
+      "difficulty": 0.52
     },
     {
       "id": "code_algo_001",
@@ -1784,7 +1801,8 @@
           "difficulty": 0.7
         }
       },
-      "weight": 3.0
+      "weight": 3.0,
+      "difficulty": 0.82
     },
     {
       "id": "instr_nested_001",
@@ -2046,6 +2064,158 @@
         }
       },
       "weight": 2.8
+    },
+    {
+      "id": "reason_syllogism_trap",
+      "name": "syllogism_trap_test",
+      "suite_version": "v3",
+      "category": "reasoning",
+      "dimension": "adversarial_reasoning",
+      "difficulty": 0.72,
+      "weight": 3.0,
+      "n_samples": 2,
+      "temperature": 0.0,
+      "max_tokens": 80,
+      "judge_method": "constraint_reasoning",
+      "user_prompt": "All mammals are warm-blooded. All whales are mammals. Are all warm-blooded animals whales? Answer only YES or NO, then explain in one sentence why.",
+      "judge_rubric": {
+        "required_answer": "NO",
+        "required_patterns": [
+          "affirming the consequent",
+          "not necessarily",
+          "converse",
+          "fallacy"
+        ],
+        "failure_patterns": [
+          "YES",
+          "therefore all warm-blooded",
+          "so all warm-blooded"
+        ],
+        "anti_pattern_label": "affirming_consequent_error"
+      },
+      "params": {
+        "_meta": {
+          "paired_with": null,
+          "spoof_detection": {
+            "check_anti_patterns": true
+          }
+        }
+      },
+      "tags": [
+        "logic",
+        "fallacy",
+        "adversarial"
+      ],
+      "note": "Tests whether model correctly rejects the fallacy of affirming the consequent. Weak/template models often answer YES."
+    },
+    {
+      "id": "code_complexity_estimate",
+      "name": "code_complexity_estimation",
+      "suite_version": "v3",
+      "category": "coding",
+      "difficulty": 0.68,
+      "weight": 3.0,
+      "n_samples": 1,
+      "temperature": 0.0,
+      "max_tokens": 30,
+      "judge_method": "exact_match",
+      "user_prompt": "What is the time complexity of this function?\n\n```python\ndef foo(n):\n    i = 1\n    while i < n:\n        i *= 2\n    return i\n```\n\nAnswer with only the Big-O notation, e.g. O(n) or O(log n).",
+      "judge_rubric": {
+        "expected": "O(log n)",
+        "case_insensitive": true,
+        "strip_whitespace": true,
+        "accept_variants": [
+          "O(logn)",
+          "O(log(n))",
+          "Θ(log n)"
+        ]
+      },
+      "tags": [
+        "algorithm",
+        "complexity",
+        "precise"
+      ],
+      "note": "O(log n) is unambiguous. GPT-3.5/small models often answer O(n). High discriminating power."
+    },
+    {
+      "id": "reason_counterfactual_001",
+      "name": "counterfactual_conditional",
+      "suite_version": "v3",
+      "category": "reasoning",
+      "difficulty": 0.58,
+      "weight": 2.5,
+      "n_samples": 2,
+      "temperature": 0.0,
+      "max_tokens": 60,
+      "judge_method": "semantic_judge",
+      "user_prompt": "If I had started saving $100/month at age 20 instead of age 30, and both scenarios earn 7% annual return, approximately how much MORE money would I have at age 65? Use compound interest logic, give a rough order-of-magnitude estimate.",
+      "judge_rubric": {
+        "key_concepts": [
+          "compound interest",
+          "longer time horizon",
+          "significantly more",
+          "exponential"
+        ],
+        "expected_magnitude": "hundreds of thousands",
+        "wrong_answers": [
+          "about the same",
+          "roughly equal",
+          "not much difference"
+        ],
+        "min_keyword_coverage": 0.4
+      },
+      "tags": [
+        "math",
+        "finance",
+        "counterfactual"
+      ],
+      "note": "Tests understanding of compound interest exponential growth. Weak models give linear estimates."
+    },
+    {
+      "id": "instr_format_strict_001",
+      "name": "strict_format_json_schema",
+      "suite_version": "v3",
+      "category": "instruction",
+      "difficulty": 0.42,
+      "weight": 2.0,
+      "n_samples": 3,
+      "temperature": 0.0,
+      "max_tokens": 80,
+      "judge_method": "json_schema",
+      "user_prompt": "Output a JSON object with exactly these fields: {\"name\": string, \"age\": integer, \"active\": boolean}. Use these values: name is Alice, age is 30, active is true. Output ONLY the JSON object, no other text.",
+      "judge_rubric": {
+        "required_schema": {
+          "type": "object",
+          "required": [
+            "name",
+            "age",
+            "active"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "age": {
+              "type": "integer"
+            },
+            "active": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "exact_values": {
+          "name": "Alice",
+          "age": 30,
+          "active": true
+        }
+      },
+      "tags": [
+        "json",
+        "strict",
+        "format"
+      ],
+      "note": "3-sample determinism test. Real models at temp=0 always output identical valid JSON. Proxy/cached models may vary."
     }
   ]
 }

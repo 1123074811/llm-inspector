@@ -330,14 +330,18 @@ def get_features(run_id: str) -> dict[str, float]:
 def get_benchmarks(suite_version: str = "v1") -> list[dict]:
     """
     Load benchmark profiles for similarity comparison.
-    Only uses golden_baselines (real measured data marked by user).
+    Priority:
+      1. golden_baselines table (real measured data marked by user) — always preferred
+      2. default_profiles.json (BenchmarkCollector output, data_source="measured") — fallback only
     """
     conn = get_conn()
     rows = conn.execute(
         "SELECT * FROM golden_baselines WHERE is_active=1 ORDER BY created_at DESC"
     ).fetchall()
+
     result: list[dict] = []
     seen_names: set[str] = set()
+
     for row in rows:
         d = dict(row)
         name = d.get("model_name", "")
@@ -352,7 +356,52 @@ def get_benchmarks(suite_version: str = "v1") -> list[dict]:
             "data_source": "measured",
             "sample_count": d.get("sample_count", 1),
         })
+
+    # ── Fallback: load from default_profiles.json when golden_baselines is empty ──
+    if not result:
+        result = _load_seed_profiles(suite_version, exclude_names=seen_names)
+
     return result
+
+
+def _load_seed_profiles(suite_version: str, exclude_names: set[str]) -> list[dict]:
+    """
+    Load measured profiles from default_profiles.json as a bootstrap fallback.
+    Only returns profiles with data_source="measured" to avoid polluting
+    similarity scores with estimated values.
+    """
+    import json as _json
+    import pathlib as _pathlib
+
+    profiles_path = (
+        _pathlib.Path(__file__).parent.parent
+        / "fixtures" / "benchmarks" / "default_profiles.json"
+    )
+    if not profiles_path.exists():
+        return []
+
+    try:
+        data = _json.loads(profiles_path.read_text(encoding="utf-8"))
+    except (_json.JSONDecodeError, OSError):
+        return []
+
+    out = []
+    for p in data.get("benchmarks", []):
+        name = p.get("name") or p.get("benchmark_name", "")
+        if not name or name in exclude_names:
+            continue
+        # Only use actually measured profiles, skip estimated ones
+        if p.get("data_source") != "measured":
+            continue
+        out.append({
+            "benchmark_name": name,
+            "name": p.get("display_name", name),
+            "suite_version": p.get("suite_version", suite_version),
+            "feature_vector": p.get("feature_vector", {}),
+            "data_source": "measured_seed",
+            "sample_count": p.get("sample_count", 1),
+        })
+    return out
 
 
 # ── Similarity Results ────────────────────────────────────────────────────────

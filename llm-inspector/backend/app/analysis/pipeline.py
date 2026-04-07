@@ -1491,6 +1491,14 @@ class SimilarityEngine:
             elif key == "latency_mean_ms":
                 # Normalize latency: 0-5000ms range, inverted (lower is 1.0)
                 val = 1.0 - (val / 5000.0)
+            elif key == "tokens_per_second":
+                val = val / 200.0        # 200 TPS → 1.0
+            elif key == "refusal_verbosity":
+                val = val / 200.0        # 200 chars → 1.0
+            elif key == "avg_sentence_count":
+                val = val / 15.0         # 15句 → 1.0
+            elif key == "avg_words_per_sentence":
+                val = val / 30.0         # 30词/句 → 1.0
 
             # Clamp to [0,1]
             vec.append(max(0.0, min(1.0, float(val))))

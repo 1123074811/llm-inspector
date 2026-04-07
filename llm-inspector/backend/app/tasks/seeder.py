@@ -18,9 +18,26 @@ def seed_all() -> None:
     _seed_test_cases()
 
 
+def _difficulty_to_irt_b(difficulty: float | None) -> float:
+    """
+    Convert case difficulty (0-1 probability of failure) to IRT b parameter.
+    
+    difficulty=0.5 → b=0.0   (50% of models fail = medium difficulty)
+    difficulty=0.9 → b=2.20  (90% fail = very hard)
+    difficulty=0.3 → b=-0.85 (30% fail = relatively easy)
+    
+    Uses logit transform: b = log(d / (1-d)), clamped to [-3, 3].
+    """
+    if difficulty is None:
+        return 0.0
+    import math as _math
+    d = max(0.05, min(0.95, float(difficulty)))  # avoid log(0)
+    return round(max(-3.0, min(3.0, _math.log(d / (1.0 - d)))), 4)
+
+
 def _seed_test_cases() -> None:
     total = 0
-    for suite_file in ("suite_v1.json", "suite_v2.json", "suite_v3.json", "suite_extraction.json", "suite_v1.js"):
+    for suite_file in ("suite_v3.json", "suite_v2.json", "suite_v1.json", "suite_extraction.json", "suite_v1.js"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             continue
@@ -58,7 +75,7 @@ def _seed_test_cases() -> None:
                         item_id=case["id"],
                         dimension=dimension,
                         a=1.0,
-                        b=0.0,
+                        b=_difficulty_to_irt_b(case.get("difficulty")),  # Use difficulty from JSON
                         c=None,
                         info_score=info_gain_prior,
                         sample_size=0,
