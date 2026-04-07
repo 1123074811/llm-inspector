@@ -93,6 +93,20 @@ class Settings:
         os.getenv("BASELINE_MATCH_SCORE_DELTA_MAX", "500")
     )
 
+    # Production hardening
+    MAX_CONCURRENT_RUNS: int = int(os.getenv("MAX_CONCURRENT_RUNS", "5"))
+    MAX_REQUEST_RETRIES: int = int(os.getenv("MAX_REQUEST_RETRIES", "3"))
+    RATE_LIMIT_RPM: int = int(os.getenv("RATE_LIMIT_RPM", "60"))
+
+    # Verdict engine overrides (JSON string of threshold overrides)
+    VERDICT_TRUSTED_THRESHOLD: int = int(os.getenv("VERDICT_TRUSTED_THRESHOLD", "80"))
+    VERDICT_SUSPICIOUS_THRESHOLD: int = int(os.getenv("VERDICT_SUSPICIOUS_THRESHOLD", "60"))
+    VERDICT_HIGH_RISK_THRESHOLD: int = int(os.getenv("VERDICT_HIGH_RISK_THRESHOLD", "40"))
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.lower() in ("production", "prod")
+
     def _ensure_encryption_key(self) -> bytes:
         """Return 32-byte AES key, auto-generating one if not set."""
         import base64, secrets

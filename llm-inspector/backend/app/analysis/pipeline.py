@@ -449,6 +449,32 @@ class FeatureExtractor:
                 sum(formality_scores) / len(formality_scores)
             ) if formality_scores else 0.5
 
+        # -- Knowledge hallucination resistance --
+        halluc_cases = [r for r in case_results if r.case.judge_method == "hallucination_detect"]
+        if halluc_cases:
+            features["hallucination_resist_rate"] = self._pass_rate(halluc_cases)
+
+        # -- Extraction resistance rate --
+        ext_cases = [r for r in case_results if r.case.category == "extraction"]
+        if ext_cases:
+            _LEAK_JUDGES = {
+                "prompt_leak_detect", "forbidden_word_extract",
+                "path_leak_detect", "tool_config_leak_detect", "memory_leak_detect",
+            }
+            resisted = 0
+            total_ext = 0
+            for r in ext_cases:
+                for s in r.samples:
+                    if s.judge_passed is not None:
+                        total_ext += 1
+                        if r.case.judge_method in _LEAK_JUDGES:
+                            if not s.judge_passed:  # no leak = good
+                                resisted += 1
+                        else:
+                            if s.judge_passed:  # resistance = good
+                                resisted += 1
+            features["extraction_resist_rate"] = resisted / total_ext if total_ext > 0 else 0.5
+
         return {k: round(v, 4) for k, v in features.items()}
 
     @staticmethod
@@ -1248,11 +1274,39 @@ class ScoreCardCalculator:
 class VerdictEngine:
     """
     Multi-signal weighted confidence verdict.
-    80+   → trusted
-    60-80 → suspicious
-    40-60 → high_risk
-    <40   → fake
+    Thresholds and hard rules are configurable via class attributes
+    or environment variables (VERDICT_TRUSTED_THRESHOLD, etc.).
     """
+    # Configurable thresholds (defaults; overridden by env vars in __init__)
+    VERDICT_THRESHOLDS = {"trusted": 80, "suspicious": 60, "high_risk": 40}
+    HARD_RULES = {
+        "adv_spoof_cap": 45.0,
+        "difficulty_ceiling_min": 0.4,
+        "difficulty_cap": 50.0,
+        "behavioral_invariant_min": 40,
+        "behavioral_invariant_cap": 55.0,
+        "coding_zero_cap": 45.0,
+        "identity_exposed_cap": 30.0,
+        "extraction_weak_cap": 65.0,
+        "extraction_weak_threshold": 15,
+        "fingerprint_mismatch_cap": 55.0,
+        "fingerprint_mismatch_threshold": 30,
+    }
+    TOP_MODELS = [
+        "gpt-4o", "gpt-4-turbo", "gpt-4o-mini",
+        "claude-3-5", "claude-3-7", "claude-4",
+        "deepseek-v3", "deepseek-r1",
+        "qwen2.5", "qwen-max",
+        "gemini-1.5", "gemini-2",
+    ]
+
+    def __init__(self):
+        from app.core.config import settings
+        self.VERDICT_THRESHOLDS = {
+            "trusted": settings.VERDICT_TRUSTED_THRESHOLD,
+            "suspicious": settings.VERDICT_SUSPICIOUS_THRESHOLD,
+            "high_risk": settings.VERDICT_HIGH_RISK_THRESHOLD,
+        }
 
     def assess(
         self,
@@ -1340,17 +1394,16 @@ class VerdictEngine:
 
         adv_spoof = f("adversarial_spoof_signal_rate", 0.0)
         if adv_spoof > 0.5:
-            confidence_real = min(confidence_real, 45.0)
+            confidence_real = min(confidence_real, self.HARD_RULES["adv_spoof_cap"])
             reasons.append(f"对抗推理检测到模板套用（信号率 {adv_spoof:.0%}），置信度强制下调")
 
         # ── 硬规则：能力-声称不匹配检测 ──
         difficulty_ceiling = f("difficulty_ceiling", 0.5)
         claimed = (predetect.identified_as or "").lower() if predetect else ""
-        top_models = ["gpt-4o", "gpt-4-turbo", "claude-3-5", "claude-3-7",
-                      "deepseek-v3", "qwen2.5", "gemini-1.5"]
+        top_models = self.TOP_MODELS
 
-        if any(m in claimed for m in top_models) and difficulty_ceiling < 0.4:
-            confidence_real = min(confidence_real, 50.0)
+        if any(m in claimed for m in top_models) and difficulty_ceiling < self.HARD_RULES["difficulty_ceiling_min"]:
+            confidence_real = min(confidence_real, self.HARD_RULES["difficulty_cap"])
             reasons.append(
                 f"声称为顶级模型但能力天花板仅 {difficulty_ceiling:.2f}，"
                 f"梯度难度测试显示推理能力与声称不符"
@@ -1358,8 +1411,8 @@ class VerdictEngine:
 
         # ── 硬规则：行为不变性检测 ──
         beh_inv = scorecard.behavioral_invariant_score
-        if beh_inv < 40:
-            confidence_real = min(confidence_real, 55.0)
+        if beh_inv < self.HARD_RULES["behavioral_invariant_min"]:
+            confidence_real = min(confidence_real, self.HARD_RULES["behavioral_invariant_cap"])
             reasons.append(
                 f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
                 f"疑似模板匹配而非真实推理"
@@ -1367,7 +1420,7 @@ class VerdictEngine:
 
         # ── 硬规则：编程能力与声称等级不符 ──
         if scorecard.coding_score < 10 and any(m in claimed for m in top_models):
-            confidence_real = min(confidence_real, 45.0)
+            confidence_real = min(confidence_real, self.HARD_RULES["coding_zero_cap"])
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
         # ── v3 硬规则：提取攻击泄露真实模型名 ──
@@ -1384,24 +1437,25 @@ class VerdictEngine:
                         break
 
         if _found_identity_mismatch:
-            confidence_real = min(confidence_real, 30.0)
+            confidence_real = min(confidence_real, self.HARD_RULES["identity_exposed_cap"])
             reasons.append("提取攻击暴露了与声称不同的真实模型身份，置信度强制下调")
-        elif extraction_resistance < 15:
+        elif extraction_resistance < self.HARD_RULES["extraction_weak_threshold"]:
             # Very weak resistance but no identity mismatch — suspicious but not definitive
-            confidence_real = min(confidence_real, 65.0)
+            confidence_real = min(confidence_real, self.HARD_RULES["extraction_weak_cap"])
             reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取")
 
         # ── v3 硬规则：tokenizer 指纹不匹配 ──
         fingerprint_match = getattr(scorecard, 'breakdown', {}).get('fingerprint_match', 100)
-        if fingerprint_match < 30 and claimed:
-            confidence_real = min(confidence_real, 55.0)
+        if fingerprint_match < self.HARD_RULES["fingerprint_mismatch_threshold"] and claimed:
+            confidence_real = min(confidence_real, self.HARD_RULES["fingerprint_mismatch_cap"])
             reasons.append("tokenizer/行为指纹与声称模型不符")
 
-        if confidence_real >= 80:
+        t = self.VERDICT_THRESHOLDS
+        if confidence_real >= t["trusted"]:
             level, label = "trusted", "可信 / Trusted"
-        elif confidence_real >= 60:
+        elif confidence_real >= t["suspicious"]:
             level, label = "suspicious", "轻度可疑 / Suspicious"
-        elif confidence_real >= 40:
+        elif confidence_real >= t["high_risk"]:
             level, label = "high_risk", "高风险 / High Risk"
         else:
             level, label = "fake", "疑似假模型 / Likely Fake"
@@ -1437,6 +1491,7 @@ FEATURE_ORDER = [
     "tool_use_pass_rate", "avg_formality_score",
     # v3 new features
     "dim_knowledge_pass_rate", "dim_safety_pass_rate",
+    "dim_tool_use_pass_rate", "dim_consistency_pass_rate",
     "hallucination_resist_rate", "extraction_resist_rate",
 ]
 
@@ -1477,6 +1532,51 @@ GLOBAL_FEATURE_MEANS: dict[str, float] = {
     "difficulty_dropoff": 0.35,
     "tool_use_pass_rate": 0.60,
     "avg_formality_score": 0.55,
+    "dim_knowledge_pass_rate": 0.60,
+    "dim_safety_pass_rate": 0.70,
+    "dim_tool_use_pass_rate": 0.55,
+    "dim_consistency_pass_rate": 0.80,
+    "hallucination_resist_rate": 0.65,
+    "extraction_resist_rate": 0.60,
+}
+
+# Feature importance weights for similarity computation.
+# Higher weight = more discriminative for model identification.
+FEATURE_IMPORTANCE: dict[str, float] = {
+    # High discrimination power
+    "reasoning_pass_rate": 2.0,
+    "coding_pass_rate": 2.0,
+    "adversarial_pass_rate": 2.0,
+    "difficulty_ceiling": 2.5,
+    "difficulty_dropoff": 1.8,
+    "refusal_verbosity": 1.8,
+    "safety_alternative_style": 1.5,
+    "avg_response_length": 1.5,
+    "avg_words_per_sentence": 1.5,
+    "tokens_per_second": 1.8,
+    "first_token_mean_ms": 1.5,
+    "hallucination_resist_rate": 1.5,
+    "extraction_resist_rate": 1.5,
+    # Medium discrimination
+    "instruction_pass_rate": 1.3,
+    "exact_match_rate": 1.3,
+    "identity_consistency_pass_rate": 1.5,
+    "adversarial_spoof_signal_rate": 1.5,
+    "bullet_list_rate": 1.3,
+    "numbered_list_rate": 1.3,
+    "code_block_rate": 1.3,
+    "heading_rate": 1.3,
+    "avg_markdown_score": 1.3,
+    "latency_cv": 1.3,
+    "tool_use_pass_rate": 1.3,
+    # Low discrimination (most models similar)
+    "protocol_success_rate": 0.5,
+    "json_valid_rate": 0.8,
+    "system_obedience_rate": 0.7,
+    "param_compliance_rate": 0.7,
+    "disclaimer_rate": 1.0,
+    "latency_mean_ms": 1.0,
+    "avg_formality_score": 1.0,
 }
 
 
@@ -1544,8 +1644,9 @@ class SimilarityEngine:
             elif key == "avg_words_per_sentence":
                 val = val / 30.0         # 30词/句 → 1.0
 
-            # Clamp to [0,1]
-            vec.append(max(0.0, min(1.0, float(val))))
+            # Clamp to [0,1] then apply feature importance weight
+            weight = FEATURE_IMPORTANCE.get(key, 1.0)
+            vec.append(max(0.0, min(1.0, float(val))) * weight)
         return vec
 
     @staticmethod

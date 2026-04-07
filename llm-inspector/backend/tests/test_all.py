@@ -105,7 +105,7 @@ def test_db_init():
     ).fetchall()
     table_names = {r["name"] for r in tables}
     for required in ("test_runs", "test_cases", "test_responses",
-                     "extracted_features", "benchmark_profiles",
+                     "extracted_features", "golden_baselines",
                      "similarity_results", "reports"):
         assert required in table_names, f"Missing table: {required}"
 
