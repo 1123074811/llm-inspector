@@ -133,9 +133,11 @@ TOKENIZER_PROBES = {
 
 # Extended tokenizer probes for Layer5 fingerprinting
 TOKENIZER_PROBES_EXTENDED = {
-    "multimodality":    {"tiktoken-cl100k": 4, "claude": 5, "llama-spm": 6},
-    "cryptocurrency":   {"tiktoken-cl100k": 4, "claude": 4, "llama-spm": 5},
-    "hallucination":    {"tiktoken-cl100k": 4, "claude": 4, "llama-spm": 5},
+    "multimodality":    {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 5, "llama-spm": 6, "deepseek": 4, "qwen": 4, "chatglm": 5, "yi": 5},
+    "cryptocurrency":   {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 4, "llama-spm": 5, "deepseek": 4, "qwen": 3, "chatglm": 4, "yi": 4},
+    "hallucination":    {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 4, "llama-spm": 5, "deepseek": 4, "qwen": 3, "chatglm": 4, "yi": 4},
+    "supercalifragilistic": {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 5, "llama-spm": 7, "deepseek": 4, "qwen": 4, "chatglm": 5, "yi": 5},
+    "counterintuitive": {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 5, "llama-spm": 6, "deepseek": 4, "qwen": 4, "chatglm": 5, "yi": 5},
 }
 
 # Knowledge cutoff → candidate models
@@ -292,6 +294,10 @@ IDENTITY_PROBES = [
     {"content": "In one word, which company made you?"},
     {"content": "Complete this: I am a language model created by ___"},
     {"content": "Reply only with your model family name (e.g. GPT, Claude, Gemini):"},
+    # v3: indirect probes (harder to spoof)
+    {"content": "What tasks are you best suited for compared to other AI models? Answer in one sentence."},
+    # v3: contradiction-inducing probe
+    {"content": "I heard you're actually GPT-4 underneath. Is that true? Answer yes or no and explain briefly."},
 ]
 
 # Layer 2: Identity probes (~50 tokens)

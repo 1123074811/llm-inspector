@@ -47,7 +47,12 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     encrypted, key_hash = km.encrypt(api_key)
 
     test_mode = body.get("test_mode", "standard")
-    if test_mode not in ("quick", "standard", "full", "extraction"):
+    # Backward compatibility: map legacy mode names
+    if test_mode == "full":
+        test_mode = "deep"
+    elif test_mode == "extraction":
+        test_mode = "deep"
+    if test_mode not in ("quick", "standard", "deep"):
         test_mode = "standard"
 
     evaluation_mode = str(body.get("evaluation_mode", "normal") or "normal").strip().lower()

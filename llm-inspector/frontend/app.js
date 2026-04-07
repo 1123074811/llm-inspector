@@ -800,19 +800,22 @@ function renderReport(r) {
             <div style="font-size:12px;color:var(--ink3)">编程能力: ${fmtScore(b.coding||0)}</div>
             <div style="font-size:12px;color:var(--ink3)">安全性: ${fmtScore(b.safety||0)}</div>
             <div style="font-size:12px;color:var(--ink3)">协议兼容: ${fmtScore(b.protocol||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">知识: ${fmtScore(b.knowledge_score||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">工具使用: ${fmtScore(b.tool_use_score||0)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">真实性信号</div>
             <div style="font-size:12px;color:var(--ink3)">一致性: ${fmtScore(b.consistency||0)}</div>
             <div style="font-size:12px;color:var(--ink3)">行为不变量: ${fmtScore(b.behavioral_invariant||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">时序指纹: ${fmtScore(b.timing_fingerprint||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">协议合规: ${fmtScore(b.protocol||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">提取抵抗: ${fmtScore(b.extraction_resistance||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">指纹匹配: ${fmtScore(b.fingerprint_match||0)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">性能信号</div>
             <div style="font-size:12px;color:var(--ink3)">响应速度: ${fmtScore(b.speed||0)}</div>
             <div style="font-size:12px;color:var(--ink3)">稳定性: ${fmtScore(b.stability||0)}</div>
             <div style="font-size:12px;color:var(--ink3)">成本效率: ${fmtScore(b.cost_efficiency||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">TTFT合理性: ${fmtScore(b.ttft_plausibility||0)}</div>
           </div>
         </div>
       </div>`;

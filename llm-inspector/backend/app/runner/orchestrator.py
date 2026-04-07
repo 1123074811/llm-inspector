@@ -251,12 +251,10 @@ def _save_case_result(run_id: str, result: CaseResult) -> None:
 
 def _mode_concurrency(test_mode: str) -> int:
     if test_mode == "quick":
+        return 8
+    if test_mode == "deep":
         return 3
-    if test_mode == "extraction":
-        return 3  # extraction probes need sequential control
-    if test_mode == "full":
-        return 6
-    return 5  # standard
+    return 6  # standard
 
 
 def _case_value(c: TestCase) -> float:
@@ -267,11 +265,15 @@ def _case_value(c: TestCase) -> float:
         "extraction": 1.5,
         "reasoning": 1.2,
         "instruction": 1.1,
+        "knowledge": 1.1,
         "protocol": 1.0,
         "system": 1.0,
         "param": 0.95,
         "refusal": 0.9,
+        "safety": 0.9,
         "coding": 0.85,
+        "tool_use": 0.85,
+        "fingerprint": 1.3,
         "style": 0.75,
         "performance": 0.7,
     }.get(c.category, 0.8)
@@ -300,6 +302,8 @@ def _adaptive_samples(case: TestCase, mode: str) -> int:
         return 1
     elif mode == "standard":
         return min(case.n_samples, 2)
+    elif mode == "deep":
+        return max(case.n_samples, 2)  # deep: at least 2 samples
     else:
         return case.n_samples
 
@@ -384,77 +388,83 @@ def _select_confirmatory_cases(
 
 def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase], list[TestCase]]:
     """
-    Returns (phase1_cases, phase2_cases).
-    quick: sentinel subset (8-10 high value).
-    standard: core 12 then targeted expansion.
-    full: all cases.
+    Returns (phase1_cases, phase2_cases) based on mode_level tagging.
+
+    Mode inclusion is progressive:
+      quick:    only mode_level="quick" cases
+      standard: mode_level in ("quick", "standard")
+      deep:     all cases (quick + standard + deep)
+
+    Phase assignment:
+      quick:    single phase (all quick-level cases)
+      standard: phase1=quick-level, phase2=standard-level
+      deep:     phase1=quick+standard-level, phase2=deep-level (+ multi-sampling)
     """
+    # -- Helper: extract mode_level from case params._meta --
+    def _get_mode_level(c: TestCase) -> str:
+        meta = c.params.get("_meta", {}) if c.params else {}
+        return meta.get("mode_level", "standard")
+
+    # -- Phase 1 Optimization: Fine-grained token capping ---
     ordered = list(cases)
 
-    # --- Phase 1 Optimization: Fine-grained token capping ---
-    # Set max_tokens to 2-3× realistic output ceiling per judge_method.
-    # This prevents runaway generation (model rambling past the answer)
-    # without truncating valid responses. Judge accuracy is unaffected
-    # because useful content is always within these bounds.
     _JUDGE_MAX_TOKENS: dict[str, int] = {
-        "exact_match":          15,   # single token/word ("7", "OK", "Paris")
-        "json_schema":         120,   # small JSON objects
-        "line_count":          100,   # 3-5 short lines
-        "code_execution":      300,   # function definitions (reduced from 400)
-        "regex_match":         150,   # pattern matching (reduced from 250)
-        "refusal_detect":      150,   # refusal + brief explanation (reduced from 200)
-        "constraint_reasoning": 700,  # multi-step reasoning (reduced from 1200)
-        "text_constraints":    150,   # CJK char-count constrained output
-        "identity_consistency": 150,  # identity response (reduced from 250)
-        "heuristic_style":     250,  # style analysis (reduced from 350)
-        "any_text":            180,   # general text (reduced from 250)
-        # Extraction judges — need generous limits for prompt leak content
-        "prompt_leak_detect":   1200, # reduced from 2000
+        "exact_match":          15,
+        "json_schema":         120,
+        "line_count":          100,
+        "code_execution":      300,
+        "regex_match":         150,
+        "refusal_detect":      150,
+        "constraint_reasoning": 700,
+        "text_constraints":    150,
+        "identity_consistency": 150,
+        "heuristic_style":     250,
+        "any_text":            180,
+        "prompt_leak_detect":   1200,
         "forbidden_word_extract": 500,
         "path_leak_detect":     500,
-        "tool_config_leak_detect": 600, # reduced from 1000
-        "memory_leak_detect":   500,   # reduced from 1000
+        "tool_config_leak_detect": 600,
+        "memory_leak_detect":   500,
         "denial_pattern_detect": 200,
         "spec_contradiction_check": 50,
         "refusal_style_fingerprint": 300,
         "language_bias_detect": 200,
         "tokenizer_fingerprint": 20,
+        # New judge methods
+        "multi_step_verify":   500,
+        "yaml_csv_validate":   200,
+        "hallucination_detect": 200,
+        "context_overflow_detect": 1200,
+        "semantic_judge":       400,
     }
 
     for c in ordered:
-        # 1. Apply tight ceiling by judge_method
         judge_cap = _JUDGE_MAX_TOKENS.get(c.judge_method)
 
         if judge_cap:
-            # Special: latency baseline only needs first-token timing
             if c.category == "performance" and "latency" in c.name:
                 c.max_tokens = min(c.max_tokens, 10)
-            # Special: throughput test needs enough output to measure chars/sec
             elif c.category == "performance" and "throughput" in c.name:
                 c.max_tokens = min(c.max_tokens, 500)
-            # Special: text_constraints — derive from exact_chars param
             elif c.judge_method == "text_constraints":
                 exact_chars = c.params.get("exact_chars", 0)
-                # CJK chars → tokens ratio ~1.5, then 2× safety margin
                 derived_cap = max(100, int(exact_chars * 3))
                 c.max_tokens = min(c.max_tokens, derived_cap)
             else:
                 c.max_tokens = min(c.max_tokens, judge_cap)
         else:
-            # Fallback: general cap for unknown judge methods
             if c.category not in ("coding", "performance"):
                 c.max_tokens = min(c.max_tokens, settings.DEFAULT_MAX_TOKENS_CAP)
 
-        # Special case for long-form performance tests
         if c.id == "perf_002":
             c.max_tokens = min(c.max_tokens, settings.LONG_FORM_MAX_TOKENS_CAP)
 
-        # 2. Adaptive sampling via _adaptive_samples
-        for c in ordered:
-            c.n_samples = _adaptive_samples(c, test_mode)
+    # Adaptive sampling
+    for c in ordered:
+        c.n_samples = _adaptive_samples(c, test_mode)
 
-    # In non-full modes, keep only top-2 core code execution cases.
-    if test_mode != "full":
+    # In non-deep modes, keep only top-2 core code execution cases.
+    if test_mode != "deep":
         code_cases = [c for c in ordered if c.judge_method == "code_execution"]
         code_cases.sort(key=lambda c: (-c.weight, _case_value(c)))
         keep_ids = {c.id for c in code_cases[:2]}
@@ -464,21 +474,39 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
                 if c.judge_method != "code_execution" or c.id in keep_ids
             ]
 
+    # Filter by mode_level for the selected test_mode
+    MODE_LEVELS = {
+        "quick": {"quick"},
+        "standard": {"quick", "standard"},
+        "deep": {"quick", "standard", "deep"},
+    }
+    allowed_levels = MODE_LEVELS.get(test_mode, {"quick", "standard"})
+    ordered = [c for c in ordered if _get_mode_level(c) in allowed_levels]
+
     # Value-first ranking
     ordered.sort(key=lambda c: (_case_value(c), c.weight), reverse=True)
 
-    if test_mode == "extraction":
-        # Extraction mode: run all cases in single phase, no early stop
+    # Deep mode: multi-sampling for probabilistic judges
+    if test_mode == "deep":
+        for c in ordered:
+            c.n_samples = max(c.n_samples, min(c.n_samples * 2, 3))
+
+    # Phase assignment based on mode
+    if test_mode == "quick":
+        # Single phase: all quick-level cases
         return ordered, []
 
-    if test_mode == "quick":
-        sentinel = [c for c in ordered if c.category in ("protocol", "instruction", "reasoning", "consistency", "antispoof", "system")]
-        return sentinel[:settings.SENTINEL_SIZE], []
-
     if test_mode == "standard":
-        core = ordered[:settings.CORE_SIZE]
-        rest = ordered[settings.CORE_SIZE:settings.CORE_SIZE + settings.EXPANSION_SIZE]
-        return core, rest
+        # Phase1: quick-level (core), Phase2: standard-level (expansion)
+        phase1 = [c for c in ordered if _get_mode_level(c) == "quick"]
+        phase2 = [c for c in ordered if _get_mode_level(c) == "standard"]
+        return phase1, phase2
+
+    if test_mode == "deep":
+        # Phase1: quick+standard (core), Phase2: deep-level (advanced)
+        phase1 = [c for c in ordered if _get_mode_level(c) in ("quick", "standard")]
+        phase2 = [c for c in ordered if _get_mode_level(c) == "deep"]
+        return phase1, phase2
 
     return ordered, []
 
@@ -517,6 +545,10 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
         return False, features_cache, sims_cache, scorecard_cache
 
     if len(case_results) < 6:
+        return False, features_cache, sims_cache, scorecard_cache
+
+    # Deep mode: no early stopping — always run full suite
+    if test_mode == "deep":
         return False, features_cache, sims_cache, scorecard_cache
 
     extractor = FeatureExtractor()
@@ -662,7 +694,7 @@ def run_pipeline(run_id: str) -> None:
     # ── Step 1: Pre-detection ────────────────────────────────────────────────
     repo.update_run_status(run_id, "pre_detecting")
     logger.info("Running pre-detection", run_id=run_id)
-    extraction_mode = test_mode == "extraction"
+    extraction_mode = test_mode == "deep"
     try:
         pre_result: PreDetectionResult = PreDetectionPipeline().run(
             adapter, run["model_name"],
@@ -774,15 +806,7 @@ def run_pipeline(run_id: str) -> None:
         )
 
     # ── Step 3: Load test cases + execute ────────────────────────────────────
-    if extraction_mode:
-        # In extraction mode, load extraction suite cases
-        cases = _load_suite("extraction", "extraction")
-        if not cases:
-            # Fallback: try loading from fixture file directly
-            logger.warning("No extraction cases in DB, loading from fixture")
-            cases = _load_suite("v2", test_mode)
-    else:
-        cases = _load_suite(suite_version, test_mode)
+    cases = _load_suite(suite_version, test_mode)
     if not cases:
         logger.warning("No test cases found", suite_version=suite_version)
         repo.update_run_status(run_id, "failed", error_message="No test cases loaded")
@@ -824,6 +848,7 @@ def run_pipeline(run_id: str) -> None:
     budget_map = {
         "quick":      settings.TOKEN_BUDGET_QUICK,
         "standard":   settings.TOKEN_BUDGET_STANDARD,
+        "deep":       settings.TOKEN_BUDGET_DEEP,
         "full":       settings.TOKEN_BUDGET_FULL,
         "extraction": settings.TOKEN_BUDGET_FULL,
         "smart":      13_000,  # Smart mode default budget
@@ -914,7 +939,8 @@ def run_pipeline(run_id: str) -> None:
             logger.info("Pipeline cancelled", run_id=run_id)
             return
 
-        # Stage C arbitration: only when decision remains unstable near threshold.
+        # Stage C arbitration: only for standard mode when decision remains unstable.
+        # Deep mode does not arbitrate — it runs all cases fully.
         if test_mode == "standard":
             stop2, f2, s2, sc2 = _checkpoint_should_stop(
                 test_mode=test_mode,

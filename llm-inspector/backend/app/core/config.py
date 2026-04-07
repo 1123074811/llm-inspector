@@ -66,7 +66,14 @@ class Settings:
     # Token budget guards (per-run token spending limits)
     TOKEN_BUDGET_QUICK: int = int(os.getenv("TOKEN_BUDGET_QUICK", "15000"))
     TOKEN_BUDGET_STANDARD: int = int(os.getenv("TOKEN_BUDGET_STANDARD", "40000"))
-    TOKEN_BUDGET_FULL: int = int(os.getenv("TOKEN_BUDGET_FULL", "100000"))
+    TOKEN_BUDGET_DEEP: int = int(os.getenv("TOKEN_BUDGET_DEEP", "100000"))
+    TOKEN_BUDGET_FULL: int = int(os.getenv("TOKEN_BUDGET_FULL", "100000"))  # legacy alias
+
+    # Semantic Judge (LLM-as-Judge for open-ended evaluation)
+    JUDGE_API_URL: str = os.getenv("JUDGE_API_URL", "")
+    JUDGE_API_KEY: str = os.getenv("JUDGE_API_KEY", "")
+    JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "gpt-4o-mini")
+    JUDGE_TIMEOUT: int = int(os.getenv("JUDGE_TIMEOUT", "15"))
 
     # Theta / relative scale
     THETA_METHOD: str = os.getenv("THETA_METHOD", "rasch_1pl")

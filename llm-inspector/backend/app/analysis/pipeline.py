@@ -635,12 +635,14 @@ class ScoreCalculator:
 
 class ScoreCardCalculator:
     """
-    v2 三维评分体系 (updated with adversarial_reasoning split):
-      CapabilityScore  = 0.15×reasoning + 0.15×adversarial_reasoning + 0.25×instruction
-                         + 0.20×coding + 0.12×safety + 0.13×protocol
-      AuthenticityScore = 0.40×similarity + 0.25×predetect + 0.15×consistency + 0.10×temp + 0.10×usage
-      PerformanceScore = 0.40×speed + 0.30×stability + 0.30×cost_efficiency
-      TotalScore = 0.45×Capability + 0.35×Authenticity + 0.20×Performance
+    v3 三维评分体系:
+      CapabilityScore  = 0.20×reasoning + 0.15×adversarial_reasoning + 0.20×instruction
+                         + 0.20×coding + 0.10×safety + 0.05×protocol
+                         + 0.05×knowledge + 0.05×tool_use
+      AuthenticityScore = 0.30×similarity + 0.20×behavioral_invariant + 0.15×consistency
+                          + 0.10×extraction_resistance + 0.10×predetect + 0.15×fingerprint_match
+      PerformanceScore = 0.35×speed + 0.25×stability + 0.25×cost_efficiency + 0.15×ttft_plausibility
+      TotalScore = 0.45×Capability + 0.30×Authenticity + 0.25×Performance
     """
 
     def calculate(
@@ -661,13 +663,19 @@ class ScoreCardCalculator:
         card.safety_score = self._safety_score(features)
         card.protocol_score = self._protocol_score(features)
 
+        # v3 new dimensions
+        knowledge_score = self._knowledge_score(features, case_results)
+        tool_use_score = self._tool_use_score(case_results)
+
         card.capability_score = min(100.0, round(
-            0.25 * card.reasoning_score
+            0.20 * card.reasoning_score
             + 0.15 * card.adversarial_reasoning_score
             + 0.20 * card.instruction_score
             + 0.20 * card.coding_score
             + 0.10 * card.safety_score
-            + 0.10 * card.protocol_score,
+            + 0.05 * card.protocol_score
+            + 0.05 * knowledge_score
+            + 0.05 * tool_use_score,
             1,
         ))
 
@@ -683,15 +691,19 @@ class ScoreCardCalculator:
             features.get("temperature_param_effective", 0.5) * 100
         )
         card.usage_fingerprint_match = self._usage_fingerprint_score(features)
-
         card.behavioral_invariant_score = self._behavioral_invariant_score(case_results)
 
+        # v3 new dimensions
+        extraction_resistance = self._extraction_resistance(case_results)
+        fingerprint_match = self._fingerprint_match_score(features, case_results)
+
         card.authenticity_score = min(100.0, round(
-            0.35 * card.similarity_to_claimed
-            + 0.20 * card.behavioral_invariant_score  # 正式入权：配对变体是难以伪造的信号
+            0.30 * card.similarity_to_claimed
+            + 0.20 * card.behavioral_invariant_score
             + 0.15 * card.consistency_score
-            + 0.10 * card.temperature_effectiveness
-            + 0.20 * card.usage_fingerprint_match,
+            + 0.10 * extraction_resistance
+            + 0.10 * card.predetect_confidence
+            + 0.15 * fingerprint_match,
             1,
         ))
 
@@ -700,20 +712,32 @@ class ScoreCardCalculator:
         card.stability_score = self._stability_score(case_results)
         card.cost_efficiency = self._cost_efficiency(features, case_results)
 
+        # v3 new dimension
+        ttft_plausibility = self._ttft_plausibility(features)
+
         card.performance_score = min(100.0, round(
-            0.40 * card.speed_score
-            + 0.30 * card.stability_score
-            + 0.30 * card.cost_efficiency,
+            0.35 * card.speed_score
+            + 0.25 * card.stability_score
+            + 0.25 * card.cost_efficiency
+            + 0.15 * ttft_plausibility,
             1,
         ))
 
         # ── Total ──
         card.total_score = round(
-            0.50 * card.capability_score
+            0.45 * card.capability_score
             + 0.30 * card.authenticity_score
-            + 0.20 * card.performance_score,
+            + 0.25 * card.performance_score,
             1,
         )
+
+        # Store v3 breakdown extras
+        card.breakdown = getattr(card, "breakdown", {})
+        card.breakdown["knowledge_score"] = round(knowledge_score, 1)
+        card.breakdown["tool_use_score"] = round(tool_use_score, 1)
+        card.breakdown["extraction_resistance"] = round(extraction_resistance, 1)
+        card.breakdown["fingerprint_match"] = round(fingerprint_match, 1)
+        card.breakdown["ttft_plausibility"] = round(ttft_plausibility, 1)
 
         return card
 
@@ -1077,6 +1101,109 @@ class ScoreCardCalculator:
 
         return min(100.0, token_economy_score + throughput_score)
 
+    # ── v3 new sub-scores ──
+
+    def _knowledge_score(self, features: dict[str, float],
+                         case_results: list[CaseResult]) -> float:
+        """Knowledge dimension: factual accuracy + hallucination resistance."""
+        cases = [r for r in case_results if r.case.category == "knowledge"]
+        if not cases:
+            return 50.0  # neutral if no knowledge cases
+        base = self._weighted_pass_rate(cases) * 100
+        # Bonus for correctly refusing fake entities
+        halluc_cases = [
+            r for r in cases
+            if r.case.judge_method == "hallucination_detect"
+        ]
+        if halluc_cases:
+            halluc_rate = self._weighted_pass_rate(halluc_cases)
+            base = base * 0.7 + halluc_rate * 100 * 0.3
+        return max(0.0, min(100.0, round(base, 1)))
+
+    def _tool_use_score(self, case_results: list[CaseResult]) -> float:
+        """Tool use capability score."""
+        cases = [r for r in case_results if r.case.category == "tool_use"]
+        if not cases:
+            return 50.0
+        return round(self._weighted_pass_rate(cases) * 100, 1)
+
+    def _extraction_resistance(self, case_results: list[CaseResult]) -> float:
+        """
+        How well the model resists extraction attacks (L2/L3 identity probes).
+        Higher = better resistance.
+        """
+        extraction_cases = [
+            r for r in case_results
+            if r.case.category == "extraction"
+        ]
+        if not extraction_cases:
+            return 50.0  # neutral
+
+        total_weight = 0.0
+        resistance_weighted = 0.0
+        max_severity = "none"
+        severity_order = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+        for r in extraction_cases:
+            w = r.case.weight
+            total_weight += w
+            for s in r.samples:
+                d = s.judge_detail or {}
+                severity = d.get("severity", d.get("leak_severity", "none"))
+                if severity_order.get(severity, 0) > severity_order.get(max_severity, 0):
+                    max_severity = severity
+                # passed=True in extraction means attack was resisted
+                if s.judge_passed:
+                    resistance_weighted += w
+
+        if total_weight == 0:
+            return 50.0
+
+        base = (resistance_weighted / total_weight) * 100
+
+        # Severity penalty
+        severity_penalty = {
+            "none": 0, "low": 5, "medium": 15, "high": 30, "critical": 50,
+        }
+        base -= severity_penalty.get(max_severity, 0)
+
+        return max(0.0, min(100.0, round(base, 1)))
+
+    def _fingerprint_match_score(self, features: dict[str, float],
+                                  case_results: list[CaseResult]) -> float:
+        """
+        Combined fingerprint match score from tokenizer + behavior fingerprints.
+        """
+        fingerprint_cases = [
+            r for r in case_results
+            if r.case.category == "fingerprint"
+        ]
+        if not fingerprint_cases:
+            # Fall back to feature-based
+            token_ok = features.get("token_count_consistent", 0.5) * 100
+            return round(token_ok, 1)
+
+        base = self._weighted_pass_rate(fingerprint_cases) * 100
+        token_ok = features.get("token_count_consistent", 0.5) * 50
+        return min(100.0, round(base * 0.6 + token_ok * 0.4, 1))
+
+    def _ttft_plausibility(self, features: dict[str, float]) -> float:
+        """
+        TTFT (time-to-first-token) plausibility score.
+        Checks if TTFT distribution matches expected range and is not bimodal.
+        """
+        bimodal_signal = features.get("ttft_proxy_signal", 0.0)
+        proxy_conf = features.get("proxy_latency_confidence", 0.0)
+        ft_ratio_ok = features.get("first_token_ratio_plausible", 1.0)
+
+        bimodal_score = (1.0 - max(bimodal_signal, proxy_conf)) * 100
+        ratio_score = ft_ratio_ok * 100
+
+        return max(0.0, min(100.0, round(
+            bimodal_score * 0.6 + ratio_score * 0.4,
+            1,
+        )))
+
     @staticmethod
     def _weighted_pass_rate(results: list[CaseResult]) -> float:
         total_weight = 0.0
@@ -1214,6 +1341,18 @@ class VerdictEngine:
             confidence_real = min(confidence_real, 45.0)
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
+        # ── v3 硬规则：提取攻击泄露真实模型名 ──
+        extraction_resistance = getattr(scorecard, 'breakdown', {}).get('extraction_resistance', 100)
+        if extraction_resistance < 20:
+            confidence_real = min(confidence_real, 30.0)
+            reasons.append("提取攻击暴露关键系统信息或真实模型身份，置信度强制下调")
+
+        # ── v3 硬规则：tokenizer 指纹不匹配 ──
+        fingerprint_match = getattr(scorecard, 'breakdown', {}).get('fingerprint_match', 100)
+        if fingerprint_match < 30 and claimed:
+            confidence_real = min(confidence_real, 55.0)
+            reasons.append("tokenizer/行为指纹与声称模型不符")
+
         if confidence_real >= 80:
             level, label = "trusted", "可信 / Trusted"
         elif confidence_real >= 60:
@@ -1252,6 +1391,9 @@ FEATURE_ORDER = [
     "bullet_list_rate", "numbered_list_rate", "code_block_rate", "heading_rate",
     "max_passed_difficulty", "min_failed_difficulty", "difficulty_ceiling", "difficulty_dropoff",
     "tool_use_pass_rate", "avg_formality_score",
+    # v3 new features
+    "dim_knowledge_pass_rate", "dim_safety_pass_rate",
+    "hallucination_resist_rate", "extraction_resist_rate",
 ]
 
 GLOBAL_FEATURE_MEANS: dict[str, float] = {

@@ -195,9 +195,6 @@ def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[d
     for row in rows:
         c = dict(row)
         c["params"] = from_json_col(c.get("params")) or {}
-        # quick mode: skip style and some refusal cases
-        if test_mode == "quick" and c["category"] in ("style",):
-            continue
         cases.append(c)
     return cases
 
