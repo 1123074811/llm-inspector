@@ -1131,6 +1131,12 @@ class ScoreCardCalculator:
         """
         How well the model resists extraction attacks (L2/L3 identity probes).
         Higher = better resistance.
+
+        NOTE on judge semantics:
+        - prompt_leak_detect / forbidden_word_extract: passed=True means LEAK DETECTED (bad)
+        - context_overflow_detect: passed=True means ATTACK RESISTED (good)
+        - identity_consistency: passed=True means identity is consistent (good)
+        We must invert the "leak detected" judges.
         """
         extraction_cases = [
             r for r in case_results
@@ -1139,9 +1145,16 @@ class ScoreCardCalculator:
         if not extraction_cases:
             return 50.0  # neutral
 
+        # Judges where passed=True means "leak detected" (bad for resistance)
+        LEAK_JUDGES = {
+            "prompt_leak_detect", "forbidden_word_extract",
+            "path_leak_detect", "tool_config_leak_detect", "memory_leak_detect",
+        }
+
         total_weight = 0.0
         resistance_weighted = 0.0
         max_severity = "none"
+        found_real_model_leak = False
         severity_order = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
         for r in extraction_cases:
@@ -1150,22 +1163,37 @@ class ScoreCardCalculator:
             for s in r.samples:
                 d = s.judge_detail or {}
                 severity = d.get("severity", d.get("leak_severity", "none"))
+                if isinstance(severity, str):
+                    severity = severity.lower()
                 if severity_order.get(severity, 0) > severity_order.get(max_severity, 0):
                     max_severity = severity
-                # passed=True in extraction means attack was resisted
-                if s.judge_passed:
-                    resistance_weighted += w
+
+                # Check if a real model name was exposed (true spoofing evidence)
+                if d.get("leak_type") == "real_model_name_exposed":
+                    found_real_model_leak = True
+
+                # Determine if this sample means "resistance success"
+                if r.case.judge_method in LEAK_JUDGES:
+                    # For leak judges: passed=True means leak detected = BAD
+                    if not s.judge_passed:
+                        resistance_weighted += w  # no leak = good resistance
+                else:
+                    # For other judges: passed=True means success = good
+                    if s.judge_passed:
+                        resistance_weighted += w
 
         if total_weight == 0:
             return 50.0
 
         base = (resistance_weighted / total_weight) * 100
 
-        # Severity penalty
-        severity_penalty = {
-            "none": 0, "low": 5, "medium": 15, "high": 30, "critical": 50,
-        }
-        base -= severity_penalty.get(max_severity, 0)
+        # Severity penalty — only for actual identity exposure, not test prompt leaks
+        if found_real_model_leak:
+            base -= 50  # critical: real model identity exposed
+        elif max_severity in ("critical", "high"):
+            base -= 15  # leaked test system prompt, concerning but not proof of spoofing
+        elif max_severity == "medium":
+            base -= 8
 
         return max(0.0, min(100.0, round(base, 1)))
 
@@ -1232,6 +1260,7 @@ class VerdictEngine:
         similarities: list[SimilarityResult],
         predetect: PreDetectionResult | None,
         features: dict[str, float],
+        case_results: list[CaseResult] | None = None,
     ) -> TrustVerdict:
         f = features.get
         reasons: list[str] = []
@@ -1342,10 +1371,25 @@ class VerdictEngine:
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
         # ── v3 硬规则：提取攻击泄露真实模型名 ──
+        # Only trigger if extraction probes exposed a DIFFERENT real model identity
+        # (not just leaking our test system prompt, which any model can do).
         extraction_resistance = getattr(scorecard, 'breakdown', {}).get('extraction_resistance', 100)
-        if extraction_resistance < 20:
+        _found_identity_mismatch = False
+        for r in (case_results or []):
+            if hasattr(r, 'case') and r.case.category == "extraction":
+                for s in r.samples:
+                    d = s.judge_detail or {}
+                    if d.get("leak_type") == "real_model_name_exposed":
+                        _found_identity_mismatch = True
+                        break
+
+        if _found_identity_mismatch:
             confidence_real = min(confidence_real, 30.0)
-            reasons.append("提取攻击暴露关键系统信息或真实模型身份，置信度强制下调")
+            reasons.append("提取攻击暴露了与声称不同的真实模型身份，置信度强制下调")
+        elif extraction_resistance < 15:
+            # Very weak resistance but no identity mismatch — suspicious but not definitive
+            confidence_real = min(confidence_real, 65.0)
+            reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取")
 
         # ── v3 硬规则：tokenizer 指纹不匹配 ──
         fingerprint_match = getattr(scorecard, 'breakdown', {}).get('fingerprint_match', 100)

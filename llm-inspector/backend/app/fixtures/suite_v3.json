@@ -2098,7 +2098,8 @@
           "paired_with": null,
           "spoof_detection": {
             "check_anti_patterns": true
-          }
+          },
+          "mode_level": "standard"
         }
       },
       "tags": [
@@ -2135,7 +2136,12 @@
         "complexity",
         "precise"
       ],
-      "note": "O(log n) is unambiguous. GPT-3.5/small models often answer O(n). High discriminating power."
+      "note": "O(log n) is unambiguous. GPT-3.5/small models often answer O(n). High discriminating power.",
+      "params": {
+        "_meta": {
+          "mode_level": "standard"
+        }
+      }
     },
     {
       "id": "reason_counterfactual_001",
@@ -2169,7 +2175,12 @@
         "finance",
         "counterfactual"
       ],
-      "note": "Tests understanding of compound interest exponential growth. Weak models give linear estimates."
+      "note": "Tests understanding of compound interest exponential growth. Weak models give linear estimates.",
+      "params": {
+        "_meta": {
+          "mode_level": "standard"
+        }
+      }
     },
     {
       "id": "instr_format_strict_001",
@@ -2215,7 +2226,12 @@
         "strict",
         "format"
       ],
-      "note": "3-sample determinism test. Real models at temp=0 always output identical valid JSON. Proxy/cached models may vary."
+      "note": "3-sample determinism test. Real models at temp=0 always output identical valid JSON. Proxy/cached models may vary.",
+      "params": {
+        "_meta": {
+          "mode_level": "standard"
+        }
+      }
     }
   ]
 }

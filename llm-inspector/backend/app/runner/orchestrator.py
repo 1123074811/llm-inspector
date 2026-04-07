@@ -1079,6 +1079,7 @@ def _build_and_save_report(
         similarities=similarities,
         predetect=pre_result,
         features=features,
+        case_results=case_results,
     )
 
     breakdowns = {

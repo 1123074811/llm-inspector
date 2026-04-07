@@ -195,6 +195,9 @@ def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[d
     for row in rows:
         c = dict(row)
         c["params"] = from_json_col(c.get("params")) or {}
+        # Promote difficulty from params._meta to top-level for orchestrator
+        if c.get("difficulty") is None:
+            c["difficulty"] = (c["params"].get("_meta") or {}).get("difficulty")
         cases.append(c)
     return cases
 
@@ -366,9 +369,11 @@ def get_benchmarks(suite_version: str = "v1") -> list[dict]:
 
 def _load_seed_profiles(suite_version: str, exclude_names: set[str]) -> list[dict]:
     """
-    Load measured profiles from default_profiles.json as a bootstrap fallback.
-    Only returns profiles with data_source="measured" to avoid polluting
-    similarity scores with estimated values.
+    Load profiles from default_profiles.json as a bootstrap fallback.
+    Accepts both "measured" and "estimated" profiles — estimated profiles are
+    tagged with data_source="estimated_seed" so downstream scoring can
+    apply lower confidence weights when comparing against them.
+    Having estimated baselines is much better than having none at all.
     """
     import json as _json
     import pathlib as _pathlib
@@ -390,15 +395,15 @@ def _load_seed_profiles(suite_version: str, exclude_names: set[str]) -> list[dic
         name = p.get("name") or p.get("benchmark_name", "")
         if not name or name in exclude_names:
             continue
-        # Only use actually measured profiles, skip estimated ones
-        if p.get("data_source") != "measured":
-            continue
+        source = p.get("data_source", "estimated")
+        # Tag seed profiles distinctly so scoring can weight them appropriately
+        seed_source = "measured_seed" if source == "measured" else "estimated_seed"
         out.append({
             "benchmark_name": name,
             "name": p.get("display_name", name),
             "suite_version": p.get("suite_version", suite_version),
             "feature_vector": p.get("feature_vector", {}),
-            "data_source": "measured_seed",
+            "data_source": seed_source,
             "sample_count": p.get("sample_count", 1),
         })
     return out

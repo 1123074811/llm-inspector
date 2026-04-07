@@ -90,7 +90,9 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
 # ── Individual judges ─────────────────────────────────────────────────────────
 
 def _exact_match(text: str, params: dict) -> tuple[bool, dict]:
-    target = str(params.get("target", ""))
+    # Fallback: read from judge_rubric.expected if params.target is missing
+    rubric = (params.get("_meta", {}) or {}).get("judge_rubric") or {}
+    target = str(params.get("target") or rubric.get("expected", ""))
     # Strip common wrapping: quotes, code blocks, extra whitespace
     clean = text.strip().strip('"').strip("'").strip("`").strip()
     passed = clean == target or text == target

@@ -93,6 +93,7 @@ class OpenAICompatibleAdapter:
         self._headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; LLMInspector/3.0)",
         }
 
         # Provider-specific bootstrap: Baidu Qianfan may require IAM token from AK/SK
