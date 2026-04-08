@@ -741,6 +741,18 @@ function renderReport(r) {
     html += renderNarrative(narrative);
   }
 
+  // Incomplete data warnings
+  const warnings = r.warnings || [];
+  if (warnings.length > 0) {
+    html += `
+      <div class="card" style="border-left:4px solid #d97706;background:var(--surface2)">
+        <div style="font-weight:600;color:#d97706;margin-bottom:6px">&#9888; 数据完整性提示</div>
+        <ul style="margin:0;padding-left:18px;font-size:12px;color:var(--ink3)">
+          ${warnings.map(w => `<li>${escHtml(w.warning)}</li>`).join('')}
+        </ul>
+      </div>`;
+  }
+
   if (theta) {
     const dims = theta.dimensions || [];
     const dimRows = dims.map(d => {
@@ -795,27 +807,27 @@ function renderReport(r) {
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
           <div class="score-card" style="text-align:left">
             <div class="card-label">能力细分</div>
-            <div style="font-size:12px;color:var(--ink3)">推理能力: ${fmtScore(b.reasoning||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">指令遵循: ${fmtScore(b.instruction||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">编程能力: ${fmtScore(b.coding||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">安全性: ${fmtScore(b.safety||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">协议兼容: ${fmtScore(b.protocol||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">知识: ${fmtScore(b.knowledge_score||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">工具使用: ${fmtScore(b.tool_use_score||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">推理能力: ${fmtScore(b.reasoning)}</div>
+            <div style="font-size:12px;color:var(--ink3)">指令遵循: ${fmtScore(b.instruction)}</div>
+            <div style="font-size:12px;color:var(--ink3)">编程能力: ${fmtScore(b.coding)}</div>
+            <div style="font-size:12px;color:var(--ink3)">安全性: ${fmtScore(b.safety)}</div>
+            <div style="font-size:12px;color:var(--ink3)">协议兼容: ${fmtScore(b.protocol)}</div>
+            <div style="font-size:12px;color:var(--ink3)">知识: ${fmtScore(b.knowledge_score)}</div>
+            <div style="font-size:12px;color:var(--ink3)">工具使用: ${fmtScore(b.tool_use_score)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">真实性信号</div>
-            <div style="font-size:12px;color:var(--ink3)">一致性: ${fmtScore(b.consistency||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">行为不变量: ${fmtScore(b.behavioral_invariant||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">提取抵抗: ${fmtScore(b.extraction_resistance||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">指纹匹配: ${fmtScore(b.fingerprint_match||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">一致性: ${fmtScore(b.consistency)}</div>
+            <div style="font-size:12px;color:var(--ink3)">行为不变量: ${fmtScore(b.behavioral_invariant)}</div>
+            <div style="font-size:12px;color:var(--ink3)">提取抵抗: ${fmtScore(b.extraction_resistance)}</div>
+            <div style="font-size:12px;color:var(--ink3)">指纹匹配: ${fmtScore(b.fingerprint_match)}</div>
           </div>
           <div class="score-card" style="text-align:left">
             <div class="card-label">性能信号</div>
-            <div style="font-size:12px;color:var(--ink3)">响应速度: ${fmtScore(b.speed||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">稳定性: ${fmtScore(b.stability||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">成本效率: ${fmtScore(b.cost_efficiency||0)}</div>
-            <div style="font-size:12px;color:var(--ink3)">TTFT合理性: ${fmtScore(b.ttft_plausibility||0)}</div>
+            <div style="font-size:12px;color:var(--ink3)">响应速度: ${fmtScore(b.speed)}</div>
+            <div style="font-size:12px;color:var(--ink3)">稳定性: ${fmtScore(b.stability)}</div>
+            <div style="font-size:12px;color:var(--ink3)">成本效率: ${fmtScore(b.cost_efficiency)}</div>
+            <div style="font-size:12px;color:var(--ink3)">TTFT合理性: ${fmtScore(b.ttft_plausibility)}</div>
           </div>
         </div>
       </div>`;
@@ -1555,7 +1567,10 @@ function escHtml(s) {
 }
 
 function fmtScore(v) {
-  return Math.round(Number(v || 0)).toLocaleString('en-US');
+  if (v == null || v === '' || v === undefined) return '–';
+  const n = Number(v);
+  if (isNaN(n)) return '–';
+  return n.toFixed(1);
 }
 
 function fmtTime(iso) {

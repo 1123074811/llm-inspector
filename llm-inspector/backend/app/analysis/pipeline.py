@@ -1045,11 +1045,13 @@ class ScoreCardCalculator:
         return min(100.0, round(score, 1))
 
     def _speed_score(self, features: dict[str, float]) -> float:
-        mean_lat = features.get("latency_mean_ms", 2000)
-        p95_lat = features.get("latency_p95_ms", 5000)
-        # Lower latency = higher score. Scale: 0-200ms=100, 5000ms+=0
-        mean_score = max(0, min(100, 100 - (mean_lat / 50)))
-        p95_score = max(0, min(100, 100 - (p95_lat / 80)))
+        import math
+        mean_lat = features.get("latency_mean_ms", 5000)
+        p95_lat = features.get("latency_p95_ms", 15000)
+        # Logarithmic scale — realistic for LLM APIs (1-30s typical)
+        # 200ms=100, 1s=72, 3s=53, 5s=44, 10s=32, 30s=13, 60s+=0
+        mean_score = max(0.0, min(100.0, 100 - 40 * math.log10(max(1, mean_lat / 200))))
+        p95_score = max(0.0, min(100.0, 100 - 40 * math.log10(max(1, p95_lat / 500))))
         return round(mean_score * 0.6 + p95_score * 0.4, 1)
 
     def _stability_score(self, case_results: list[CaseResult]) -> float:
@@ -1391,6 +1393,49 @@ class VerdictEngine:
             scores_map[k] * w for k, w in WEIGHTS.items()
         )
         confidence_real = round(min(100.0, max(0.0, confidence_real)), 1)
+
+        # ── 信号矛盾调和：预检测 vs 行为相似度 ──
+        predetect_name = ""
+        if predetect and predetect.success and predetect.identified_as:
+            predetect_name = predetect.identified_as.lower()
+        sim_name = similarities[0].benchmark_name.lower() if similarities else ""
+
+        if predetect_name and sim_name and sim_score >= 70:
+            # Check if the two signals agree on the same model family
+            _family_aliases = {
+                "deepseek": ["deepseek"],
+                "minimax": ["minimax", "abab"],
+                "claude": ["claude", "anthropic"],
+                "gpt": ["gpt", "openai", "chatgpt"],
+                "qwen": ["qwen", "tongyi"],
+                "gemini": ["gemini", "bard"],
+                "llama": ["llama", "meta"],
+                "glm": ["glm", "chatglm", "zhipu"],
+                "mistral": ["mistral", "mixtral"],
+                "yi": ["yi", "零一"],
+                "moonshot": ["moonshot", "kimi"],
+                "baichuan": ["baichuan"],
+            }
+
+            def _to_family(name: str) -> str:
+                for fam, aliases in _family_aliases.items():
+                    if any(a in name for a in aliases):
+                        return fam
+                return name
+
+            pre_fam = _to_family(predetect_name)
+            sim_fam = _to_family(sim_name)
+
+            if pre_fam != sim_fam:
+                signal_details["signal_conflict"] = {
+                    "predetect": predetect.identified_as if predetect else None,
+                    "similarity": similarities[0].benchmark_name if similarities else None,
+                }
+                reasons.append(
+                    f"⚠ 信号矛盾：预检测识别为 {predetect.identified_as}，"
+                    f"但行为特征最匹配 {similarities[0].benchmark_name}（{sim_score:.1f}分）"
+                    f"——可能存在多层路由或模型混合部署"
+                )
 
         adv_spoof = f("adversarial_spoof_signal_rate", 0.0)
         if adv_spoof > 0.5:
@@ -2344,13 +2389,35 @@ class ExtractionAuditBuilder:
                 if r.case.judge_method == "tokenizer_fingerprint" and s.judge_passed:
                     audit["tokenizer_mismatch"] = True
 
-        # Overall severity
+        # Compute extraction resistance rate for consistency with pipeline features
+        LEAK_JUDGES = {
+            "prompt_leak_detect", "forbidden_word_extract",
+            "path_leak_detect", "tool_config_leak_detect", "memory_leak_detect",
+        }
+        resisted = 0
+        total_ext_samples = 0
+        for r in ext_cases:
+            for s in r.samples:
+                if s.judge_passed is not None:
+                    total_ext_samples += 1
+                    if r.case.judge_method in LEAK_JUDGES:
+                        if not s.judge_passed:  # no leak = good
+                            resisted += 1
+                    else:
+                        if s.judge_passed:  # resistance = good
+                            resisted += 1
+        resist_rate = resisted / total_ext_samples if total_ext_samples > 0 else None
+        audit["extraction_resist_rate"] = round(resist_rate, 3) if resist_rate is not None else None
+
+        # Overall severity — also considers low extraction resistance
         if audit["real_model_exposed"] or audit["forbidden_words_leaked"]:
             audit["overall_severity"] = "CRITICAL"
         elif audit["spec_contradictions"] or audit["file_paths_leaked"]:
             audit["overall_severity"] = "HIGH"
         elif audit["language_bias_detected"] or audit["prompt_leaked"]:
             audit["overall_severity"] = "MEDIUM"
+        elif resist_rate is not None and resist_rate < 0.3:
+            audit["overall_severity"] = "LOW"
 
         audit["real_model_names"] = list(set(audit["real_model_names"]))
         audit["forbidden_words_leaked"] = list(set(audit["forbidden_words_leaked"]))
@@ -2402,6 +2469,8 @@ class ReportBuilder:
             "coding": 10,
             "safety": 6,
             "consistency": 6,
+            "knowledge": 3,
+            "tool_use": 3,
         }
 
         dimension_warnings = []
@@ -2416,6 +2485,22 @@ class ReportBuilder:
                     "required_samples": min_n,
                     "warning": f"{dim} 维度样本量不足（{actual_samples}/{min_n}），分数置信度低",
                 })
+
+        # Overall completeness check
+        MODE_EXPECTED = {"quick": 18, "standard": 62, "deep": 87}
+        expected_total = MODE_EXPECTED.get(test_mode, 87)
+        actual_total = len(case_results)
+        completeness_ratio = actual_total / expected_total if expected_total > 0 else 1.0
+        if completeness_ratio < 0.8:
+            dimension_warnings.insert(0, {
+                "dimension": "_overall",
+                "actual_samples": actual_total,
+                "required_samples": expected_total,
+                "warning": (
+                    f"仅完成 {actual_total}/{expected_total} 题（{completeness_ratio:.0%}），"
+                    f"部分维度数据不足，分数仅供参考"
+                ),
+            })
 
         report = {
             "run_id": run_id,
