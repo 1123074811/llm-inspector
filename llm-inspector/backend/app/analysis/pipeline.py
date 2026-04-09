@@ -2034,10 +2034,12 @@ class NarrativeBuilder:
 
         top_match_str = ""
         if top_match and top_match.similarity_score > 0.7:
+            ci_str = ""
+            if top_match.ci_95_low is not None and top_match.ci_95_high is not None:
+                ci_str = f"（95% CI: {top_match.ci_95_low:.1%}–{top_match.ci_95_high:.1%}）。"
             top_match_str = (
                 f"行为特征与 **{top_match.benchmark_name}** 的相似度最高，"
-                f"达到 {top_match.similarity_score:.1%}"
-                f"（95% CI: {top_match.ci_95_low:.1%}–{top_match.ci_95_high:.1%}）。"
+                f"达到 {top_match.similarity_score:.1%}{ci_str}"
             )
 
         sc_str = ""
@@ -2123,11 +2125,11 @@ class NarrativeBuilder:
         top3 = similarities[:3]
         lines = []
         for s in top3:
-            ci_width = s.ci_95_high - s.ci_95_low
-            confidence_desc = "高置信度" if ci_width < 0.1 else ("中等置信度" if ci_width < 0.2 else "低置信度")
+            ci_width = (s.ci_95_high - s.ci_95_low) if (s.ci_95_high is not None and s.ci_95_low is not None) else None
+            confidence_desc = "高置信度" if ci_width is not None and ci_width < 0.1 else ("中等置信度" if ci_width is not None and ci_width < 0.2 else "低置信度")
+            ci_str = f"（{confidence_desc}，CI: {s.ci_95_low:.1%}–{s.ci_95_high:.1%}）" if ci_width is not None else f"（{confidence_desc}）"
             lines.append(
-                f"  - **#{s.rank} {s.benchmark_name}**：相似度 {s.similarity_score:.1%}"
-                f"（{confidence_desc}，CI: {s.ci_95_low:.1%}–{s.ci_95_high:.1%}）"
+                f"  - **#{s.rank} {s.benchmark_name}**：相似度 {s.similarity_score:.1%}{ci_str}"
             )
 
         top = top3[0]
@@ -2194,8 +2196,8 @@ class NarrativeBuilder:
 
         if similarities:
             top = similarities[0]
-            ci_width = top.ci_95_high - top.ci_95_low
-            if ci_width > 0.2:
+            ci_width = (top.ci_95_high - top.ci_95_low) if (top.ci_95_high is not None and top.ci_95_low is not None) else None
+            if ci_width is not None and ci_width > 0.2:
                 notes.append(
                     f"最高相似度的置信区间较宽（±{ci_width / 2:.1%}），"
                     f"建议增加采样量（切换至 full 模式）以提高置信度。"
