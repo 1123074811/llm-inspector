@@ -32,6 +32,7 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET",    r"^/api/v1/models/[^/]+/theta-trend$", "app.handlers.models:handle_model_theta_trend"),
     ("GET",    r"^/api/v1/leaderboard$",              "app.handlers.models:handle_leaderboard"),
     ("GET",    r"^/api/v1/theta-leaderboard$",       "app.handlers.models:handle_theta_leaderboard"),
+    ("GET",    r"^/api/v1/elo-leaderboard$",         "app.handlers.models:handle_elo_leaderboard"),
     ("GET",    r"^/api/v1/exports/runs\.zip$",       "app.handlers.reports:handle_export_runs_zip"),
     ("POST",   r"^/api/v1/calibration/rebuild$",      "app.handlers.calibration:handle_calibration_rebuild"),
     ("POST",   r"^/api/v1/calibration/snapshot$",    "app.handlers.calibration:handle_calibration_snapshot_only"),

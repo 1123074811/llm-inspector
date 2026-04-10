@@ -17,7 +17,7 @@ from app.core.logging import setup_logging, get_logger
 from app.handlers.runs import (
     handle_list_runs, handle_create_run, handle_get_run,
     handle_delete_run, handle_cancel_run, handle_retry_run,
-    handle_continue_run, handle_skip_testing,
+    handle_continue_run, handle_skip_testing, handle_batch_delete_runs,
 )
 from app.handlers.reports import (
     handle_get_report, handle_export_radar_svg,
@@ -39,6 +39,7 @@ from app.handlers.calibration import (
 from app.handlers.models import (
     handle_model_trend, handle_leaderboard,
     handle_model_theta_trend, handle_theta_leaderboard,
+    handle_elo_leaderboard,
 )
 from app.handlers.misc import handle_health, handle_generate_isomorphic, handle_static
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
@@ -76,6 +77,8 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/models/[^/]+/theta-trend$",handle_model_theta_trend),
     ("GET",    r"^/api/v1/leaderboard$",             handle_leaderboard),
     ("GET",    r"^/api/v1/theta-leaderboard$",       handle_theta_leaderboard),
+    ("GET",    r"^/api/v1/elo-leaderboard$",         handle_elo_leaderboard),
+    ("POST",   r"^/api/v1/runs/batch-delete$",      handle_batch_delete_runs),
     ("GET",    r"^/api/v1/exports/runs\.zip$",       handle_export_runs_zip),
     ("POST",   r"^/api/v1/calibration/rebuild$",      handle_calibration_rebuild),
     ("POST",   r"^/api/v1/calibration/snapshot$",     handle_calibration_snapshot_only),

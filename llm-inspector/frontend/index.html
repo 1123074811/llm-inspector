@@ -16,6 +16,7 @@
   <div class="nav-link active" id="nav-home" onclick="showPage('home')">新建测试</div>
   <div class="nav-link" id="nav-runs" onclick="showPage('runs')">历史记录</div>
   <div class="nav-link" id="nav-benchmarks" onclick="showPage('benchmarks')">我的基准</div>
+  <div class="nav-link" id="nav-leaderboard" onclick="showPage('leaderboard')">排行榜 (ELO)</div>
   <div class="nav-spacer"></div>
   <div class="nav-status" id="nav-status">ready</div>
 </nav>
@@ -147,8 +148,22 @@
   </div>
 </div>
 
+<!-- ═══════════════════════ PAGE: LEADERBOARD ═══════════════════════ -->
+<div class="page" id="page-leaderboard">
+  <div style="margin-bottom:24px">
+    <h1>ELO 排行榜</h1>
+    <p class="subtitle">基于竞技场模式的对战胜率，结合 Bradley-Terry 模型计算的 ELO 积分</p>
+  </div>
+  <div class="card">
+    <div id="leaderboard-content">
+      <div class="loading"><div class="spinner"></div><div>加载中...</div></div>
+    </div>
+  </div>
+</div>
+
 
 <script src="app.js"></script>
 
 </body>
 </html>
+

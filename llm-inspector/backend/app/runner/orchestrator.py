@@ -1201,15 +1201,32 @@ def _build_and_save_report(
 
     pairwise = PairwiseEngine().compare_to_baseline(theta_report, baseline_theta)
     if pairwise:
+        model_b = similarities[0].benchmark_name if similarities else "baseline"
         repo.save_pairwise_result(
             run_id=run_id,
             model_a=run["model_name"],
-            model_b=(similarities[0].benchmark_name if similarities else "baseline"),
+            model_b=model_b,
             delta_theta=pairwise["delta_theta"],
             win_prob_a=pairwise["win_prob"],
             method=pairwise.get("method", "bradley_terry"),
             details=pairwise,
         )
+        # Update ELO standings
+        from app.analysis.elo import EloLeaderboard
+        try:
+            elo_board = EloLeaderboard()
+            new_a, new_b = elo_board.update_from_pairwise(
+                model_a=run["model_name"],
+                display_a=run["model_name"],
+                model_b=model_b,
+                display_b=model_b.title(),
+                win_prob_a=pairwise["win_prob"],
+                run_id=run_id,
+            )
+            pairwise["elo_rating_a"] = new_a
+            pairwise["elo_rating_b"] = new_b
+        except Exception as e:
+            logger.error("Failed to update ELO rankings", error=str(e))
 
     # Build final report
     builder = ReportBuilder()

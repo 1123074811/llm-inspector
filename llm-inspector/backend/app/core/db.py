@@ -321,6 +321,21 @@ CREATE TABLE IF NOT EXISTS llm_response_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cache_expires ON llm_response_cache(expires_at);
+
+CREATE TABLE IF NOT EXISTS model_elo (
+    model_name      TEXT PRIMARY KEY,
+    display_name    TEXT NOT NULL,
+    elo_rating      REAL NOT NULL DEFAULT 1500.0,
+    games_played    INTEGER NOT NULL DEFAULT 0,
+    wins            INTEGER NOT NULL DEFAULT 0,
+    losses          INTEGER NOT NULL DEFAULT 0,
+    draws           INTEGER NOT NULL DEFAULT 0,
+    peak_elo        REAL NOT NULL DEFAULT 1500.0,
+    last_run_id     TEXT,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_elo_rating ON model_elo(elo_rating DESC);
 """
 
 

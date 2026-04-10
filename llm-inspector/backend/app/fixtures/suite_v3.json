@@ -2526,6 +2526,54 @@
       },
       "weight": 2.5,
       "difficulty": 0.75
+    },
+    {
+      "id": "signature_001",
+      "category": "fingerprint",
+      "dimension": "authenticity",
+      "name": "transformer_architecture_signature",
+      "user_prompt": "请用中文回答：什么是 transformer 架构？",
+      "expected_type": "text",
+      "judge_method": "heuristic_style",
+      "max_tokens": 300,
+      "n_samples": 1,
+      "temperature": 0.7,
+      "params": {
+        "extract": [
+          "opening_style",
+          "list_preference",
+          "markdown_density"
+        ],
+        "_meta": {
+          "mode_level": "standard",
+          "stage_hint": "A"
+        }
+      },
+      "weight": 1.5,
+      "difficulty": 0.3
+    },
+    {
+      "id": "consistency_fewshot_001",
+      "category": "consistency",
+      "dimension": "consistency",
+      "name": "fewshot_alignment",
+      "system_prompt": "Q: 1+1?\nA: TWO\nQ: 2+2?\nA: FOUR\nQ: 3+3?\nA: SIX\n",
+      "user_prompt": "Q: 4+4?\nA:",
+      "expected_type": "exact_text",
+      "judge_method": "exact_match",
+      "max_tokens": 10,
+      "n_samples": 1,
+      "temperature": 0.0,
+      "params": {
+        "target": "EIGHT",
+        "match_means_pass": true,
+        "note": "Tests if model aligns with the uppercase string convention in the few-shot examples",
+        "_meta": {
+          "mode_level": "standard"
+        }
+      },
+      "weight": 2.0,
+      "difficulty": 0.4
     }
   ]
 }

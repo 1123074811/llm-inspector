@@ -279,3 +279,23 @@ body>*{position:relative;z-index:1}
     page-break-after: avoid;
   }
 }
+
+/* LEADERBOARD REFINEMENTS */
+.rank-top {
+  color: var(--accent);
+  font-size: 1.1em;
+}
+.rank-top b {
+  font-size: 1.4em;
+  text-shadow: 0 0 12px rgba(200,64,26,0.15);
+}
+
+.data-table tr:hover td {
+  background: var(--bg2);
+}
+.data-table th {
+  background: var(--bg2);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}

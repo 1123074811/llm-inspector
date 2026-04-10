@@ -20,8 +20,8 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
 
-  const pageMap = {home:'page-home', runs:'page-runs', benchmarks:'page-benchmarks', task:'page-task'};
-  const navMap  = {home:'nav-home', runs:'nav-runs', benchmarks:'nav-benchmarks'};
+  const pageMap = {home:'page-home', runs:'page-runs', benchmarks:'page-benchmarks', task:'page-task', leaderboard:'page-leaderboard'};
+  const navMap  = {home:'nav-home', runs:'nav-runs', benchmarks:'nav-benchmarks', leaderboard:'nav-leaderboard'};
 
   const pageEl = document.getElementById(pageMap[name]);
   if (pageEl) pageEl.classList.add('active');
@@ -30,8 +30,57 @@ function showPage(name) {
 
   if (name === 'runs')       loadRuns();
   if (name === 'benchmarks') loadBaselines();
+  if (name === 'leaderboard') loadLeaderboard();
   if (_pollTimer && name !== 'task') { clearInterval(_pollTimer); _pollTimer = null; }
 }
+
+async function loadLeaderboard() {
+  const c = document.getElementById('leaderboard-content');
+  c.innerHTML = '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+  const {ok, data} = await api('GET', '/api/v1/elo-leaderboard');
+  if (!ok) { c.innerHTML = '<div class="fail">加载失败</div>'; return; }
+
+  if (!data || data.length === 0) {
+    c.innerHTML = '<div style="color:var(--ink4);padding:40px;text-align:center">暂无排行榜数据，请先完成基准测试对比</div>';
+    return;
+  }
+
+  let html = `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>排名</th>
+          <th>模型名称</th>
+          <th>ELO 积分 (对战总局数)</th>
+          <th>胜 / 平 / 负</th>
+          <th>最高分</th>
+          <th>最后测试时间</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  data.forEach((r, idx) => {
+    const eloClass = idx < 3 ? 'rank-top' : '';
+    const medals = ['🥇', '🥈', '🥉'];
+    const rankLabel = idx < 3 ? medals[idx] : `#${idx+1}`;
+    const dt = new Date(r.updated_at).toLocaleString();
+    html += `
+      <tr>
+        <td style="font-weight:bold;font-size:16px">${rankLabel}</td>
+        <td style="font-weight:600">${r.display_name} <br><span style="font-size:11px;font-weight:normal;color:var(--ink4)">${r.model_name}</span></td>
+        <td class="${eloClass}"><b>${r.elo_rating.toFixed(0)}</b> <span style="color:var(--ink4);font-weight:normal;font-size:12px">(${r.games_played} 局)</span></td>
+        <td style="color:var(--ink3);font-size:13px"><span style="color:var(--green)">${r.wins}</span> / <span style="color:var(--amber)">${r.draws}</span> / <span style="color:var(--red)">${r.losses}</span></td>
+        <td style="color:var(--ink3)">${r.peak_elo.toFixed(0)}</td>
+        <td style="color:var(--ink4);font-size:12px">${dt}</td>
+      </tr>
+    `;
+  });
+
+  html += '</tbody></table>';
+  c.innerHTML = html;
+}
+
 
 // ── API helpers ────────────────────────────────────────────────────────────
 

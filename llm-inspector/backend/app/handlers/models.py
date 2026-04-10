@@ -41,3 +41,9 @@ def handle_theta_leaderboard(_path, qs, _body) -> tuple:
     dimension = qs.get("dimension", ["global"])[0]
     limit = int(qs.get("limit", ["50"])[0])
     return _json(repo.get_theta_leaderboard(dimension=dimension, limit=min(limit, 200)))
+
+
+def handle_elo_leaderboard(_path, qs, _body) -> tuple:
+    from app.repository import repo
+    limit = int(qs.get("limit", ["100"])[0])
+    return _json(repo.list_elo(limit=min(limit, 500)))

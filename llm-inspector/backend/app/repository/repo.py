@@ -1042,3 +1042,78 @@ def update_calibration_replay(replay_id: str, status: str, **kwargs) -> None:
     conn = get_conn()
     conn.execute(f"UPDATE calibration_replays SET {','.join(sets)} WHERE id=?", vals)
     conn.commit()
+
+
+# ── ELO and Pairwise ─────────────────────────────────────────────────────────
+
+def save_pairwise_result(
+    run_id: str,
+    model_a: str,
+    model_b: str,
+    delta_theta: float,
+    win_prob_a: float,
+    method: str,
+    details: dict,
+) -> None:
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO pairwise_results 
+        (id, run_id, model_a, model_b, delta_theta, win_prob_a, method, details, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            new_id(), run_id, model_a, model_b,
+            delta_theta, win_prob_a, method,
+            json_col(details), now_iso()
+        )
+    )
+    conn.commit()
+
+
+from app.analysis.elo import EloRecord
+
+def get_elo(model_name: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM model_elo WHERE model_name = ?", (model_name,)).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def upsert_elo(record: EloRecord) -> None:
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO model_elo 
+        (model_name, display_name, elo_rating, games_played, wins, losses, draws, peak_elo, last_run_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(model_name) DO UPDATE SET
+            display_name = excluded.display_name,
+            elo_rating = excluded.elo_rating,
+            games_played = excluded.games_played,
+            wins = excluded.wins,
+            losses = excluded.losses,
+            draws = excluded.draws,
+            peak_elo = excluded.peak_elo,
+            last_run_id = excluded.last_run_id,
+            updated_at = excluded.updated_at
+        """,
+        (
+            record.model_name,
+            record.display_name,
+            record.elo_rating,
+            record.games_played,
+            record.wins,
+            record.losses,
+            record.draws,
+            record.peak_elo,
+            record.last_run_id,
+            now_iso()
+        )
+    )
+    conn.commit()
+
+
+def list_elo(limit: int = 100) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM model_elo ORDER BY elo_rating DESC LIMIT ?", (limit,)).fetchall()
+    return [row_to_dict(r) for r in rows]
