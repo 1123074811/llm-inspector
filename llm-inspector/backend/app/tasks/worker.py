@@ -24,7 +24,35 @@ _local_lock = threading.Lock()
 
 
 def submit_run(run_id: str) -> None:
-    """Submit a run pipeline to the background thread pool."""
+    """Submit a run pipeline to the background thread pool.
+
+    When the environment variable ASYNCIO_MODE=1 is set, the async pipeline
+    (run_pipeline_async) is used instead of the sync pipeline, giving higher
+    concurrency and lower per-task overhead.
+    """
+    use_async = os.environ.get("ASYNCIO_MODE", "0") == "1"
+
+    if use_async:
+        from app.runner.orchestrator import run_pipeline_async
+        import asyncio
+
+        def _task():
+            with _local_lock:
+                _local_running[run_id] = True
+            try:
+                asyncio.run(run_pipeline_async(run_id))
+            except Exception as e:
+                logger.error("Async pipeline exception", run_id=run_id, error=str(e))
+                from app.repository import repo
+                repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
+            finally:
+                with _local_lock:
+                    _local_running.pop(run_id, None)
+
+        _local_executor.submit(_task)
+        logger.info("Run submitted to async worker pool", run_id=run_id)
+        return
+
     from app.runner.orchestrator import run_pipeline
 
     def _task():
@@ -42,6 +70,7 @@ def submit_run(run_id: str) -> None:
 
     _local_executor.submit(_task)
     logger.info("Run submitted to worker pool", run_id=run_id)
+
 
 
 def submit_compare(compare_id: str) -> None:

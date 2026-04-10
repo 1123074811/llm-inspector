@@ -1,17 +1,23 @@
 """
-Case executor — runs a single TestCase (with n_samples) against an adapter.
+Async Case Executor — Phase B of asyncio migration.
+
+Mirrors case_executor.py but all I/O calls are awaited.
+Supports both AsyncOpenAICompatibleAdapter (native) and sync
+OpenAICompatibleAdapter (via asyncio.to_thread shim).
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from app.core.schemas import (
-    TestCase, CaseResult, SampleResult, LLMRequest, Message
+    TestCase, CaseResult, SampleResult, LLMRequest, Message,
 )
 from app.judge.methods import judge
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Mirror of TIMEOUT_MAP in case_executor.py
 TIMEOUT_MAP = {
     "protocol": 15,
     "instruction": 30,
@@ -22,38 +28,46 @@ TIMEOUT_MAP = {
 }
 
 INTER_SAMPLE_DELAY_BASE = 0.1
-_delay_state = {
-    "current": INTER_SAMPLE_DELAY_BASE,
-    "success_count": 0
-}
 
-def _update_delay(resp):
-    global _delay_state
+
+def _compute_new_delay(current: float, resp, success_count: int) -> tuple[float, int]:
+    """Returns (new_delay, new_success_count) without mutating global state."""
     if getattr(resp, "status_code", 200) == 429 or getattr(resp, "error_type", "") == "rate_limit":
-        _delay_state["current"] = min(2.0, _delay_state["current"] * 2.0)
-        _delay_state["success_count"] = 0
+        return min(2.0, current * 2.0), 0
     elif resp and resp.ok:
-        _delay_state["success_count"] += 1
-        if _delay_state["success_count"] >= 10:
-            _delay_state["current"] = INTER_SAMPLE_DELAY_BASE
-            _delay_state["success_count"] = 0
+        new_count = success_count + 1
+        if new_count >= 10:
+            return INTER_SAMPLE_DELAY_BASE, 0
+        return current, new_count
+    return current, success_count
 
 
-def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
+async def _achat(adapter, req: LLMRequest):
+    """Call adapter.achat (async) or adapter.chat (sync via to_thread)."""
+    if hasattr(adapter, "achat"):
+        return await adapter.achat(req)
+    # Sync adapter — offload to thread pool
+    return await asyncio.to_thread(adapter.chat, req)
+
+
+async def async_execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
     """
-    Execute a TestCase against the adapter.
-    Runs case.n_samples times, judges each response.
+    Async version of execute_case.
+
+    Executes a TestCase against the adapter, running case.n_samples times,
+    judging each response. Replaces time.sleep with asyncio.sleep so the
+    event loop can schedule other coroutines during inter-sample delays.
     """
     result = CaseResult(case=case)
 
-    # Handle param comparison cases (temperature variance test)
     if "also_run_at" in case.params:
-        return _execute_param_comparison(adapter, model_name, case)
+        return await _async_execute_param_comparison(adapter, model_name, case)
 
+    delay = INTER_SAMPLE_DELAY_BASE
+    success_count = 0
     consecutive_truncations = 0
+
     for i in range(case.n_samples):
-        # Early-stop: if 2+ consecutive responses were truncated, skip remaining
-        # samples — they will almost certainly truncate too, wasting tokens.
         if consecutive_truncations >= 2:
             logger.info(
                 "Skipping remaining samples due to consecutive truncations",
@@ -66,14 +80,12 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             messages.append(Message("system", case.system_prompt))
         messages.append(Message("user", case.user_prompt))
 
-        # Build extra_params from case params if needed
         extra: dict = {}
         req_params = case.params.get("request_params", {})
         if req_params:
             extra.update(req_params)
 
         timeout = TIMEOUT_MAP.get(case.category, 60)
-
         req = LLMRequest(
             model=model_name,
             messages=messages,
@@ -84,20 +96,18 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
         )
 
         logger.info(
-            "Executing case",
-            case_id=case.id,
-            sample=i,
-            category=case.category,
+            "Async executing case",
+            case_id=case.id, sample=i, category=case.category,
         )
 
-        resp = adapter.chat(req)
+        resp = await _achat(adapter, req)
 
-        # Inter-sample delay to avoid rate limits
-        _update_delay(resp)
+        # Adaptive inter-sample delay (async sleep — doesn't block the loop)
+        delay, success_count = _compute_new_delay(delay, resp, success_count)
         if i < case.n_samples - 1:
-            time.sleep(_delay_state["current"])
+            await asyncio.sleep(delay)
 
-        # Detect truncated responses (finish_reason == "length")
+        # Truncation detection
         truncated = resp.finish_reason == "length"
         if truncated:
             consecutive_truncations += 1
@@ -105,23 +115,20 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
                 "Response truncated (finish_reason=length)",
                 case_id=case.id, sample=i, max_tokens=case.max_tokens,
             )
-            # Mark as failed with truncation detail — don't waste judge on
-            # incomplete text that will almost certainly miss key signals.
             result.samples.append(SampleResult(
                 sample_index=i,
                 response=resp,
                 judge_passed=False,
                 judge_detail={
                     "truncated": True,
-                    "reason": "response truncated (finish_reason=length), "
-                              "output incomplete — judge skipped",
+                    "reason": "response truncated (finish_reason=length), output incomplete — judge skipped",
                     "max_tokens": case.max_tokens,
                 },
             ))
         else:
             consecutive_truncations = 0
+            # judge is pure Python (CPU-bound, no I/O) — call directly
             passed, detail = judge(case.judge_method, resp.content, case.params)
-
             result.samples.append(SampleResult(
                 sample_index=i,
                 response=resp,
@@ -132,18 +139,15 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
     return result
 
 
-def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseResult:
-    """
-    Special handler for temperature variance tests.
-    Runs case n_samples times at case.temperature,
-    then also_run_at[0] n_samples times at the alt temperature.
-    Judges by comparing variance between groups.
-    """
+async def _async_execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseResult:
+    """Async version of temperature variance test."""
     result = CaseResult(case=case)
     alt_configs = case.params.get("also_run_at", [])
 
-    def _run_group(temp: float, n: int, group_name: str) -> list[str]:
+    async def _run_group(temp: float, n: int, group_name: str) -> list[str]:
         outputs = []
+        delay = INTER_SAMPLE_DELAY_BASE
+        success_count = 0
         for i in range(n):
             messages = []
             if case.system_prompt:
@@ -153,7 +157,7 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
                 model=model_name, messages=messages,
                 temperature=temp, max_tokens=case.max_tokens,
             )
-            resp = adapter.chat(req)
+            resp = await _achat(adapter, req)
             if resp.content:
                 outputs.append(resp.content.strip())
             result.samples.append(SampleResult(
@@ -162,26 +166,21 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
                 judge_passed=None,
                 judge_detail={"group": group_name, "temperature": temp},
             ))
-            _update_delay(resp)
-            time.sleep(_delay_state["current"])
+            delay, success_count = _compute_new_delay(delay, resp, success_count)
+            await asyncio.sleep(delay)
         return outputs
 
-    # Primary group
-    primary_outputs = _run_group(case.temperature, case.n_samples, "primary")
+    primary_outputs = await _run_group(case.temperature, case.n_samples, "primary")
 
-    # Alt groups
     for alt in alt_configs:
-        alt_outputs = _run_group(alt["temperature"], alt["n_samples"], "alt")
+        alt_outputs = await _run_group(alt["temperature"], alt["n_samples"], "alt")
 
-        # Measure variance: unique outputs / total outputs
         primary_unique = len(set(primary_outputs)) / max(len(primary_outputs), 1)
         alt_unique = len(set(alt_outputs)) / max(len(alt_outputs), 1)
-
         param_effective = primary_unique > alt_unique or (
             case.temperature >= 1.0 and primary_unique > 0.4
         )
 
-        # Annotate the last sample with the verdict
         if result.samples:
             last = result.samples[-1]
             last.judge_passed = param_effective

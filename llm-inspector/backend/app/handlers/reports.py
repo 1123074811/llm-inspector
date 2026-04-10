@@ -29,9 +29,9 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
         ("能力分", float(score.get("capability_score", 0.0))),
         ("真实性", float(score.get("authenticity_score", 0.0))),
         ("性能分", float(score.get("performance_score", 0.0))),
-        ("推理", float(breakdown.get("knowledge_score", 0.0))),
-        ("指令", float(breakdown.get("tool_use_score", 0.0))),
-        ("一致性", float(breakdown.get("extraction_resistance", 0.0))),
+        ("推理", float(breakdown.get("reasoning", 0.0))),
+        ("指令", float(breakdown.get("instruction", 0.0))),
+        ("一致性", float(breakdown.get("consistency", 0.0))),
     ]
 
     w, h = 760, 560
@@ -45,7 +45,7 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
 
     rings = []
     for lv in [2000, 4000, 6000, 8000, 10000]:
-        r = max_r * lv / 10000
+        r = max_r * lv / 10000.0
         pts = ["{:.1f},{:.1f}".format(*p2xy(r, a)) for a in angles]
         rings.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="#ddd" stroke-width="1" />')
 
@@ -58,7 +58,7 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
         axes.append(f'<line x1="{cx}" y1="{cy}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#bbb" stroke-width="1" />')
         lx, ly = p2xy(max_r + 24, a)
         labels.append(f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="14" fill="#333" text-anchor="middle">{name}</text>')
-        r = max_r * max(0.0, min(10000.0, val)) / 10000
+        r = max_r * max(0.0, min(10000.0, val)) / 10000.0
         x, y = p2xy(r, a)
         poly_pts.append(f"{x:.1f},{y:.1f}")
         dots.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#c8401a" />')

@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
+_RETRY_ON_TIMEOUT = True  # 新增: 超时也重试一次
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY_SEC = 1.0
 
@@ -31,7 +32,15 @@ def _with_retry(fn, max_retries: int = _MAX_RETRIES):
         result = fn()
         if result is not None and result.ok:
             return result
-        if result is not None and result.status_code not in _RETRYABLE_CODES:
+            
+        is_retryable = False
+        if result is not None:
+            if result.status_code in _RETRYABLE_CODES:
+                is_retryable = True
+            elif _RETRY_ON_TIMEOUT and result.error_type == "timeout":
+                is_retryable = True
+                
+        if not is_retryable:
             return result
         if attempt < max_retries:
             delay = _RETRY_BASE_DELAY_SEC * (2 ** attempt)

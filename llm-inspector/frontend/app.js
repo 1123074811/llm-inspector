@@ -515,7 +515,20 @@ function animateProcessConsole(prog, status, pre, responses = []) {
 
   if (pre?.identified_as && !prev.predetectLogged) {
     pushConsoleSeparator('预检测结果');
-    pushConsole(`[预检测] 识别模型: ${pre.identified_as}`);
+    
+    const layers = pre.layer_results || [];
+    for (const l of layers) {
+      pushConsole(`[预检测] 执行层级 Layer ${l.layer_id || '?'}`, 'meta');
+      for (const ev of (l.evidence || [])) {
+        pushConsole(`[证据] ${ev}`);
+      }
+    }
+    
+    if (pre.routing_info && pre.routing_info.returned_model) {
+      pushConsole(`[预检测] 路由探测实际模型: ${pre.routing_info.returned_model}`, pre.routing_info.is_routed ? 'del' : 'meta');
+    }
+
+    pushConsole(`[预检测] 最终识别: ${pre.identified_as}`);
     pushConsole(`[预检测] 置信度: ${(pre.confidence * 100).toFixed(0)}%`, 'meta');
     _lastProgressSnapshot.predetectLogged = true;
   }
@@ -981,7 +994,7 @@ function renderReport(r) {
       <h2>雷达图预览</h2>
       <div style="font-size:12px;color:var(--ink4);margin-bottom:10px">可右上角按钮下载 SVG 原图</div>
       <div style="border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff">
-        <iframe src="/api/v1/runs/${encodeURIComponent(r.run_id)}/radar.svg" style="width:100%;aspect-ratio:760/560;border:0" scrolling="no" loading="lazy"></iframe>
+        <iframe src="/api/v1/runs/${encodeURIComponent(r.run_id)}/radar.svg?_t=${Date.now()}" style="width:100%;aspect-ratio:760/560;border:0" scrolling="no" loading="lazy"></iframe>
       </div>
     </div>`;
 

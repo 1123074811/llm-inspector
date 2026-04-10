@@ -51,8 +51,8 @@ def render_svg(report: dict) -> str:
     angles = [(-math.pi / 2) + i * (2 * math.pi / n) for i in range(n)]
 
     rings = []
-    for lv in [20, 40, 60, 80, 100]:
-        r = max_r * lv / 100
+    for lv in [2000, 4000, 6000, 8000, 10000]:
+        r = max_r * lv / 10000.0
         pts = ["{:.1f},{:.1f}".format(*_polar_to_xy(cx, cy, r, a)) for a in angles]
         rings.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="#ddd" stroke-width="1" />')
 
@@ -67,7 +67,7 @@ def render_svg(report: dict) -> str:
     poly_pts = []
     val_labels = []
     for (name, val), a in zip(dims, angles):
-        r = max_r * max(0.0, min(100.0, val)) / 100
+        r = max_r * max(0.0, min(10000.0, val)) / 10000.0
         x, y = _polar_to_xy(cx, cy, r, a)
         poly_pts.append(f"{x:.1f},{y:.1f}")
         val_labels.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#2563eb" />')

@@ -10,6 +10,10 @@ if exist ".venv\Scripts\activate.bat" (
     echo [Warning] .venv not found.
 )
 
+REM Enable asyncio-native concurrent pipeline (Phase P3)
+REM Set to 0 to fall back to ThreadPoolExecutor mode
+SET ASYNCIO_MODE=1
+
 REM Change to backend directory and start server
 cd backend
 echo Serving on http://localhost:8000
