@@ -439,6 +439,11 @@ class OpenAICompatibleAdapter:
         choices = body.get("choices", [{}])
         choice = choices[0] if choices else {}
         usage = body.get("usage", {})
+        # Extract logprobs if the API returned them (OpenAI-compatible format)
+        logprobs: list | None = None
+        raw_lp = choice.get("logprobs")
+        if isinstance(raw_lp, dict):
+            logprobs = raw_lp.get("content")  # list of token-level objects
         return LLMResponse(
             content=choice.get("message", {}).get("content"),
             raw_json=body,
@@ -449,4 +454,5 @@ class OpenAICompatibleAdapter:
             usage_prompt_tokens=usage.get("prompt_tokens"),
             usage_completion_tokens=usage.get("completion_tokens"),
             usage_total_tokens=usage.get("total_tokens"),
+            logprobs=logprobs,
         )

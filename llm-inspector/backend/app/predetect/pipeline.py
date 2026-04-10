@@ -1127,6 +1127,114 @@ class Layer6MultiTurnProbes:
         return messages
 
 
+class Layer7Logprobs:
+    """
+    Layer 7 — Logprobs tokenizer fingerprint.
+    Uses the token-level log-probability distribution returned by the API
+    to infer the underlying tokenizer family without relying on self-reported counts.
+
+    Only activates when the API supports logprobs (OpenAI-compatible APIs with
+    logprobs=true). Skipped gracefully when not supported.
+    """
+
+    # Expected highest-probability digit for "supercalifragilistic" by family.
+    # Values confirmed via tiktoken / sentencepiece reference implementations.
+    _EXPECTED: dict[str, str] = {
+        "tiktoken-o200k (GPT-4o)":  "4",
+        "tiktoken-cl100k (GPT-4)":  "6",
+        "claude tokenizer":         "5",
+        "llama-spm / LLaMA":        "7",
+        "deepseek tokenizer":       "4",
+        "qwen tokenizer":           "4",
+    }
+
+    def run(self, adapter, model_name: str) -> LayerResult:
+        import math
+        evidence: list[str] = []
+        tokens_used = 0
+        identified: str | None = None
+        confidence = 0.0
+
+        probe_word = "supercalifragilistic"
+        resp = adapter.chat(LLMRequest(
+            model=model_name,
+            messages=[Message(
+                "user",
+                f"Count the tokens in '{probe_word}' according to your tokenizer. "
+                f"Reply with just the number.",
+            )],
+            max_tokens=3,
+            temperature=0.0,
+            logprobs=True,
+            top_logprobs=5,
+        ))
+        tokens_used += resp.usage_total_tokens or 10
+
+        if not resp.logprobs:
+            evidence.append("API did not return logprobs — layer skipped")
+            return LayerResult(
+                layer="logprobs_fp",
+                confidence=0.0,
+                identified_as=None,
+                evidence=evidence,
+                tokens_used=tokens_used,
+            )
+
+        # Build digit-token probability map from first output token
+        first_pos = resp.logprobs[0] if resp.logprobs else {}
+        top_lp = first_pos.get("top_logprobs", [])
+        probs: dict[str, float] = {}
+        for entry in top_lp:
+            token_str = entry.get("token", "").strip()
+            logprob = entry.get("logprob", -100)
+            if token_str.isdigit():
+                probs[token_str] = math.exp(logprob)
+
+        if not probs:
+            evidence.append(f"No digit tokens in top-{len(top_lp)} logprobs — insufficient signal")
+            return LayerResult(
+                layer="logprobs_fp",
+                confidence=0.0,
+                identified_as=None,
+                evidence=evidence,
+                tokens_used=tokens_used,
+            )
+
+        dist_str = ", ".join(
+            f"'{k}'={v:.3f}" for k, v in sorted(probs.items(), key=lambda x: -x[1])
+        )
+        evidence.append(f"Logprob digit distribution for '{probe_word}': {dist_str}")
+
+        top_token = max(probs, key=probs.__getitem__)
+        top_prob = probs[top_token]
+
+        # Match against expected distributions
+        for family, expected_digit in self._EXPECTED.items():
+            if top_token == expected_digit and top_prob > 0.35:
+                identified = family
+                # Confidence scales with probability mass on expected token
+                confidence = round(min(0.85, 0.45 + top_prob * 0.4), 3)
+                evidence.append(
+                    f"Peak logprob on digit '{top_token}' (p={top_prob:.3f}) "
+                    f"→ matches {family} (confidence={confidence:.2f})"
+                )
+                break
+
+        if not identified:
+            evidence.append(
+                f"Peak digit token '{top_token}' (p={top_prob:.3f}) "
+                f"does not match any known tokenizer profile"
+            )
+
+        return LayerResult(
+            layer="logprobs_fp",
+            confidence=confidence,
+            identified_as=identified,
+            evidence=evidence,
+            tokens_used=tokens_used,
+        )
+
+
 # ── Main Pipeline ─────────────────────────────────────────────────────────────
 
 class PreDetectionPipeline:
@@ -1301,6 +1409,15 @@ class PreDetectionPipeline:
                 self._log_layer_result("Layer6b/MultiTurn", r6b)
                 if r6b.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r6b, layer_results, total_tokens)
+
+                # Layer 7 — Logprobs tokenizer fingerprint (deep/extraction mode only)
+                logger.info("PreDetect Layer7: Logprobs fingerprint", model=model_name)
+                r7 = Layer7Logprobs().run(adapter, model_name)
+                layer_results.append(r7)
+                total_tokens += r7.tokens_used
+                self._log_layer_result("Layer7/Logprobs", r7)
+                if r7.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r7, layer_results, total_tokens)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

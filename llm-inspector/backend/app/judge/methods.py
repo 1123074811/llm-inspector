@@ -362,8 +362,11 @@ def _refusal_detect(text: str, params: dict) -> tuple[bool | None, dict]:
 def _semantic_judge(text: str, params: dict) -> tuple[bool, dict]:
     """
     Semantic judge for complex reasoning and open-ended cases.
-    When JUDGE_API_URL is configured: uses LLM-as-Judge for evaluation.
-    Otherwise: falls back to local rule-based keyword/rubric matching.
+
+    When JUDGE_API_URL is configured AND criteria is provided: runs both
+    LLM-as-Judge and local_semantic_judge and returns a weighted consensus.
+    Otherwise: uses local_semantic_judge alone.
+    Fallback: minimal keyword-coverage check.
     """
     rubric = params.get("rubric", {})
     criteria = rubric.get("criteria", "") if isinstance(rubric, dict) else str(rubric)
@@ -371,28 +374,64 @@ def _semantic_judge(text: str, params: dict) -> tuple[bool, dict]:
     required_keywords: list[str] = params.get("required_keywords", [])
     forbidden_patterns: list[str] = params.get("forbidden_patterns", [])
     accept_uncertainty: bool = params.get("accept_uncertainty", False)
+    prompt_text = params.get("_original_prompt", "")
 
-    # Try LLM-as-Judge first (if configured)
+    # ── Multi-judge consensus (LLM available) ────────────────────────────────
     try:
-        from app.judge.semantic import llm_judge_available, llm_judge
+        from app.judge.semantic import llm_judge_available, llm_judge, local_semantic_judge
         if llm_judge_available() and criteria:
-            prompt_text = params.get("_original_prompt", "")
-            result = llm_judge(prompt=prompt_text, response=text, criteria=criteria)
-            return result.passed, {
-                "method": "llm_judge",
-                "score": result.score,
-                "reasoning": result.reasoning,
-                "confidence": result.confidence,
+            llm_result = llm_judge(prompt=prompt_text, response=text, criteria=criteria)
+            local_result = local_semantic_judge(
+                prompt=prompt_text,
+                response=text,
+                criteria=criteria,
+                reference_answer=reference,
+                required_keywords=required_keywords,
+                forbidden_patterns=forbidden_patterns,
+                accept_uncertainty=accept_uncertainty,
+            )
+            # Weighted consensus: LLM judge 60%, local judge 40%
+            consensus_score = round(0.6 * llm_result.score + 0.4 * local_result.score, 1)
+            agreement = llm_result.passed == local_result.passed
+            if agreement:
+                consensus_passed = llm_result.passed
+                # Agreement bonus: multiply avg confidence by 1.15, capped at 1.0
+                consensus_conf = round(
+                    min(1.0, (0.6 * llm_result.confidence + 0.4 * local_result.confidence) * 1.15), 3
+                )
+            else:
+                # Disagreement: fall back to weighted score threshold, penalise confidence
+                consensus_passed = consensus_score >= 50
+                consensus_conf = round(
+                    (0.6 * llm_result.confidence + 0.4 * local_result.confidence) * 0.75, 3
+                )
+            return consensus_passed, {
+                "method": "multi_judge_consensus",
+                "score": consensus_score,
+                "confidence": consensus_conf,
+                "consensus": "agree" if agreement else "disagree",
+                "llm_judge": {
+                    "passed": llm_result.passed,
+                    "score": llm_result.score,
+                    "confidence": llm_result.confidence,
+                    "reasoning": llm_result.reasoning,
+                },
+                "local_judge": {
+                    "passed": local_result.passed,
+                    "score": local_result.score,
+                    "confidence": local_result.confidence,
+                    "reasoning": local_result.reasoning,
+                },
                 "keyword_coverage": None,
             }
     except Exception:
-        pass  # Fall through to local evaluation
+        pass  # Fall through to local-only evaluation
 
-    # Use enhanced local semantic evaluation
+    # ── Local semantic evaluation (no LLM judge configured) ──────────────────
     try:
         from app.judge.semantic import local_semantic_judge
         result = local_semantic_judge(
-            prompt=params.get("_original_prompt", ""),
+            prompt=prompt_text,
             response=text,
             criteria=criteria,
             reference_answer=reference,
@@ -410,12 +449,11 @@ def _semantic_judge(text: str, params: dict) -> tuple[bool, dict]:
     except Exception:
         pass
 
-    # Minimal fallback if local_semantic_judge also fails
+    # ── Minimal fallback ──────────────────────────────────────────────────────
     lower_text = text.lower()
     keyword_hits = [kw for kw in required_keywords if kw.lower() in lower_text] if required_keywords else []
     keyword_coverage = len(keyword_hits) / max(len(required_keywords), 1) if required_keywords else 1.0
 
-    # Forbidden pattern detection
     forbidden_hits = []
     for pat in forbidden_patterns:
         try:
@@ -424,9 +462,7 @@ def _semantic_judge(text: str, params: dict) -> tuple[bool, dict]:
         except re.error:
             pass
 
-    # Reference answer similarity (if reference provided)
     passed = keyword_coverage >= 0.5 and len(text) > 10 and len(forbidden_hits) == 0
-
     return passed, {
         "method": "minimal_fallback",
         "keyword_coverage": round(keyword_coverage, 3),

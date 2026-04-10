@@ -28,6 +28,8 @@ class LLMRequest:
     tools: list[dict] | None = None
     timeout_sec: int = 60
     extra_params: dict = field(default_factory=dict)
+    logprobs: bool = False
+    top_logprobs: int = 0  # 0 = disabled; 1-20 = number of top tokens per position
 
     def to_payload(self) -> dict:
         payload: dict[str, Any] = {
@@ -42,6 +44,10 @@ class LLMRequest:
             payload["response_format"] = self.response_format
         if self.tools:
             payload["tools"] = self.tools
+        if self.logprobs:
+            payload["logprobs"] = True
+            if self.top_logprobs > 0:
+                payload["top_logprobs"] = self.top_logprobs
         payload.update(self.extra_params)
         return payload
 
@@ -60,6 +66,7 @@ class LLMResponse:
     usage_total_tokens: int | None = None
     error_type: str | None = None
     error_message: str | None = None
+    logprobs: list | None = None  # token-level logprobs from API (list of {token, logprob, top_logprobs})
 
     @property
     def ok(self) -> bool:
