@@ -1,4 +1,11 @@
-"""Analysis package - feature extraction, scoring, similarity, and reporting."""
+"""Analysis package - feature extraction, scoring, similarity, and reporting.
+
+v5.0 新增组件：
+- AdaptiveScoreCalibrator: 自适应评分校准
+- IRTEngine: IRT 2PL 模型引擎
+- ScoreAttributionAnalyzer: 分数归因分析
+- NeuralSimilarityEngine: 神经网络相似度
+"""
 from app.analysis.pipeline import (
     AnalysisPipeline,
     FeatureExtractor,
@@ -17,7 +24,36 @@ from app.analysis.pipeline import (
     ExtractionAuditBuilder,
 )
 
+# v5.0 新增组件
+from app.analysis.adaptive_scoring import (
+    AdaptiveScoreCalibrator,
+    ScoreConfidenceEstimator,
+    get_calibrator,
+    get_confidence_estimator,
+    calculate_score_with_confidence,
+)
+from app.analysis.irt_engine import (
+    IRTEngine,
+    IRTItemStats,
+    AbilityEstimate,
+    get_irt_engine,
+)
+from app.analysis.attribution import (
+    ScoreAttributionAnalyzer,
+    AttributionReport,
+    get_attribution_analyzer,
+    analyze_score_attribution,
+)
+from app.analysis.neural_similarity import (
+    BehavioralEmbeddingExtractor,
+    MultiModalSimilarityFusion,
+    get_embedding_extractor,
+    get_similarity_fusion,
+    compute_neural_similarity,
+)
+
 __all__ = [
+    # 原有组件
     "AnalysisPipeline",
     "FeatureExtractor",
     "ScoreCalculator",
@@ -33,4 +69,24 @@ __all__ = [
     "ReportBuilder",
     "ProxyLatencyAnalyzer",
     "ExtractionAuditBuilder",
+    # v5.0 新增
+    "AdaptiveScoreCalibrator",
+    "ScoreConfidenceEstimator",
+    "IRTEngine",
+    "IRTItemStats",
+    "AbilityEstimate",
+    "ScoreAttributionAnalyzer",
+    "AttributionReport",
+    "BehavioralEmbeddingExtractor",
+    "MultiModalSimilarityFusion",
+    # 便捷函数
+    "get_calibrator",
+    "get_confidence_estimator",
+    "calculate_score_with_confidence",
+    "get_irt_engine",
+    "get_attribution_analyzer",
+    "analyze_score_attribution",
+    "get_embedding_extractor",
+    "get_similarity_fusion",
+    "compute_neural_similarity",
 ]

@@ -1,11 +1,17 @@
 """
 Judge methods — evaluate LLM responses against expected outcomes.
 Each judge returns (passed: bool, detail: dict).
+
+v5.0 升级：添加 semantic_judge_v2 和 hallucination_detect_v2
 """
 from __future__ import annotations
 
 import json
 import re
+
+# v5.0: 导入新的判题方法
+from app.judge.semantic_v2 import semantic_judge_v2
+from app.judge.hallucination_v2 import hallucination_detect_v2
 
 
 def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | None, dict]:
@@ -53,6 +59,9 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _text_constraints(text, params)
     elif method == "semantic_judge":
         passed, detail = _semantic_judge(text, params)
+    elif method == "semantic_judge_v2":
+        # v5.0: 使用新一代语义判题引擎
+        passed, detail = semantic_judge_v2(text, params)
     elif method == "prompt_leak_detect":
         passed, detail = _prompt_leak_detect(text, params)
     elif method == "forbidden_word_extract":
@@ -83,6 +92,9 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _yaml_csv_validate(text, params)
     elif method == "hallucination_detect":
         passed, detail = _hallucination_detect(text, params)
+    elif method == "hallucination_detect_v2":
+        # v5.0: 使用增强的幻觉检测
+        passed, detail = hallucination_detect_v2(text, params)
     elif method == "multi_step_verify":
         passed, detail = _multi_step_verify(text, params)
     elif method == "context_overflow_detect":

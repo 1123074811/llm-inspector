@@ -1083,6 +1083,15 @@ const _zhLabels = {
   reasoning: '推理能力', coding: '编程能力', consistency: '一致性',
   system: '系统提示', param: '参数控制', style: '风格特征', refusal: '安全控制',
   safety: '安全控制', speed: '响应速度', stability: '稳定性', cost_efficiency: '成本效率',
+  // 补充缺失的维度名称
+  authenticity: '真实性', algorithm: '算法', adversarial: '对抗性',
+  adversarial_re: '对抗正则', adversarial_reasoning: '对抗推理',
+  antispoof: '反欺骗', complexity: '复杂度',
+  extraction: '提取能力', fallacy: '谬误检测', fingerprint: '指纹特征',
+  hallucination: '幻觉检测', instruction_hierarchy: '指令层级', knowledge: '知识覆盖',
+  logic: '逻辑推理', precise: '精确性', precision: '精确度',
+  privacy: '隐私保护', robustness: '鲁棒性', safety_multilingual: '多语言安全',
+  tool_use: '工具使用', unicode: 'Unicode处理', value: '价值评估', verbose: '冗长检测',
   // 失败归因
   format_violation: '格式违规', reasoning_failure: '推理失败',
   error_response: '错误响应', safety_violation: '安全违规', unknown: '未知原因',
@@ -1505,20 +1514,20 @@ async function compareWithBaseline(runId) {
         <div class="${verdictClass}" style="font-size:18px;font-weight:700;margin-bottom:12px">判定：${verdict}</div>
         <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">
           余弦相似度: <b>${Number(data.cosine_similarity || 0).toFixed(4)}</b><br>
-          分数差异: Total ${fmtScore(d.total || 0)}, Capability ${fmtScore(d.capability || 0)},
-          Authenticity ${fmtScore(d.authenticity || 0)}, Performance ${fmtScore(d.performance || 0)}<br>
+          分数差异: 总分 ${fmtScore(d.total || 0)}, 能力 ${fmtScore(d.capability || 0)},
+          真实性 ${fmtScore(d.authenticity || 0)}, 性能 ${fmtScore(d.performance || 0)}<br>
           ${escHtml(data.verdict_reason || '')}
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
             <tr style="background:var(--bg2)">
-              <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--ink4)">Feature</th>
-              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Baseline</th>
-              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Current</th>
-              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">Δ%</th>
+              <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--ink4)">特征</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">基准值</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">当前值</th>
+              <th style="padding:8px 12px;text-align:right;font-size:10px;color:var(--ink4)">差异%</th>
             </tr>
           </thead>
-          <tbody>${rows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--ink4)">No drift data</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--ink4)">无漂移数据</td></tr>'}</tbody>
         </table>
       </div>
     </div>`;
