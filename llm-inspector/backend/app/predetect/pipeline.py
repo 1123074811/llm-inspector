@@ -20,6 +20,14 @@ logger = get_logger(__name__)
 
 CONFIDENCE_THRESHOLD = settings.PREDETECT_CONFIDENCE_THRESHOLD
 
+
+def _estimate_tokens(text: str | None, base_estimate: int = 20) -> int:
+    """当 API 不返回 token 数时，基于字符数粗估（中文 ~1.5 token/字，英文 ~0.75 token/词）"""
+    if not text:
+        return base_estimate
+    # 粗估：每 3 个字符约 1 token
+    return max(base_estimate, len(text) // 3)
+
 # ── Known platform signatures ─────────────────────────────────────────────────
 
 HEADER_SIGNATURES: dict[str, str] = {
@@ -250,7 +258,7 @@ class Layer1SelfReport:
                 temperature=0.0,
             )
             resp = adapter.chat(req)
-        tokens_used += (resp.usage_total_tokens or 0) + 3  # approx
+        tokens_used += (resp.usage_total_tokens or _estimate_tokens(resp.content, 3)) + 3  # approx
 
         if resp.ok and resp.raw_json:
             returned_model = resp.raw_json.get("model", "")
@@ -323,7 +331,7 @@ class Layer2Identity:
                 messages=[Message("user", probe["content"])],
                 max_tokens=_L2_MAX_TOKENS, temperature=0.0,
             ))
-            tokens_used += resp.usage_total_tokens or 10
+            tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 10)
             if resp.content:
                 probe_answers.append(resp.content.strip().lower())
 
@@ -380,7 +388,7 @@ class Layer2Identity:
                 "contain according to your tokenizer? Reply with just the number.")],
             max_tokens=5, temperature=0.0,
         ))
-        tokens_used += resp2.usage_total_tokens or 8
+        tokens_used += resp2.usage_total_tokens or _estimate_tokens(resp2.content, 8)
         if resp2.content:
             nums = re.findall(r'\d+', resp2.content.strip())
             if nums:
@@ -409,7 +417,7 @@ class Layer2Identity:
                 "Reply with just month and year, e.g. 'October 2024'.")],
             max_tokens=20, temperature=0.0,
         ))
-        tokens_used += resp3.usage_total_tokens or 20
+        tokens_used += resp3.usage_total_tokens or _estimate_tokens(resp3.content, 20)
         if resp3.content:
             extra["cutoff_response"] = resp3.content.strip()
             evidence.append(f"Self-reported training cutoff: '{resp3.content.strip()}'")
@@ -420,7 +428,7 @@ class Layer2Identity:
             messages=[Message("user", "Name exactly 3 colors. Use a list.")],
             max_tokens=40, temperature=0.0,
         ))
-        tokens_used += resp4.usage_total_tokens or 20
+        tokens_used += resp4.usage_total_tokens or _estimate_tokens(resp4.content, 20)
         if resp4.content:
             extra["list_format"] = resp4.content.strip()
 
@@ -488,7 +496,7 @@ class Layer3Knowledge:
                 messages=[Message("user", probe["question"])],
                 max_tokens=60, temperature=0.0,
             ))
-            tokens_used += resp.usage_total_tokens or 30
+            tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 30)
             if not resp.content:
                 continue
             c_lower = resp.content.lower()
@@ -583,7 +591,7 @@ class Layer4Bias:
             messages=[Message("user", self._CRT_QUESTION)],
             max_tokens=120, temperature=0.0,
         ))
-        tokens_used += resp1.usage_total_tokens or 80
+        tokens_used += resp1.usage_total_tokens or _estimate_tokens(resp1.content, 80)
         if resp1.content:
             c = resp1.content
             if "0.05" in c or "5 cents" in c.lower() or "five cents" in c.lower():
@@ -598,7 +606,7 @@ class Layer4Bias:
             messages=[Message("user", self._DISCLAIMER_QUESTION)],
             max_tokens=150, temperature=0.0,
         ))
-        tokens_used += resp2.usage_total_tokens or 100
+        tokens_used += resp2.usage_total_tokens or _estimate_tokens(resp2.content, 100)
         if resp2.content:
             c_lower = resp2.content.lower()
             disclaimer_patterns = {
@@ -621,7 +629,7 @@ class Layer4Bias:
             messages=[Message("user", self._FORMAT_QUESTION)],
             max_tokens=100, temperature=0.0,
         ))
-        tokens_used += resp3.usage_total_tokens or 60
+        tokens_used += resp3.usage_total_tokens or _estimate_tokens(resp3.content, 60)
         if resp3.content:
             c = resp3.content
             has_bold = "**" in c
@@ -677,7 +685,7 @@ class Layer5Tokenizer:
             if base_tokens is None:
                 continue
 
-            tokens_used += base_resp.usage_total_tokens or 5
+            tokens_used += base_resp.usage_total_tokens or _estimate_tokens(base_resp.content, 5)
 
             # Try to extract reported count from response
             if base_resp.content:
@@ -701,7 +709,10 @@ class Layer5Tokenizer:
             family_hits: list[str] = []
             for ev in evidence:
                 for fam in ["OpenAI", "Anthropic", "Meta", "LLaMA"]:
-                    if fam.lower() in ev.lower():
+                    # Use word boundary matching to avoid false positives
+                    # \b ensures we match whole words only, not substrings
+                    pattern = r'\b' + re.escape(fam.lower()) + r'\b'
+                    if re.search(pattern, ev.lower()):
                         family_hits.append(fam)
             if family_hits:
                 top_family, count = Counter(family_hits).most_common(1)[0]
@@ -892,7 +903,7 @@ class Layer6ActiveExtraction:
                 max_tokens=probe["max_tokens"],
                 temperature=0.0,
             ))
-            tokens_used += resp.usage_total_tokens or 50
+            tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 50)
             text = (resp.content or "").strip()
             if not text:
                 continue
@@ -1077,7 +1088,7 @@ class Layer6MultiTurnProbes:
                 max_tokens=500,
                 temperature=0.0,
             ))
-            tokens_used += resp.usage_total_tokens or 100
+            tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 100)
             text = (resp.content or "").strip()
             if not text:
                 continue
@@ -1168,7 +1179,7 @@ class Layer7Logprobs:
             logprobs=True,
             top_logprobs=5,
         ))
-        tokens_used += resp.usage_total_tokens or 10
+        tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 10)
 
         if not resp.logprobs:
             evidence.append("API did not return logprobs — layer skipped")
@@ -1322,12 +1333,17 @@ class PreDetectionPipeline:
         current_conf = self._merge_confidences(layer_results)
         if current_conf >= 0.70:
             logger.info("PreDetect: High confidence from Layer 0-2, skipping to Layer 6", confidence=current_conf)
-            r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
-            layer_results.append(r6)
-            total_tokens += r6.tokens_used
-            self._log_layer_result("Layer6/Extraction(early-skip)", r6)
-            if r6.confidence >= CONFIDENCE_THRESHOLD:
-                return self._build_result(True, r6, layer_results, total_tokens)
+            r6 = None
+            try:
+                r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
+                layer_results.append(r6)
+            except Exception as e:
+                logger.warning("Layer6 failed in fast-path, continuing with accumulated confidence", error=str(e))
+            if r6:
+                total_tokens += r6.tokens_used
+                self._log_layer_result("Layer6/Extraction(early-skip)", r6)
+                if r6.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r6, layer_results, total_tokens)
             best = max(layer_results, key=lambda r: r.confidence)
             merged_conf = self._merge_confidences(layer_results)
             identified = best.identified_as if merged_conf >= 0.50 else None
@@ -1352,14 +1368,20 @@ class PreDetectionPipeline:
             return self._build_result(True, r3, layer_results, total_tokens)
 
         # If Layer 0-3 merged confidence >= 0.75, skip Layer 4-5 and go to Layer 6
-        if self._merge_confidences(layer_results) >= 0.75:
+        current_conf = self._merge_confidences(layer_results)
+        if current_conf >= 0.75:
             logger.info("PreDetect: Good confidence from Layer 0-3, skipping to Layer 6", confidence=current_conf)
-            r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
-            layer_results.append(r6)
-            total_tokens += r6.tokens_used
-            self._log_layer_result("Layer6/Extraction(early-skip)", r6)
-            if r6.confidence >= CONFIDENCE_THRESHOLD:
-                return self._build_result(True, r6, layer_results, total_tokens)
+            r6 = None
+            try:
+                r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
+                layer_results.append(r6)
+            except Exception as e:
+                logger.warning("Layer6 failed in fast-path, continuing with accumulated confidence", error=str(e))
+            if r6:
+                total_tokens += r6.tokens_used
+                self._log_layer_result("Layer6/Extraction(early-skip)", r6)
+                if r6.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r6, layer_results, total_tokens)
             best = max(layer_results, key=lambda r: r.confidence)
             merged_conf = self._merge_confidences(layer_results)
             identified = best.identified_as if merged_conf >= 0.50 else None

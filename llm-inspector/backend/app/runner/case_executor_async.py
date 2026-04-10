@@ -100,7 +100,25 @@ async def async_execute_case(adapter, model_name: str, case: TestCase) -> CaseRe
             case_id=case.id, sample=i, category=case.category,
         )
 
-        resp = await _achat(adapter, req)
+        try:
+            resp = await _achat(adapter, req)
+        except Exception as e:
+            logger.error(
+                "Async adapter chat failed",
+                case_id=case.id, sample=i, category=case.category,
+                error=str(e), error_type=type(e).__name__,
+            )
+            # Create a mock response for error handling
+            from app.core.schemas import LLMResponse
+            resp = LLMResponse(
+                content="",
+                finish_reason="error",
+                status_code=500,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                latency_ms=0,
+                token_usage=None,
+            )
 
         # Adaptive inter-sample delay (async sleep — doesn't block the loop)
         delay, success_count = _compute_new_delay(delay, resp, success_count)
@@ -157,7 +175,25 @@ async def _async_execute_param_comparison(adapter, model_name: str, case: TestCa
                 model=model_name, messages=messages,
                 temperature=temp, max_tokens=case.max_tokens,
             )
-            resp = await _achat(adapter, req)
+            try:
+                resp = await _achat(adapter, req)
+            except Exception as e:
+                logger.error(
+                    "Async adapter chat failed in param comparison",
+                    case_id=case.id, temperature=temp,
+                    error=str(e), error_type=type(e).__name__,
+                )
+                # Create a mock response for error handling
+                from app.core.schemas import LLMResponse
+                resp = LLMResponse(
+                    content="",
+                    finish_reason="error",
+                    status_code=500,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    latency_ms=0,
+                    token_usage=None,
+                )
             if resp.content:
                 outputs.append(resp.content.strip())
             result.samples.append(SampleResult(

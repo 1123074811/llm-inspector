@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -110,6 +111,7 @@ class OpenAICompatibleAdapter:
         self._qianfan_sk: str | None = None
         self._qianfan_iam_token: str | None = None
         self._qianfan_iam_token_expiry_monotonic: float = 0.0
+        self._qianfan_token_lock = threading.Lock()
 
         if self._looks_like_qianfan_host(self.base_url):
             pair = self._split_ak_sk(self._api_key)
@@ -236,35 +238,36 @@ class OpenAICompatibleAdapter:
         if not self._qianfan_ak or not self._qianfan_sk:
             return None
 
-        now_mono = time.monotonic()
-        if self._qianfan_iam_token and now_mono < self._qianfan_iam_token_expiry_monotonic:
-            return self._qianfan_iam_token
+        with self._qianfan_token_lock:
+            now_mono = time.monotonic()
+            if self._qianfan_iam_token and now_mono < self._qianfan_iam_token_expiry_monotonic:
+                return self._qianfan_iam_token
 
-        token_url = (
-            "https://aip.baidubce.com/oauth/2.0/token"
-            f"?grant_type=client_credentials&client_id={urllib.parse.quote(self._qianfan_ak)}"
-            f"&client_secret={urllib.parse.quote(self._qianfan_sk)}"
-        )
-        try:
-            req = urllib.request.Request(token_url, method="POST")
-            with urllib.request.urlopen(
-                req, context=_SSL_CTX, timeout=settings.DEFAULT_REQUEST_TIMEOUT_SEC
-            ) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-                body = json.loads(raw)
-                token = (body.get("access_token") or "").strip()
-                expires_in = int(body.get("expires_in", 2592000) or 2592000)
-                if not token:
-                    logger.warning("Qianfan IAM token fetch returned empty token", body=raw[:300])
-                    return None
-                # Refresh 5 min early to avoid near-expiry races
-                self._qianfan_iam_token = token
-                self._qianfan_iam_token_expiry_monotonic = now_mono + max(60, expires_in - 300)
-                logger.info("Qianfan IAM token bootstrap success")
-                return token
-        except Exception as e:
-            logger.warning("Qianfan IAM token bootstrap failed", error=str(e))
-            return None
+            token_url = (
+                "https://aip.baidubce.com/oauth/2.0/token"
+                f"?grant_type=client_credentials&client_id={urllib.parse.quote(self._qianfan_ak)}"
+                f"&client_secret={urllib.parse.quote(self._qianfan_sk)}"
+            )
+            try:
+                req = urllib.request.Request(token_url, method="POST")
+                with urllib.request.urlopen(
+                    req, context=_SSL_CTX, timeout=settings.DEFAULT_REQUEST_TIMEOUT_SEC
+                ) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                    body = json.loads(raw)
+                    token = (body.get("access_token") or "").strip()
+                    expires_in = int(body.get("expires_in", 2592000) or 2592000)
+                    if not token:
+                        logger.warning("Qianfan IAM token fetch returned empty token", body=raw[:300])
+                        return None
+                    # Refresh 5 min early to avoid near-expiry races
+                    self._qianfan_iam_token = token
+                    self._qianfan_iam_token_expiry_monotonic = now_mono + max(60, expires_in - 300)
+                    logger.info("Qianfan IAM token bootstrap success")
+                    return token
+            except Exception as e:
+                logger.warning("Qianfan IAM token bootstrap failed", error=str(e))
+                return None
 
     def _auth_headers(self) -> dict:
         """Resolve provider-specific auth header while preserving OpenAI-compatible default."""

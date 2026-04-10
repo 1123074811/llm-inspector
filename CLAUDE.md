@@ -1,8 +1,22 @@
-# LLM Inspector v3.1 — LLM 套壳检测与能力评估工具
+# LLM Inspector v4.0 — LLM 套壳检测与能力评估工具
+
+## What's New in v4
+- 修复 8 个已知 Bug（含幻觉检测逻辑、线程竞争、雷达图维度错配）
+- 删除全部估算基准数据，相似度比对仅使用用户标记的真实基准
+- 废除 any_text 判题方法，替换为 response_quality_basic
+- 新增 should_not_refuse 判题方法
+- 测试用例从 89 → 92 个（删除 5 个无区分力用例，新增 8 个高区分力用例）
+- 能力评分权重支持按模型家族自适应
+- 相似度引擎支持稀疏向量、动态特征权重
+- 雷达图升级为 9 维度
+- 前端增加分数颜色分级、数据质量指示器、无基准引导
+- ELO 排行榜增加置信区间（RD）
+- WCAG AA 对比度修复
+- Bootstrap CI 最低特征数提升到 12
 
 ## Quick Start
 - `cd llm-inspector/backend && python -m app.main` — 启动服务（默认 :8000）
-- `pytest backend/tests/test_all.py` — 运行测试（52 个用例）
+- `pytest backend/tests/test_all.py` — 运行测试（扩展测试集）
 
 ## Tech Stack
 - **后端**: Python stdlib（http.server + urllib + sqlite3 + dataclasses）

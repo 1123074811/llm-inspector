@@ -11,7 +11,7 @@
       "system_prompt": null,
       "user_prompt": "Say OK",
       "expected_type": "any",
-      "judge_method": "any_text",
+      "judge_method": "response_quality_basic",
       "max_tokens": 32,
       "n_samples": 1,
       "temperature": 0.0,
@@ -33,7 +33,7 @@
       "system_prompt": null,
       "user_prompt": "Reply with the word hello.",
       "expected_type": "any",
-      "judge_method": "any_text",
+      "judge_method": "response_quality_basic",
       "max_tokens": 32,
       "n_samples": 1,
       "temperature": 0.0,
@@ -911,29 +911,6 @@
         }
       },
       "weight": 2.0
-    },
-    {
-      "id": "perf_001",
-      "category": "performance",
-      "dimension": "speed",
-      "name": "latency_baseline",
-      "system_prompt": null,
-      "user_prompt": "Say hi.",
-      "expected_type": "any",
-      "judge_method": "any_text",
-      "max_tokens": 32,
-      "n_samples": 5,
-      "temperature": 0.0,
-      "params": {
-        "measure": "latency",
-        "_meta": {
-          "anchor": true,
-          "info_gain_prior": 1.6,
-          "stage_hint": "A",
-          "mode_level": "quick"
-        }
-      },
-      "weight": 1.5
     },
     {
       "id": "ext_dump_01",

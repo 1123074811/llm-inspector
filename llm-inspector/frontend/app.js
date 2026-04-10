@@ -1067,7 +1067,14 @@ function scoreCard(val, label) {
   const v = val != null
     ? (typeof val === 'number' ? fmtScore(val) : val)
     : '–';
-  return `<div class="score-card"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
+  let colorClass = 'score-neutral';
+  if (typeof val === 'number') {
+    if (val >= 80) colorClass = 'score-excellent';
+    else if (val >= 60) colorClass = 'score-good';
+    else if (val >= 40) colorClass = 'score-warning';
+    else colorClass = 'score-danger';
+  }
+  return `<div class="score-card ${colorClass}"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
 }
 
 const _zhLabels = {

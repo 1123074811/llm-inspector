@@ -661,15 +661,45 @@ class ScoreCalculator:
 
 class ScoreCardCalculator:
     """
-    v3 三维评分体系:
-      CapabilityScore  = 0.20×reasoning + 0.15×adversarial_reasoning + 0.20×instruction
-                         + 0.20×coding + 0.10×safety + 0.05×protocol
-                         + 0.05×knowledge + 0.05×tool_use
+    v4 三维评分体系:
+      CapabilityScore  = 动态权重(按模型家族自适应)
       AuthenticityScore = 0.30×similarity + 0.20×behavioral_invariant + 0.15×consistency
                           + 0.10×extraction_resistance + 0.10×predetect + 0.15×fingerprint_match
       PerformanceScore = 0.35×speed + 0.25×stability + 0.25×cost_efficiency + 0.15×ttft_plausibility
       TotalScore = 0.45×Capability + 0.30×Authenticity + 0.25×Performance
     """
+
+    # 默认权重（用于未知/通用模型）
+    DEFAULT_CAPABILITY_WEIGHTS = {
+        "reasoning": 0.20, "adversarial": 0.15, "instruction": 0.20,
+        "coding": 0.20, "safety": 0.10, "protocol": 0.05,
+        "knowledge": 0.05, "tool_use": 0.05,
+    }
+
+    # 模型家族特化权重
+    FAMILY_CAPABILITY_WEIGHTS = {
+        "reasoning_first": {  # o1, o3, DeepSeek-R1 等推理模型
+            "reasoning": 0.30, "adversarial": 0.10, "instruction": 0.15,
+            "coding": 0.25, "safety": 0.05, "protocol": 0.05,
+            "knowledge": 0.05, "tool_use": 0.05,
+        },
+        "instruction_first": {  # Claude 系列
+            "reasoning": 0.15, "adversarial": 0.15, "instruction": 0.25,
+            "coding": 0.15, "safety": 0.10, "protocol": 0.05,
+            "knowledge": 0.05, "tool_use": 0.10,
+        },
+    }
+
+    def _resolve_weights(self, claimed_model: str | None) -> dict:
+        """根据声称的模型返回相应的能力权重。"""
+        if not claimed_model:
+            return self.DEFAULT_CAPABILITY_WEIGHTS
+        lower = claimed_model.lower()
+        if any(k in lower for k in ("o1", "o3", "deepseek-r1")):
+            return self.FAMILY_CAPABILITY_WEIGHTS["reasoning_first"]
+        if any(k in lower for k in ("claude",)):
+            return self.FAMILY_CAPABILITY_WEIGHTS["instruction_first"]
+        return self.DEFAULT_CAPABILITY_WEIGHTS
 
     def calculate(
         self,
@@ -693,15 +723,17 @@ class ScoreCardCalculator:
         knowledge_score = self._knowledge_score(features, case_results)
         tool_use_score = self._tool_use_score(case_results)
 
+        # v4: 使用动态权重
+        weights = self._resolve_weights(claimed_model)
         card.capability_score = min(100.0, round(
-            0.20 * card.reasoning_score
-            + 0.15 * card.adversarial_reasoning_score
-            + 0.20 * card.instruction_score
-            + 0.20 * card.coding_score
-            + 0.10 * card.safety_score
-            + 0.05 * card.protocol_score
-            + 0.05 * knowledge_score
-            + 0.05 * tool_use_score,
+            weights["reasoning"] * card.reasoning_score
+            + weights["adversarial"] * card.adversarial_reasoning_score
+            + weights["instruction"] * card.instruction_score
+            + weights["coding"] * card.coding_score
+            + weights["safety"] * card.safety_score
+            + weights["protocol"] * card.protocol_score
+            + weights["knowledge"] * knowledge_score
+            + weights["tool_use"] * tool_use_score,
             1,
         ))
 
@@ -734,7 +766,7 @@ class ScoreCardCalculator:
         ))
 
         # ── Performance sub-scores ──
-        card.speed_score = self._speed_score(features)
+        card.speed_score = self._speed_score(features, case_results)
         card.stability_score = self._stability_score(case_results)
         card.cost_efficiency = self._cost_efficiency(features, case_results)
 
@@ -1044,12 +1076,30 @@ class ScoreCardCalculator:
 
         return min(100.0, round(score, 1))
 
-    def _speed_score(self, features: dict[str, float]) -> float:
+    def _speed_score(self, features: dict[str, float], case_results: list[CaseResult] | None = None) -> float:
         import math
+        # v4: 按用例类别分别设定基准延迟
+        CATEGORY_LATENCY_BASELINE = {
+            "protocol": 500,      # 简单问答，500ms 满分
+            "instruction": 1000,   # 指令遵循
+            "reasoning": 3000,     # 推理题允许更多思考时间
+            "coding": 5000,        # 代码生成需要更多时间
+        }
+
+        # 如果有 case_results，按类别计算平均延迟分数
+        if case_results:
+            scores = []
+            for r in case_results:
+                baseline = CATEGORY_LATENCY_BASELINE.get(r.case.category, 1500)
+                latency = r.mean_latency_ms or baseline
+                # 对数衰减，基准延迟得 80 分（非满分），一半基准得 95 分
+                score = 100 - 30 * math.log10(max(latency, 50) / baseline)
+                scores.append(max(0, min(100, score)))
+            return round(sum(scores) / len(scores), 1) if scores else 50.0
+
+        # 回退：使用全局延迟统计
         mean_lat = features.get("latency_mean_ms", 5000)
         p95_lat = features.get("latency_p95_ms", 15000)
-        # Logarithmic scale — realistic for LLM APIs (1-30s typical)
-        # 200ms=100, 1s=72, 3s=53, 5s=44, 10s=32, 30s=13, 60s+=0
         mean_score = max(0.0, min(100.0, 100 - 40 * math.log10(max(1, mean_lat / 200))))
         p95_score = max(0.0, min(100.0, 100 - 40 * math.log10(max(1, p95_lat / 500))))
         return round(mean_score * 0.6 + p95_score * 0.4, 1)
@@ -1635,24 +1685,40 @@ class SimilarityEngine:
         """
         Returns similarity results ranked by score.
         Each benchmark_profile has: {name, suite_version, feature_vector: {k: v}}
+        Uses sparse vector similarity (only valid dimensions are compared).
         """
+        # 过滤掉 estimated 类型的基准
+        benchmark_profiles = [bp for bp in benchmark_profiles if bp.get("data_source") != "estimated"]
         if not benchmark_profiles:
-            return []
+            return []  # 无真实基准时返回空，前端显示"暂无基准数据"
 
-        target_vec = self._to_vector(target_features)
+        target_vec, target_mask = self._to_vector_with_mask(target_features)
         results: list[SimilarityResult] = []
 
         for bp in benchmark_profiles:
-            bench_vec = self._to_vector(bp["feature_vector"])
-            sim = self._cosine_similarity(target_vec, bench_vec)
-            ci_low, ci_high = self._bootstrap_ci(target_vec, bench_vec)
+            bench_vec, bench_mask = self._to_vector_with_mask(bp["feature_vector"])
+            sim, valid_count = self._masked_cosine_similarity(target_vec, bench_vec, target_mask, bench_mask)
+            ci_low, ci_high, _ = self._bootstrap_ci(target_vec, bench_vec)
             bm_name = bp.get("benchmark_name") or bp.get("name", "unknown")
+
+            # 判定可信度等级
+            if valid_count >= 30:
+                confidence_level = "high"
+            elif valid_count >= 20:
+                confidence_level = "medium"
+            elif valid_count >= 12:
+                confidence_level = "low"
+            else:
+                confidence_level = "insufficient"
+
             results.append(SimilarityResult(
                 benchmark_name=bm_name,
                 similarity_score=round(sim, 4),
                 ci_95_low=round(ci_low, 4) if ci_low is not None else None,
                 ci_95_high=round(ci_high, 4) if ci_high is not None else None,
                 rank=0,
+                confidence_level=confidence_level,
+                valid_feature_count=valid_count,
             ))
 
         results.sort(key=lambda r: r.similarity_score, reverse=True)
@@ -1661,16 +1727,19 @@ class SimilarityEngine:
 
         return results
 
-    def _to_vector(self, features: dict[str, float]) -> list[float]:
-        """Build a fixed-length vector from features, normalised 0-1.
-        Missing features are filled with the global mean to avoid sparse-vector bias.
+    def _to_vector_with_mask(self, features: dict[str, float]) -> tuple[list[float], list[bool]]:
+        """Build a fixed-length vector from features with a mask indicating valid dimensions.
+        Returns (vector, mask) where mask[i]=True means the dimension has real data.
+        Missing features are set to 0 and marked as False in mask (sparse vector support).
         """
-        vec = []
+        vec, mask = [], []
         for key in FEATURE_ORDER:
             val = features.get(key)
             if val is None:
-                # Fill with global mean instead of 0 to avoid cosine similarity distortion
-                val = GLOBAL_FEATURE_MEANS.get(key, 0.5)
+                # Sparse vector: missing feature = 0, mask=False
+                vec.append(0.0)
+                mask.append(False)
+                continue
 
             # Feature-specific normalization
             if key == "avg_response_length":
@@ -1692,6 +1761,14 @@ class SimilarityEngine:
             # Clamp to [0,1] then apply feature importance weight
             weight = FEATURE_IMPORTANCE.get(key, 1.0)
             vec.append(max(0.0, min(1.0, float(val))) * weight)
+            mask.append(True)
+        return vec, mask
+
+    def _to_vector(self, features: dict[str, float]) -> list[float]:
+        """Build a fixed-length vector from features, normalised 0-1.
+        Legacy method - now delegates to _to_vector_with_mask.
+        """
+        vec, _ = self._to_vector_with_mask(features)
         return vec
 
     @staticmethod
@@ -1708,19 +1785,40 @@ class SimilarityEngine:
             return 0.0
         return dot / (norm_a * norm_b)
 
+    @staticmethod
+    def _masked_cosine_similarity(a: list[float], b: list[float], mask_a: list[bool], mask_b: list[bool]) -> tuple[float, int]:
+        """Compute cosine similarity only on dimensions where both vectors have valid data.
+        Returns (similarity_score, valid_feature_count).
+        """
+        valid = [i for i in range(len(a)) if mask_a[i] and mask_b[i]]
+        valid_count = len(valid)
+        if valid_count < 8:
+            return 0.0, valid_count
+        a_v = [a[i] for i in valid]
+        b_v = [b[i] for i in valid]
+        dot = sum(x * y for x, y in zip(a_v, b_v))
+        norm_a = math.sqrt(sum(x * x for x in a_v))
+        norm_b = math.sqrt(sum(y * y for y in b_v))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0, valid_count
+        return dot / (norm_a * norm_b), valid_count
+
     @classmethod
     def _bootstrap_ci(
         cls, a: list[float], b: list[float], n: int = 200
-    ) -> tuple[float, float]:
-        """Bootstrap 95% confidence interval for cosine similarity."""
+    ) -> tuple[float | None, float | None, int]:
+        """Bootstrap 95% confidence interval for cosine similarity.
+        Returns (ci_low, ci_high, valid_feature_count).
+        """
         length = len(a)
         if length == 0:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0
 
-        MIN_BOOTSTRAP_FEATURES = 8
+        MIN_BOOTSTRAP_FEATURES = 12
         valid_features = [x for x in a + b if x != 0.0]
-        if len(valid_features) < MIN_BOOTSTRAP_FEATURES:
-            return None, None
+        valid_count = len(valid_features)
+        if valid_count < MIN_BOOTSTRAP_FEATURES:
+            return None, None, valid_count
 
         raw_sim = cls._cosine_similarity(a, b)
         if raw_sim >= 0.90:
@@ -1740,7 +1838,7 @@ class SimilarityEngine:
         sims.sort()
         lo = sims[int(n_bootstrap * 0.025)]
         hi = sims[int(n_bootstrap * 0.975)]
-        return lo, hi
+        return lo, hi, valid_count
 
 
 # ── Risk Engine ───────────────────────────────────────────────────────────────

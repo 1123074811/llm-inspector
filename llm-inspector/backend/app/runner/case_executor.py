@@ -3,6 +3,7 @@ Case executor — runs a single TestCase (with n_samples) against an adapter.
 """
 from __future__ import annotations
 
+import threading
 import time
 from app.core.schemas import (
     TestCase, CaseResult, SampleResult, LLMRequest, Message
@@ -22,21 +23,26 @@ TIMEOUT_MAP = {
 }
 
 INTER_SAMPLE_DELAY_BASE = 0.1
+_delay_lock = threading.Lock()
 _delay_state = {
     "current": INTER_SAMPLE_DELAY_BASE,
-    "success_count": 0
+    "success_count": 0,
 }
 
 def _update_delay(resp):
-    global _delay_state
-    if getattr(resp, "status_code", 200) == 429 or getattr(resp, "error_type", "") == "rate_limit":
-        _delay_state["current"] = min(2.0, _delay_state["current"] * 2.0)
-        _delay_state["success_count"] = 0
-    elif resp and resp.ok:
-        _delay_state["success_count"] += 1
-        if _delay_state["success_count"] >= 10:
-            _delay_state["current"] = INTER_SAMPLE_DELAY_BASE
+    with _delay_lock:
+        if getattr(resp, "status_code", 200) == 429 or getattr(resp, "error_type", "") == "rate_limit":
+            _delay_state["current"] = min(2.0, _delay_state["current"] * 2.0)
             _delay_state["success_count"] = 0
+        elif resp and resp.ok:
+            _delay_state["success_count"] += 1
+            if _delay_state["success_count"] >= 10:
+                _delay_state["current"] = INTER_SAMPLE_DELAY_BASE
+                _delay_state["success_count"] = 0
+
+def _get_current_delay() -> float:
+    with _delay_lock:
+        return _delay_state["current"]
 
 
 def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
@@ -90,12 +96,32 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             category=case.category,
         )
 
-        resp = adapter.chat(req)
+        try:
+            resp = adapter.chat(req)
+        except Exception as e:
+            logger.error(
+                "Adapter chat failed",
+                case_id=case.id,
+                sample=i,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            # Create a mock response for error handling
+            from app.core.schemas import LLMResponse
+            resp = LLMResponse(
+                content="",
+                finish_reason="error",
+                status_code=500,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                latency_ms=0,
+                token_usage=None,
+            )
 
         # Inter-sample delay to avoid rate limits
         _update_delay(resp)
         if i < case.n_samples - 1:
-            time.sleep(_delay_state["current"])
+            time.sleep(_get_current_delay())
 
         # Detect truncated responses (finish_reason == "length")
         truncated = resp.finish_reason == "length"
@@ -153,7 +179,27 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
                 model=model_name, messages=messages,
                 temperature=temp, max_tokens=case.max_tokens,
             )
-            resp = adapter.chat(req)
+            try:
+                resp = adapter.chat(req)
+            except Exception as e:
+                logger.error(
+                    "Adapter chat failed in param comparison",
+                    case_id=case.id,
+                    temperature=temp,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+                # Create a mock response for error handling
+                from app.core.schemas import LLMResponse
+                resp = LLMResponse(
+                    content="",
+                    finish_reason="error",
+                    status_code=500,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    latency_ms=0,
+                    token_usage=None,
+                )
             if resp.content:
                 outputs.append(resp.content.strip())
             result.samples.append(SampleResult(
@@ -163,7 +209,7 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
                 judge_detail={"group": group_name, "temperature": temp},
             ))
             _update_delay(resp)
-            time.sleep(_delay_state["current"])
+            time.sleep(_get_current_delay())
         return outputs
 
     # Primary group

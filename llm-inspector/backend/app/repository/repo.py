@@ -1076,7 +1076,7 @@ from app.analysis.elo import EloRecord
 def get_elo(model_name: str) -> dict | None:
     conn = get_conn()
     row = conn.execute("SELECT * FROM model_elo WHERE model_name = ?", (model_name,)).fetchone()
-    return row_to_dict(row) if row else None
+    return dict(row) if row else None
 
 
 def upsert_elo(record: EloRecord) -> None:
@@ -1116,4 +1116,4 @@ def upsert_elo(record: EloRecord) -> None:
 def list_elo(limit: int = 100) -> list[dict]:
     conn = get_conn()
     rows = conn.execute("SELECT * FROM model_elo ORDER BY elo_rating DESC LIMIT ?", (limit,)).fetchall()
-    return [row_to_dict(r) for r in rows]
+    return [dict(r) for r in rows]

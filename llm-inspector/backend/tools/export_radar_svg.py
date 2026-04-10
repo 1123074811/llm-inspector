@@ -34,17 +34,21 @@ def _polar_to_xy(cx: float, cy: float, r: float, angle: float) -> tuple[float, f
 def render_svg(report: dict) -> str:
     score = report.get("scorecard", {})
     breakdown = score.get("breakdown", {})
+    # v4: 雷达图升级为9维度
     dims = [
-        ("能力分", float(score.get("capability_score", 0.0))),
-        ("真实性", float(score.get("authenticity_score", 0.0))),
-        ("性能分", float(score.get("performance_score", 0.0))),
-        ("推理", float(breakdown.get("knowledge_score", 0.0))),
-        ("指令", float(breakdown.get("tool_use_score", 0.0))),
-        ("一致性", float(breakdown.get("extraction_resistance", 0.0))),
+        ("推理", float(breakdown.get("reasoning", 0.0))),
+        ("编码", float(breakdown.get("coding", 0.0))),
+        ("指令遵循", float(breakdown.get("instruction", 0.0))),
+        ("安全性", float(breakdown.get("safety", 0.0))),
+        ("知识", float(breakdown.get("knowledge_score", 0.0))),
+        ("工具使用", float(breakdown.get("tool_use_score", 0.0))),
+        ("一致性", float(breakdown.get("consistency", 0.0))),
+        ("抗提取", float(breakdown.get("extraction_resistance", 0.0))),
+        ("响应速度", float(breakdown.get("speed", 0.0))),
     ]
 
     w, h = 760, 560
-    cx, cy = 320, 290
+    cx, cy = 380, 280
     max_r = 210
 
     n = len(dims)
@@ -75,7 +79,7 @@ def render_svg(report: dict) -> str:
     target = report.get("target") or {}
     title = f"综合能力雷达图 · {target.get('model', 'unknown')}"
 
-    return f"""<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\">\n  <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n  <text x=\"24\" y=\"36\" font-size=\"24\" font-weight=\"700\" fill=\"#111\">{title}</text>\n  <text x=\"24\" y=\"62\" font-size=\"14\" fill=\"#666\">run_id: {report.get('run_id')}</text>\n  {''.join(rings)}\n  {''.join(axes)}\n  <polygon points=\"{' '.join(poly_pts)}\" fill=\"rgba(37,99,235,0.20)\" stroke=\"#2563eb\" stroke-width=\"2\"/>\n  {''.join(val_labels)}\n  {''.join(labels)}\n  <g transform=\"translate(560,120)\">\n    <text x=\"0\" y=\"0\" font-size=\"18\" font-weight=\"700\" fill=\"#111\">评分摘要</text>\n    <text x=\"0\" y=\"32\" font-size=\"14\" fill=\"#333\">总分:{score.get('total_score', 0)}</text>\n    <text x=\"0\" y=\"56\" font-size=\"14\" fill=\"#333\">能力分:{score.get('capability_score', 0)}</text>\n    <text x=\"0\" y=\"80\" font-size=\"14\" fill=\"#333\">真实性:{score.get('authenticity_score', 0)}</text>\n    <text x=\"0\" y=\"104\" font-size=\"14\" fill=\"#333\">性能分:{score.get('performance_score', 0)}</text>\n  </g>\n</svg>\n"""
+    return f"""<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\">\n  <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n  <text x=\"24\" y=\"36\" font-size=\"24\" font-weight=\"700\" fill=\"#111\">{title}</text>\n  <text x=\"24\" y=\"62\" font-size=\"14\" fill=\"#666\">run_id: {report.get('run_id')}</text>\n  {''.join(rings)}\n  {''.join(axes)}\n  <polygon points=\"{' '.join(poly_pts)}\" fill=\"rgba(37,99,235,0.20)\" stroke=\"#2563eb\" stroke-width=\"2\"/>\n  {''.join(val_labels)}\n  {''.join(labels)}\n  <g transform=\"translate(560,120)\">\n    <text x=\"0\" y=\"0\" font-size=\"18\" font-weight=\"700\" fill=\"#111\">评分摘要</text>\n    <text x=\"0\" y=\"32\" font-size=\"14\" fill=\"#333\">总分:{score.get('total_score', 0)}</text>\n    <text x=\"0\" y=\"56\" font-size=\"14\" fill=\"#333\">能力分:{score.get('capability_score', 0)}</text>\n    <text x=\"0\" y=\"80\" font-size=\"14\" fill=\"#333\">真实性:{score.get('authenticity_score', 0)}</text>\n    <text x=\"0\" y=\"104\" font-size=\"14\" fill=\"#333\">性能分:{score.get('performance_score', 0)}</text>\n    <text x=\"0\" y=\"128\" font-size=\"12\" fill=\"#666\">推理:{breakdown.get('reasoning', 0)}</text>\n    <text x=\"0\" y=\"146\" font-size=\"12\" fill=\"#666\">编码:{breakdown.get('coding', 0)}</text>\n    <text x=\"0\" y=\"164\" font-size=\"12\" fill=\"#666\">指令遵循:{breakdown.get('instruction', 0)}</text>\n    <text x=\"0\" y=\"182\" font-size=\"12\" fill=\"#666\">安全性:{breakdown.get('safety', 0)}</text>\n    <text x=\"0\" y=\"200\" font-size=\"12\" fill=\"#666\">工具使用:{breakdown.get('tool_use_score', 0)}</text>\n    <text x=\"0\" y=\"218\" font-size=\"12\" fill=\"#666\">一致性:{breakdown.get('consistency', 0)}</text>\n    <text x=\"0\" y=\"236\" font-size=\"12\" fill=\"#666\">抗提取:{breakdown.get('extraction_resistance', 0)}</text>\n    <text x=\"0\" y=\"254\" font-size=\"12\" fill=\"#666\">响应速度:{breakdown.get('speed', 0)}</text>\n  </g>\n</svg>\n"""
 
 
 if __name__ == "__main__":

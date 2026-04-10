@@ -674,16 +674,17 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                         tokens_remaining=budget_guard.remaining if budget_guard else None,
                     )
                 except Exception as e:
-                    failed_count_ref["count"] += 1
+                    with lock:
+                        failed_count_ref["count"] += 1
                     _update_backoff(backoff_state, error=e)
                     logger.warning("Case failed", run_id=run_id, case_id=case.id, error=str(e))
                     check_early_abort = True
-            
-            if check_early_abort and len(case_results) >= 10:
-                # Early abort check (dynamic)
-                total = len(case_results)
-                failed = failed_count_ref["count"]
-                if total > 0 and (failed / total) > 0.8:
+
+            if check_early_abort:
+                with lock:
+                    total = len(case_results)
+                    failed = failed_count_ref["count"]
+                if total >= 10 and total > 0 and (failed / total) > 0.8:
                     logger.warning("Error rate >80%, aborting phase early", run_id=run_id, phase=phase_label)
                     break
                     

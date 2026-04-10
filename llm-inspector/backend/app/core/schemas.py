@@ -287,6 +287,8 @@ class SimilarityResult:
     ci_95_low: float | None
     ci_95_high: float | None
     rank: int
+    confidence_level: str = "unknown"  # "high" / "medium" / "low" / "insufficient"
+    valid_feature_count: int = 0
 
 
 @dataclass

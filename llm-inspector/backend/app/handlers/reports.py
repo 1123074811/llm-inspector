@@ -25,13 +25,17 @@ def handle_get_report(path, _qs, _body) -> tuple:
 def _build_radar_svg_bytes(report: dict) -> bytes:
     score = report.get("scorecard", {})
     breakdown = score.get("breakdown", {})
+    # v4: 雷达图升级为9维度
     dims = [
-        ("能力分", float(score.get("capability_score", 0.0))),
-        ("真实性", float(score.get("authenticity_score", 0.0))),
-        ("性能分", float(score.get("performance_score", 0.0))),
         ("推理", float(breakdown.get("reasoning", 0.0))),
-        ("指令", float(breakdown.get("instruction", 0.0))),
+        ("编码", float(breakdown.get("coding", 0.0))),
+        ("指令遵循", float(breakdown.get("instruction", 0.0))),
+        ("安全性", float(breakdown.get("safety", 0.0))),
+        ("知识", float(breakdown.get("knowledge_score", 0.0))),
+        ("工具使用", float(breakdown.get("tool_use_score", 0.0))),
         ("一致性", float(breakdown.get("consistency", 0.0))),
+        ("抗提取", float(breakdown.get("extraction_resistance", 0.0))),
+        ("响应速度", float(breakdown.get("speed", 0.0))),
     ]
 
     w, h = 760, 560
