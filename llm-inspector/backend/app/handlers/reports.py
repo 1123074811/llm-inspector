@@ -29,9 +29,9 @@ def _build_radar_svg_bytes(report: dict) -> bytes:
         ("能力分", float(score.get("capability_score", 0.0))),
         ("真实性", float(score.get("authenticity_score", 0.0))),
         ("性能分", float(score.get("performance_score", 0.0))),
-        ("推理", float(breakdown.get("reasoning", 0.0))),
-        ("指令", float(breakdown.get("instruction", 0.0))),
-        ("一致性", float(breakdown.get("consistency", 0.0))),
+        ("推理", float(breakdown.get("knowledge_score", 0.0))),
+        ("指令", float(breakdown.get("tool_use_score", 0.0))),
+        ("一致性", float(breakdown.get("extraction_resistance", 0.0))),
     ]
 
     w, h = 760, 560

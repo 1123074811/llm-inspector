@@ -2731,7 +2731,7 @@ class ReportBuilder:
         elif method == "code_execution":
             return detail.get("error", "代码执行失败")
         elif method == "semantic_judge":
-            kc = detail.get("keyword_coverage", 0)
+            kc = detail.get("keyword_coverage") or 0
             return f"语义评判未通过，关键覆盖率 {kc:.0%}"
         elif detail.get("error"):
             return f"错误：{detail['error']}"

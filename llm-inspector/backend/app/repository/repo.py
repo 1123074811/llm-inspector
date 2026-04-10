@@ -173,31 +173,33 @@ def upsert_test_case(case: dict) -> None:
 def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[dict]:
     conn = get_conn()
 
-    # Primary query for requested suite version
     rows = conn.execute(
         "SELECT * FROM test_cases WHERE suite_version=? AND enabled=1",
         (suite_version,),
     ).fetchall()
 
-    # Fallback chain to avoid hard failure when requested suite has not been seeded yet
     if not rows and suite_version != "v2":
         rows = conn.execute(
             "SELECT * FROM test_cases WHERE suite_version='v2' AND enabled=1"
         ).fetchall()
 
-    # Final fallback: any enabled cases
     if not rows:
         rows = conn.execute(
             "SELECT * FROM test_cases WHERE enabled=1"
         ).fetchall()
 
+    mode_filter = {"quick": ["quick"], "standard": ["quick", "standard"], "deep": ["quick", "standard", "deep"]}
+    allowed_levels = mode_filter.get(test_mode, ["quick", "standard"])
+
     cases = []
     for row in rows:
         c = dict(row)
         c["params"] = from_json_col(c.get("params")) or {}
-        # Promote difficulty from params._meta to top-level for orchestrator
         if c.get("difficulty") is None:
             c["difficulty"] = (c["params"].get("_meta") or {}).get("difficulty")
+        mode_level = (c["params"].get("_meta") or {}).get("mode_level", "standard")
+        if mode_level not in allowed_levels:
+            continue
         cases.append(c)
     return cases
 

@@ -1141,6 +1141,7 @@ class PreDetectionPipeline:
         r0 = Layer0HTTP().run(adapter)
         layer_results.append(r0)
         total_tokens += r0.tokens_used
+        self._log_layer_result("Layer0/HTTP", r0)
         if r0.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r0, layer_results, total_tokens)
 
@@ -1196,6 +1197,7 @@ class PreDetectionPipeline:
         r1 = Layer1SelfReport().run(adapter, model_name, prefetched_resp=probe)
         layer_results.append(r1)
         total_tokens += r1.tokens_used
+        self._log_layer_result("Layer1/SelfReport", r1)
         if r1.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r1, layer_results, total_tokens, routing_info=routing_info)
 
@@ -1204,6 +1206,7 @@ class PreDetectionPipeline:
         r2, layer3_extra = Layer2Identity().run(adapter, model_name)
         layer_results.append(r2)
         total_tokens += r2.tokens_used
+        self._log_layer_result("Layer2/Identity", r2)
         if r2.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r2, layer_results, total_tokens)
 
@@ -1214,6 +1217,7 @@ class PreDetectionPipeline:
             r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
             layer_results.append(r6)
             total_tokens += r6.tokens_used
+            self._log_layer_result("Layer6/Extraction(early-skip)", r6)
             if r6.confidence >= CONFIDENCE_THRESHOLD:
                 return self._build_result(True, r6, layer_results, total_tokens)
             best = max(layer_results, key=lambda r: r.confidence)
@@ -1235,6 +1239,7 @@ class PreDetectionPipeline:
         r3 = Layer3Knowledge().run(adapter, model_name, layer3_extra)
         layer_results.append(r3)
         total_tokens += r3.tokens_used
+        self._log_layer_result("Layer3/Knowledge", r3)
         if r3.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r3, layer_results, total_tokens)
 
@@ -1244,6 +1249,7 @@ class PreDetectionPipeline:
             r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
             layer_results.append(r6)
             total_tokens += r6.tokens_used
+            self._log_layer_result("Layer6/Extraction(early-skip)", r6)
             if r6.confidence >= CONFIDENCE_THRESHOLD:
                 return self._build_result(True, r6, layer_results, total_tokens)
             best = max(layer_results, key=lambda r: r.confidence)
@@ -1265,6 +1271,7 @@ class PreDetectionPipeline:
         r4 = Layer4Bias().run(adapter, model_name)
         layer_results.append(r4)
         total_tokens += r4.tokens_used
+        self._log_layer_result("Layer4/Bias", r4)
         if r4.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r4, layer_results, total_tokens)
 
@@ -1273,6 +1280,7 @@ class PreDetectionPipeline:
         r5 = Layer5Tokenizer().run(adapter, model_name)
         layer_results.append(r5)
         total_tokens += r5.tokens_used
+        self._log_layer_result("Layer5/Tokenizer", r5)
 
         # Layer 6 — Active Extraction (only in extraction mode or when confidence is low)
         if extraction_mode or (max(r.confidence for r in layer_results) < 0.60):
@@ -1280,6 +1288,7 @@ class PreDetectionPipeline:
             r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
             layer_results.append(r6)
             total_tokens += r6.tokens_used
+            self._log_layer_result("Layer6/Extraction", r6)
             if r6.confidence >= CONFIDENCE_THRESHOLD:
                 return self._build_result(True, r6, layer_results, total_tokens)
 
@@ -1289,6 +1298,7 @@ class PreDetectionPipeline:
                 r6b = Layer6MultiTurnProbes().run(adapter, model_name)
                 layer_results.append(r6b)
                 total_tokens += r6b.tokens_used
+                self._log_layer_result("Layer6b/MultiTurn", r6b)
                 if r6b.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r6b, layer_results, total_tokens)
 
@@ -1296,6 +1306,15 @@ class PreDetectionPipeline:
         best = max(layer_results, key=lambda r: r.confidence)
         merged_conf = self._merge_confidences(layer_results)
         identified = best.identified_as if merged_conf >= 0.50 else None
+        logger.info(
+            "PreDetect pipeline complete",
+            model=model_name,
+            layers_run=len(layer_results),
+            merged_confidence=merged_conf,
+            best_layer=best.layer,
+            identified_as=identified,
+            total_tokens=total_tokens,
+        )
 
         return PreDetectionResult(
             success=merged_conf >= 0.60,
@@ -1307,6 +1326,19 @@ class PreDetectionPipeline:
             should_proceed_to_testing=merged_conf < CONFIDENCE_THRESHOLD,
             routing_info=routing_info,
         )
+
+    @staticmethod
+    def _log_layer_result(layer_label: str, result: LayerResult) -> None:
+        """Log per-layer result with evidence details."""
+        logger.info(
+            f"PreDetect {layer_label} complete",
+            identified_as=result.identified_as,
+            confidence=result.confidence,
+            tokens_used=result.tokens_used,
+            evidence_count=len(result.evidence),
+        )
+        for i, ev in enumerate(result.evidence):
+            logger.info(f"  [{layer_label}] evidence[{i}]: {ev}")
 
     @staticmethod
     def _build_result(

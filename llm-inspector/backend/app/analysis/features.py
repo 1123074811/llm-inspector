@@ -114,7 +114,7 @@ class FeatureExtractor:
         )
         features["avg_token_per_response"] = features["total_token_usage"] / max(features["total_cases"], 1.0)
 
-        all_conf = [s.judge_confidence for r in case_results for s in r.samples if s.judge_confidence is not None]
+        all_conf = [s.judge_detail.get("confidence") for r in case_results for s in r.samples if s.judge_detail.get("confidence") is not None]
         features["avg_judge_confidence"] = sum(all_conf) / max(len(all_conf), 1) if all_conf else 0.0
 
         for threshold in (0.5, 0.7, 0.85, 0.95):
@@ -123,8 +123,8 @@ class FeatureExtractor:
         error_types: dict[str, int] = {}
         for r in case_results:
             for s in r.samples:
-                if not s.judge_passed and s.error_type:
-                    error_types[s.error_type] = error_types.get(s.error_type, 0) + 1
+                if not s.judge_passed and s.response.error_type:
+                    error_types[s.response.error_type] = error_types.get(s.response.error_type, 0) + 1
         for et, count in error_types.items():
             features[f"error_{et}"] = float(count)
         features["total_errors"] = float(sum(error_types.values()))
@@ -159,7 +159,7 @@ class FeatureExtractor:
             stats[dim]["count"] += 1
             if all(s.judge_passed for s in r.samples):
                 stats[dim]["passed"] += 1
-            confs = [s.judge_confidence for s in r.samples if s.judge_confidence is not None]
+            confs = [s.judge_detail.get("confidence") for s in r.samples if s.judge_detail.get("confidence") is not None]
             if confs:
                 stats[dim]["total_confidence"] += sum(confs) / len(confs)
             latencies = [s.response.latency_ms for s in r.samples if s.response.latency_ms]
@@ -188,7 +188,7 @@ class FeatureExtractor:
                 continue
             for s in r.samples:
                 if not s.judge_passed:
-                    et = s.error_type or "unknown"
+                    et = s.response.error_type or "unknown"
                     if "timeout" in et.lower():
                         attrs["timeout"] += 1
                     elif "过滤" in et or "filter" in et.lower() or "refuse" in et.lower():
