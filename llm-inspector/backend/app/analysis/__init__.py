@@ -51,6 +51,12 @@ from app.analysis.neural_similarity import (
     get_similarity_fusion,
     compute_neural_similarity,
 )
+from app.analysis.irt_params import (
+    IRTParameters,
+    IRTParameterDB,
+    ThetaScoreConverter,
+    get_irt_db,
+)
 
 __all__ = [
     # 原有组件
@@ -79,6 +85,11 @@ __all__ = [
     "AttributionReport",
     "BehavioralEmbeddingExtractor",
     "MultiModalSimilarityFusion",
+    # v8.0 新增 - IRT参数数据库
+    "IRTParameters",
+    "IRTParameterDB",
+    "ThetaScoreConverter",
+    "get_irt_db",
     # 便捷函数
     "get_calibrator",
     "get_confidence_estimator",

@@ -434,7 +434,7 @@ class SimilarityEngine:
                     "ci_95_low": ci_low,
                     "ci_95_high": ci_high,
                     "valid_features": valid_count,
-                    "run_id": baseline.get("run_id"),
+                    "run_id": baseline.get("run_id") or baseline.get("id"),
                     "overall_score": baseline.get("overall_score"),
                 })
         

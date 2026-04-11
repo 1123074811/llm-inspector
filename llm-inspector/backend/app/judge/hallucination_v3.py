@@ -28,6 +28,7 @@ from datetime import datetime
 import numpy as np
 
 from app.core.logging import get_logger
+from app.knowledge import KnowledgeGraphClient, VerificationResult
 
 logger = get_logger(__name__)
 
@@ -316,7 +317,11 @@ class HallucinationDetectorV3:
             use_knowledge_graph: Enable knowledge graph verification
             kg_api_key: API key for KG service (optional)
         """
-        self.kg_client = KnowledgeGraphClient(use_wikidata=use_knowledge_graph)
+        # Use real knowledge graph client from app.knowledge
+        self.kg_client = KnowledgeGraphClient(
+            use_wikidata=use_knowledge_graph,
+            wikidata_rate_limit=0.2,
+        )
         self.claim_extractor = FactualClaimExtractor()
         
         # Statistics
@@ -363,11 +368,13 @@ class HallucinationDetectorV3:
         if use_external_kg and self.kg_client.is_available():
             contradictions = []
             for claim in claims:
-                verification = self.kg_client.verify_claim(claim)
-                if verification.status == "contradicted":
+                # Use new knowledge graph client API
+                kg_result = self.kg_client.verify_fact(claim.text)
+                # Low confidence from KG suggests potential hallucination
+                if kg_result.confidence < 0.3:
                     contradictions.append({
                         "claim": claim.to_dict(),
-                        "contradiction": verification.evidence
+                        "evidence": kg_result.evidence
                     })
                     signals.kg_contradiction_score += 0.3
             
@@ -391,7 +398,9 @@ class HallucinationDetectorV3:
         for claim in claims:
             for entity in claim.entities:
                 if use_external_kg:
-                    score = self.kg_client.verify_entity_existence(entity)
+                    # Use new knowledge graph client API
+                    kg_result = self.kg_client.verify_entity(entity)
+                    score = kg_result.confidence if kg_result.is_verified else 0.0
                 else:
                     # Fallback heuristic
                     score = 0.5 if len(entity) > 3 else 0.3

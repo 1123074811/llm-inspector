@@ -42,6 +42,16 @@ from app.handlers.models import (
     handle_elo_leaderboard,
 )
 from app.handlers.misc import handle_health, handle_generate_isomorphic, handle_static
+from app.handlers.v8_handlers import (
+    handle_v8_health,
+    handle_v8_judgment_logs,
+    handle_v8_case_provenance,
+    handle_v8_data_lineage,
+    handle_v8_plugin_stats,
+    handle_v8_plugin_metadata,
+    handle_v8_threshold_references,
+    handle_v8_list_plugins,
+)
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
 
 logger = get_logger(__name__)
@@ -86,6 +96,15 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/calibration/replay$",       handle_list_calibration_replays),
     ("GET",    r"^/api/v1/calibration/replay/[^/]+$",handle_get_calibration_replay),
     ("POST",   r"^/api/v1/tools/generate-isomorphic$", handle_generate_isomorphic),
+    # v8.0 Phase 5 routes
+    ("GET",    r"^/api/v8/health$",                    handle_v8_health),
+    ("GET",    r"^/api/v8/plugins$",                    handle_v8_list_plugins),
+    ("GET",    r"^/api/v8/plugins/[^/]+/metadata$",   handle_v8_plugin_metadata),
+    ("GET",    r"^/api/v8/plugin-stats$",              handle_v8_plugin_stats),
+    ("GET",    r"^/api/v8/runs/[^/]+/judgment-logs$", handle_v8_judgment_logs),
+    ("GET",    r"^/api/v8/runs/[^/]+/case/[^/]+/provenance$", handle_v8_case_provenance),
+    ("GET",    r"^/api/v8/runs/[^/]+/data-lineage$",  handle_v8_data_lineage),
+    ("GET",    r"^/api/v8/references/thresholds$",     handle_v8_threshold_references),
 ]
 
 

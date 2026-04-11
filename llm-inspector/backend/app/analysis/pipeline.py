@@ -3014,6 +3014,9 @@ class ReportBuilder:
             case_results=case_results,
         )
         report["narrative"] = narrative
+        
+        # Add run_id to report for export tools and other uses
+        report["run_id"] = run_id
 
         report["evidence_chain"] = self._build_evidence_chain(
             predetect_result=predetect,
@@ -3151,55 +3154,74 @@ class AnalysisPipeline:
         计算当前运行与基准模型的差异。
         baseline_scores 为内部 0-100 单位。
         """
-        all_keys = sorted(set(current_features) | set(baseline_feature_vector))
-        vec_curr = [float(current_features.get(k, 0.0) or 0.0) for k in all_keys]
-        vec_base = [float(baseline_feature_vector.get(k, 0.0) or 0.0) for k in all_keys]
+        try:
+            all_keys = sorted(set(current_features) | set(baseline_feature_vector))
+            vec_curr = [float(current_features.get(k, 0.0) or 0.0) for k in all_keys]
+            vec_base = [float(baseline_feature_vector.get(k, 0.0) or 0.0) for k in all_keys]
 
-        dot = sum(x * y for x, y in zip(vec_curr, vec_base))
-        norm_curr = math.sqrt(sum(x * x for x in vec_curr))
-        norm_base = math.sqrt(sum(y * y for y in vec_base))
-        denom = norm_curr * norm_base
-        cosine_sim = (dot / denom) if denom > 0 else 0.0
+            dot = sum(x * y for x, y in zip(vec_curr, vec_base))
+            norm_curr = math.sqrt(sum(x * x for x in vec_curr))
+            norm_base = math.sqrt(sum(y * y for y in vec_base))
+            denom = norm_curr * norm_base
+            cosine_sim = (dot / denom) if denom > 0 else 0.0
 
-        delta_total = float(current_card.total_score) - float(baseline_scores.get("total_score", 0.0))
-        delta_cap = float(current_card.capability_score) - float(baseline_scores.get("capability_score", 0.0))
-        delta_auth = float(current_card.authenticity_score) - float(baseline_scores.get("authenticity_score", 0.0))
-        delta_perf = float(current_card.performance_score) - float(baseline_scores.get("performance_score", 0.0))
+            delta_total = float(current_card.total_score) - float(baseline_scores.get("total_score", 0.0))
+            delta_cap = float(current_card.capability_score) - float(baseline_scores.get("capability_score", 0.0))
+            delta_auth = float(current_card.authenticity_score) - float(baseline_scores.get("authenticity_score", 0.0))
+            delta_perf = float(current_card.performance_score) - float(baseline_scores.get("performance_score", 0.0))
 
-        feature_drift = {}
-        for k in all_keys:
-            base_val = float(baseline_feature_vector.get(k, 0.0) or 0.0)
-            curr_val = float(current_features.get(k, 0.0) or 0.0)
-            if base_val != 0:
-                pct = (curr_val - base_val) / abs(base_val) * 100
+            feature_drift = {}
+            for k in all_keys:
+                base_val = float(baseline_feature_vector.get(k, 0.0) or 0.0)
+                curr_val = float(current_features.get(k, 0.0) or 0.0)
+                if base_val != 0:
+                    pct = (curr_val - base_val) / abs(base_val) * 100
+                else:
+                    pct = 0.0
+                feature_drift[k] = {
+                    "baseline": round(base_val, 4),
+                    "current": round(curr_val, 4),
+                    "delta_pct": round(pct, 2),
+                }
+            top5 = dict(sorted(feature_drift.items(), key=lambda x: abs(x[1]["delta_pct"]), reverse=True)[:5])
+
+            abs_delta_total_display = abs(delta_total) * 100
+            if (
+                cosine_sim >= settings.BASELINE_MATCH_COSINE_THRESHOLD
+                and abs_delta_total_display <= settings.BASELINE_MATCH_SCORE_DELTA_MAX
+            ):
+                verdict = "match"
+            elif cosine_sim >= 0.85 or abs_delta_total_display <= 1500:
+                verdict = "suspicious"
             else:
-                pct = 0.0
-            feature_drift[k] = {
-                "baseline": round(base_val, 4),
-                "current": round(curr_val, 4),
-                "delta_pct": round(pct, 2),
+                verdict = "mismatch"
+
+            return {
+                "cosine_similarity": round(cosine_sim, 4),
+                "score_delta": {
+                    "total": round(delta_total * 100),
+                    "capability": round(delta_cap * 100),
+                    "authenticity": round(delta_auth * 100),
+                    "performance": round(delta_perf * 100),
+                },
+                "feature_drift_top5": top5,
+                "verdict": verdict,
             }
-        top5 = dict(sorted(feature_drift.items(), key=lambda x: abs(x[1]["delta_pct"]), reverse=True)[:5])
-
-        abs_delta_total_display = abs(delta_total) * 100
-        if (
-            cosine_sim >= settings.BASELINE_MATCH_COSINE_THRESHOLD
-            and abs_delta_total_display <= settings.BASELINE_MATCH_SCORE_DELTA_MAX
-        ):
-            verdict = "match"
-        elif cosine_sim >= 0.85 or abs_delta_total_display <= 1500:
-            verdict = "suspicious"
-        else:
-            verdict = "mismatch"
-
-        return {
-            "cosine_similarity": round(cosine_sim, 4),
-            "score_delta": {
-                "total": round(delta_total * 100),
-                "capability": round(delta_cap * 100),
-                "authenticity": round(delta_auth * 100),
-                "performance": round(delta_perf * 100),
-            },
-            "feature_drift_top5": top5,
-            "verdict": verdict,
-        }
+        except KeyError as e:
+            # 返回一个安全的默认结果而不是抛出异常
+            return {
+                "cosine_similarity": 0.0,
+                "score_delta": {"total": 0.0, "capability": 0.0, "authenticity": 0.0, "performance": 0.0},
+                "feature_drift_top5": {},
+                "verdict": "mismatch",
+                "error": f"Missing key: {str(e)}",
+            }
+        except Exception as e:
+            # 返回一个安全的默认结果而不是抛出异常
+            return {
+                "cosine_similarity": 0.0,
+                "score_delta": {"total": 0.0, "capability": 0.0, "authenticity": 0.0, "performance": 0.0},
+                "feature_drift_top5": {},
+                "verdict": "mismatch",
+                "error": f"Comparison error: {str(e)}",
+            }

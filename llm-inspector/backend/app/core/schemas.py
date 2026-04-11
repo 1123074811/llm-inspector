@@ -3,7 +3,10 @@ Shared data structures — plain dataclasses, no Pydantic needed.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional, Tuple
+
+# v8.0: Import provenance for data lineage support
+from app.core.provenance import DataProvenance
 
 
 # ── LLM Adapter IO ────────────────────────────────────────────────────────────
@@ -142,6 +145,83 @@ class CaseResult:
     def mean_latency_ms(self) -> float | None:
         lats = [s.response.latency_ms for s in self.samples if s.response.latency_ms]
         return sum(lats) / len(lats) if lats else None
+
+
+@dataclass
+class TestCaseV8(TestCase):
+    """v8.0 extended test case with data provenance support.
+    
+    Adds data lineage tracking to ensure 100% data-driven scores
+    with full traceability for scientific rigor.
+    """
+    
+    # Weight provenance
+    weight_provenance: Optional[DataProvenance] = None
+    
+    # Difficulty provenance  
+    difficulty_provenance: Optional[DataProvenance] = None
+    
+    # IRT parameters (a=discrimination, b=difficulty, c=guessing)
+    irt_a: Optional[float] = None  # Discrimination
+    irt_b: Optional[float] = None  # Difficulty
+    irt_c: float = 0.25  # Guessing parameter (default 4-option MC)
+    
+    # Parameter validity
+    irt_valid: bool = True
+    irt_fit_rmse: float = 0.0
+    
+    @property
+    def has_valid_provenance(self) -> bool:
+        """Check if weight has valid provenance."""
+        if not self.weight_provenance:
+            return False
+        return self.weight_provenance.confidence > 0.5
+    
+    @property
+    def has_irt_params(self) -> bool:
+        """Check if IRT parameters are available."""
+        return self.irt_a is not None and self.irt_b is not None
+    
+    def get_weight_with_fallback(self) -> Tuple[float, DataProvenance]:
+        """Get weight with provenance, using fallback if needed.
+        
+        Returns:
+            Tuple of (weight, provenance)
+        """
+        if self.weight_provenance and self.weight_provenance.confidence > 0.5:
+            return (self.weight, self.weight_provenance)
+        
+        # Use fallback value with marked provenance
+        fallback = DataProvenance.create_fallback(
+            f"weight_{self.id}",
+            "IRT calibration not available"
+        )
+        return (1.0, fallback)
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary including provenance."""
+        base_dict = {
+            "id": self.id,
+            "category": self.category,
+            "name": self.name,
+            "weight": self.weight,
+            "has_provenance": self.has_valid_provenance,
+            "has_irt": self.has_irt_params,
+        }
+        
+        if self.weight_provenance:
+            base_dict["weight_provenance"] = self.weight_provenance.to_dict()
+        
+        if self.has_irt_params:
+            base_dict["irt_params"] = {
+                "a": self.irt_a,
+                "b": self.irt_b,
+                "c": self.irt_c,
+                "valid": self.irt_valid,
+                "fit_rmse": self.irt_fit_rmse,
+            }
+        
+        return base_dict
 
 
 # ── Pre-Detection ─────────────────────────────────────────────────────────────

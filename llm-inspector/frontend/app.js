@@ -1634,7 +1634,65 @@ async function markAsBaseline(runId) {
 }
 
 async function compareWithBaseline(runId) {
-  const {ok, data} = await api('POST', '/api/v1/baselines/compare', { run_id: runId });
+  // First, fetch available baselines
+  const {ok: baselinesOk, data: baselinesData} = await api('GET', '/api/v1/baselines');
+  if (!baselinesOk) {
+    alert('无法获取基准模型列表: ' + (baselinesData.error || 'unknown error'));
+    return;
+  }
+
+  const baselines = baselinesData.baselines || [];
+  if (!baselines.length) {
+    alert('暂无可用基准模型，请先标记某个模型为基准');
+    return;
+  }
+
+  // Create baseline selection modal
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+  `;
+
+  const options = baselines.map(b => 
+    `<option value="${b.id}">${escHtml(b.display_name || b.model_name)} (${b.model_name})</option>`
+  ).join('');
+
+  modal.innerHTML = `
+    <div class="card" style="max-width: 500px; width: 90%;">
+      <h3 style="margin-top: 0;">选择基准模型进行对比</h3>
+      <p style="color: #666; margin-bottom: 16px;">请选择要与当前检测结果对比的基准模型：</p>
+      <select id="baseline-select" style="width: 100%; padding: 8px; margin-bottom: 16px; border: 1px solid #ddd; border-radius: 4px;">
+        ${options}
+      </select>
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button class="btn" onclick="this.closest('[style*=fixed]').remove()">取消</button>
+        <button class="btn primary" onclick="confirmBaselineComparison('${runId}', this.closest('[style*=fixed]'))">开始对比</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  document.getElementById('baseline-select').focus();
+}
+
+async function confirmBaselineComparison(runId, modal) {
+  const select = document.getElementById('baseline-select');
+  const baseline_id = select.value;
+
+  if (!baseline_id) {
+    alert('请选择一个基准模型');
+    return;
+  }
+
+  modal.remove();
+
+  // Now perform the comparison with both baseline_id and run_id
+  const {ok, data} = await api('POST', '/api/v1/baselines/compare', { 
+    baseline_id: baseline_id, 
+    run_id: runId 
+  });
   if (!ok) {
     alert('基准对比失败: ' + (data.error || 'unknown error'));
     return;
