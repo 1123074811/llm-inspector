@@ -362,7 +362,7 @@ class ScoreConfidenceEstimator:
             # 困难用例的权重调整
             adjusted_weight = weight * (1 + difficulty)
             
-            weighted_sum += pass_rate * 100 * adjusted_weight
+            weighted_sum += (pass_rate or 0) * 100 * adjusted_weight
             total_weight += adjusted_weight
         
         if total_weight == 0:

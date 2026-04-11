@@ -923,7 +923,7 @@ class ScoreCardCalculator:
             similarities, claimed_model
         )
         card.predetect_confidence = (
-            predetect.confidence * 100 if predetect and predetect.success else 0.0
+            (predetect.confidence or 0) * 100 if predetect and predetect.success else 0.0
         )
         card.consistency_score = self._consistency_score(case_results)
         card.temperature_effectiveness = (
@@ -951,11 +951,11 @@ class ScoreCardCalculator:
 
         card.authenticity_score = min(100.0, round(
             auth_weights["similarity"] * card.similarity_to_claimed
-            + auth_weights["behavioral"] * card.behavioral_invariant_score
-            + auth_weights["consistency"] * card.consistency_score
+            + auth_weights["behavioral"] * (card.behavioral_invariant_score if card.behavioral_invariant_score is not None else 0)
+            + auth_weights["consistency"] * (card.consistency_score if card.consistency_score is not None else 0)
             + (auth_weights.get("extraction", 0) * extraction_resistance if extraction_resistance is not None else 0)
-            + auth_weights["predetect"] * card.predetect_confidence
-            + auth_weights["fingerprint"] * fingerprint_match,
+            + auth_weights["predetect"] * (card.predetect_confidence if card.predetect_confidence is not None else 0)
+            + auth_weights["fingerprint"] * (fingerprint_match if fingerprint_match is not None else 0),
             1,
         ))
 
@@ -968,18 +968,18 @@ class ScoreCardCalculator:
         ttft_plausibility = self._ttft_plausibility(features)
 
         card.performance_score = min(100.0, round(
-            0.35 * card.speed_score
-            + 0.25 * card.stability_score
-            + 0.25 * card.cost_efficiency
+            0.35 * (card.speed_score if card.speed_score is not None else 0)
+            + 0.25 * (card.stability_score if card.stability_score is not None else 0)
+            + 0.25 * (card.cost_efficiency if card.cost_efficiency is not None else 0)
             + 0.15 * ttft_plausibility,
             1,
         ))
 
         # ── Total ──
         card.total_score = round(
-            0.45 * card.capability_score
-            + 0.30 * card.authenticity_score
-            + 0.25 * card.performance_score,
+            0.45 * (card.capability_score if card.capability_score is not None else 0)
+            + 0.30 * (card.authenticity_score if card.authenticity_score is not None else 0)
+            + 0.25 * (card.performance_score if card.performance_score is not None else 0),
             1,
         )
 
@@ -1186,9 +1186,9 @@ class ScoreCardCalculator:
             for s in similarities:
                 if s.benchmark_name.lower() in claimed_lower or \
                    claimed_lower in s.benchmark_name.lower():
-                    return min(100.0, s.similarity_score * 100)
+                    return min(100.0, (s.similarity_score or 0) * 100)
         # Fallback: use top similarity
-        return min(100.0, similarities[0].similarity_score * 100)
+        return min(100.0, (similarities[0].similarity_score or 0) * 100)
 
     def _consistency_score(self, case_results: list[CaseResult]) -> float:
         """
@@ -1541,7 +1541,7 @@ class ScoreCardCalculator:
         for r in results:
             w = r.case.weight
             total_weight += w
-            weighted_pass += w * r.pass_rate
+            weighted_pass += w * (r.pass_rate or 0)
         return (weighted_pass / total_weight) if total_weight > 0 else 0.0
 
 
@@ -1689,7 +1689,7 @@ class VerdictEngine:
 
         predetect_score = 50.0
         if predetect and predetect.success:
-            predetect_score = predetect.confidence * 100
+            predetect_score = (predetect.confidence or 0) * 100
             reasons.append(
                 f"预检测识别为 {predetect.identified_as}（置信度 {predetect.confidence:.0%}）"
             )
@@ -1778,7 +1778,7 @@ class VerdictEngine:
 
         # ── 硬规则：行为不变性检测 ──
         beh_inv = scorecard.behavioral_invariant_score
-        if beh_inv < self.HARD_RULES["behavioral_invariant_min"]:
+        if beh_inv is not None and beh_inv < self.HARD_RULES["behavioral_invariant_min"]:
             confidence_real = min(confidence_real, self.HARD_RULES["behavioral_invariant_cap"])
             reasons.append(
                 f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
@@ -1786,7 +1786,7 @@ class VerdictEngine:
             )
 
         # ── 硬规则：编程能力与声称等级不符 ──
-        if scorecard.coding_score < 10 and any(m in claimed for m in top_models):
+        if scorecard.coding_score is not None and scorecard.coding_score < 10 and any(m in claimed for m in top_models):
             confidence_real = min(confidence_real, self.HARD_RULES["coding_zero_cap"])
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
@@ -1794,6 +1794,8 @@ class VerdictEngine:
         # Only trigger if extraction probes exposed a DIFFERENT real model identity
         # (not just leaking our test system prompt, which any model can do).
         extraction_resistance = getattr(scorecard, 'breakdown', {}).get('extraction_resistance', 100)
+        if extraction_resistance is None:
+            extraction_resistance = 100
         _found_identity_mismatch = False
         for r in (case_results or []):
             if hasattr(r, 'case') and r.case.category == "extraction":
@@ -3054,8 +3056,8 @@ class ReportBuilder:
                         "phase": "predetect",
                         "layer": lr.layer,
                         "signal": ev,
-                        "confidence": round(lr.confidence * 100, 1),
-                        "severity": "critical" if lr.confidence >= 0.85 else "warn" if lr.confidence >= 0.6 else "info",
+                        "confidence": round((lr.confidence or 0) * 100, 1),
+                        "severity": "critical" if (lr.confidence or 0) >= 0.85 else "warn" if (lr.confidence or 0) >= 0.6 else "info",
                     })
 
         NOTABLE_CASES = {
@@ -3075,7 +3077,7 @@ class ReportBuilder:
                     "phase": "testing",
                     "signal": display,
                     "case_id": case_name,
-                    "pass_rate": round(r.pass_rate * 100, 1),
+                    "pass_rate": round((r.pass_rate or 0) * 100, 1),
                     "severity": "info" if (passed == pass_is_good) else "warn",
                 })
 

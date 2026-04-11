@@ -145,7 +145,7 @@ class VerdictEngine:
 
         # Pre-detection confidence
         if predetect and predetect.success:
-            pre_conf = predetect.confidence * 100
+            pre_conf = (predetect.confidence or 0) * 100
             if predetect.identified_as:
                 # If pre-detection identified a specific model, reduce confidence
                 confidence_real = confidence_real * 0.7 + (100 - pre_conf) * 0.3
@@ -202,7 +202,7 @@ class VerdictEngine:
         final_score = (
             confidence_real * 0.6 +
             overall_score * 0.3 +
-            (100 - predetect.confidence * 100) * 0.1 if predetect else confidence_real * 0.1
+            (100 - (predetect.confidence or 0) * 100) * 0.1 if predetect else confidence_real * 0.1
         )
 
         return TrustVerdict(
@@ -254,12 +254,14 @@ class VerdictEngine:
             )
 
         # Rule: Coding capability mismatch
-        if scorecard.coding_score < 10 and any(m in claimed for m in top_models):
+        if scorecard.coding_score is not None and scorecard.coding_score < 10 and any(m in claimed for m in top_models):
             confidence_real = min(confidence_real, self.HARD_RULES["coding_zero_cap"])
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
         # Rule: Identity exposure in extraction
         extraction_resistance = getattr(scorecard, 'breakdown', {}).get('extraction_resistance', 100)
+        if extraction_resistance is None:
+            extraction_resistance = 100
         _found_identity_mismatch = False
         if case_results:
             for r in case_results:

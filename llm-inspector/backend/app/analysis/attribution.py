@@ -211,7 +211,7 @@ class ScoreAttributionAnalyzer:
             pass_rate = passed / len(samples)
         
         # 基础贡献：偏离50分基准
-        base_contribution = (pass_rate * 100 - 50) * (weight / max(n_cases, 1))
+        base_contribution = ((pass_rate or 0) * 100 - 50) * (weight / max(n_cases, 1))
         
         # 考虑用例难度（困难用例的贡献权重更高）
         difficulty_multiplier = 1 + difficulty * 0.5
