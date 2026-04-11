@@ -156,7 +156,8 @@ class InspectorHandler(BaseHTTPRequestHandler):
         self._dispatch("DELETE")
 
 
-def main() -> None:
+def run_server(host: str = None, port: int = None) -> None:
+    """Run the HTTP server with optional host/port override."""
     setup_logging()
     logger.info("Initialising database")
     init_db()
@@ -167,12 +168,17 @@ def main() -> None:
     from app.tasks.seeder import seed_all
     seed_all()
 
-    host = settings.HOST
-    port = settings.PORT
+    host = host or settings.HOST
+    port = port or settings.PORT
     server = HTTPServer((host, port), InspectorHandler)
     logger.info("Server ready", host=host, port=port,
                 url=f"http://{host}:{port}")
     server.serve_forever()
+
+
+def main() -> None:
+    """Main entry point - uses settings from config."""
+    run_server()
 
 
 if __name__ == "__main__":

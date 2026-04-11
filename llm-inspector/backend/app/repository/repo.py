@@ -87,6 +87,45 @@ def save_predetect_result(run_id: str, result_dict: dict) -> None:
     conn.commit()
 
 
+def update_predetect_progress(
+    run_id: str,
+    current_layer: str,
+    layer_results: list = None,
+    current_probe: str = None,
+    probe_detail: dict = None,
+    evidence: list = None,
+    tokens_used: int = 0,
+) -> None:
+    """Update current layer progress during pre-detection for real-time UI feedback.
+    
+    Args:
+        current_layer: Current layer being executed (e.g., "Layer2/Identity")
+        current_probe: Specific probe/step within the layer (e.g., "tokenizer_count_probe")
+        probe_detail: Dict with request/response preview for the current probe
+        evidence: List of evidence items collected so far
+        tokens_used: Cumulative tokens used in this layer
+    """
+    conn = get_conn()
+    result_partial = {
+        "current_layer": current_layer,
+        "current_probe": current_probe,
+        "probe_detail": probe_detail or {},
+        "evidence": evidence or [],
+        "layer_results": layer_results or [],
+        "tokens_used": tokens_used,
+        "success": False,
+        "identified_as": None,
+        "confidence": 0.0,
+    }
+    conn.execute(
+        """UPDATE test_runs
+           SET predetect_result=?, status=?
+           WHERE id=?""",
+        (json_col(result_partial), "pre_detecting", run_id),
+    )
+    conn.commit()
+
+
 def list_runs(limit: int = 50, offset: int = 0) -> list[dict]:
     conn = get_conn()
     rows = conn.execute(

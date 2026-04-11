@@ -1,0 +1,15 @@
+# LLM Inspector v7.0 - Required Dependencies
+# Generated automatically - do not edit manually
+
+# Core dependencies
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Optional but recommended
+sentence-transformers>=2.2.0  # For local semantic similarity
+requests>=2.28.0  # For knowledge graph API
+
+# Optional dependencies
+# PyYAML>=6.0  # For YAML config parsing
+# spacy>=3.7.0  # For advanced NLP
+# jinja2>=3.1.0  # For report templates

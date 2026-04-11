@@ -165,6 +165,7 @@ class PreDetectionResult:
     total_tokens_used: int = 0
     should_proceed_to_testing: bool = True
     routing_info: dict = field(default_factory=dict)
+    current_layer: str | None = None  # Real-time progress tracking
 
     def to_dict(self) -> dict:
         return {
@@ -175,6 +176,7 @@ class PreDetectionResult:
             "total_tokens_used": self.total_tokens_used,
             "should_proceed_to_testing": self.should_proceed_to_testing,
             "routing_info": self.routing_info,
+            "current_layer": self.current_layer,
             "layer_results": [
                 {
                     "layer": r.layer,

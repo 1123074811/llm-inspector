@@ -1,15 +1,32 @@
 """
-Score Calculator Module
+Score Calculator Module v7.0
 Calculate various scores from features and case results.
+
+v7 Updates:
+- Scientifically-grounded IRT-based weight calculation
+- Information function integration for optimal precision
+- Full data provenance tracking
 
 Split from pipeline.py in V6 refactoring for better code organization.
 """
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional
+import os
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from app.core.logging import get_logger
+
+# v7: Import IRT calibration for scientific weight calculation
+from .irt_calibration import (
+    IRTParameters,
+    calculate_data_driven_weights,
+    get_calibrated_params,
+    load_suite_calibration,
+)
+
+if TYPE_CHECKING:
+    from .irt_calibration import CalibrationResult
 
 logger = get_logger(__name__)
 
@@ -72,16 +89,114 @@ class ScoreCardCalculator:
 
         return {dim: round(a / total, 3) for dim, a in dim_mean_a.items()}
 
+    def _irt_information_weights(
+        self,
+        case_results: List[Any],
+        theta_range: tuple = (-2, 2)
+    ) -> Dict[str, float]:
+        """
+        v7: Calculate weights based on IRT test information functions.
+        
+        Weight ∝ ∫ I(θ) dθ over θ_range
+        where I(θ) = Σ [a² * P(θ) * (1-P(θ)) / (1-c)²] for items in dimension
+        
+        This maximizes the expected precision of measurement over the target
+        ability range, following optimal test design theory.
+        
+        Reference: van der Linden (2010) - Elements of Adaptive Testing
+        
+        Args:
+            case_results: List of case results with case_id
+            theta_range: Ability range to optimize for (default: -2 to 2)
+            
+        Returns:
+            Dict mapping dimension to normalized weight
+        """
+        import numpy as np
+        from collections import defaultdict
+        
+        # Group cases by dimension
+        dim_items: Dict[str, List[Any]] = defaultdict(list)
+        for cr in case_results:
+            dim = getattr(cr.case, 'dimension', 'unknown')
+            dim_items[dim].append(cr)
+        
+        # Calculate information for each dimension
+        dim_information = {}
+        thetas = np.linspace(theta_range[0], theta_range[1], 50)
+        
+        for dim, items in dim_items.items():
+            total_info = np.zeros_like(thetas)
+            
+            for item_result in items:
+                case_id = getattr(item_result.case, 'id', None)
+                if not case_id:
+                    continue
+                
+                # Get IRT parameters for this case
+                irt_params = get_calibrated_params(case_id)
+                
+                if irt_params:
+                    # Calculate information curve
+                    info_values = irt_params.calculate_information(thetas)
+                    total_info += info_values
+                else:
+                    # Fallback: assume standard parameters
+                    # Standard normal approximation for uncalibrated items
+                    info_fallback = np.exp(-thetas**2 / 2) / np.sqrt(2 * np.pi)
+                    total_info += info_fallback
+            
+            # Integrate over theta range to get total information
+            integrated_info = np.trapz(total_info, thetas)
+            dim_information[dim] = max(0.01, integrated_info)  # Floor at 0.01
+        
+        # Normalize to sum to 1.0
+        total_info = sum(dim_information.values())
+        if total_info == 0:
+            return self.DEFAULT_CAPABILITY_WEIGHTS
+        
+        weights = {
+            dim: round(info / total_info, 3)
+            for dim, info in dim_information.items()
+        }
+        
+        logger.info(f"v7 IRT weights calculated: {weights}")
+        return weights
+
     def _resolve_weights(
         self,
         claimed_model: str | None,
         item_stats: Dict | None = None,
+        case_results: List[Any] | None = None,
     ) -> Dict:
         """
-        v6: Resolve weights with data-driven option.
-        Priority: data-driven (if enough stats) > family weights > default
+        v7: Resolve weights with scientifically-grounded IRT information function.
+        
+        Priority:
+        1. IRT information integration (v7 - optimal precision)
+        2. v6 data-driven discrimination weights (fallback)
+        3. Family-based calibrated weights (fallback)
+        4. Default equal weights (last resort)
+        
+        Args:
+            claimed_model: Model name for family-based lookup
+            item_stats: Legacy item statistics (for v6 compatibility)
+            case_results: Case results with IRT calibration (for v7 optimal)
+            
+        Returns:
+            Dict mapping dimension to weight
         """
-        # Try data-driven weights if we have sufficient stats
+        # v7: Try IRT information function weights (optimal)
+        if case_results and len(case_results) >= 10:
+            try:
+                irt_weights = self._irt_information_weights(case_results)
+                if len(irt_weights) >= 4:  # At least 4 dimensions
+                    logger.info(f"Using v7 IRT information weights: {irt_weights}")
+                    return irt_weights
+            except Exception as e:
+                logger.warning(f"IRT weight calculation failed: {e}, using fallback")
+        
+        # v6: Try data-driven weights if we have sufficient stats
         if item_stats and len(item_stats) >= 20:
             data_weights = self._data_driven_weights(item_stats)
             if len(data_weights) >= 5:  # At least 5 dimensions
@@ -126,9 +241,9 @@ class ScoreCardCalculator:
         knowledge_score = self._knowledge_score(features, case_results)
         tool_use_score = self._tool_use_score(case_results)
 
-        # v4: 使用动态权重
-        # v6 fix: Handle None scores (missing data) by renormalizing weights
-        weights = self._resolve_weights(claimed_model, item_stats)
+        # v7: 使用科学的IRT信息函数权重
+        # Prioritizes measurement precision through optimal test design theory
+        weights = self._resolve_weights(claimed_model, item_stats, case_results)
         raw_scores = {
             "reasoning": reasoning_score,
             "adversarial": adversarial_score,

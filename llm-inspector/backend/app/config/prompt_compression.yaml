@@ -1,0 +1,163 @@
+# V7 Prompt Compression Configuration
+# 
+# Target reductions from V7_UPGRADE_PLAN.md Section 7.3:
+# - System prompt: 120 tokens → 40 tokens (67% reduction)
+# - User prompt: 80 tokens → 50 tokens (38% reduction)  
+# - Chain-of-thought: 150 tokens → 100 tokens (33% reduction)
+
+version: "7.0"
+date: "2026-04-11"
+source: "V7_UPGRADE_PLAN.md Section 7.3"
+
+# Compression templates for different prompt types
+templates:
+  # System prompt templates - concise versions
+  system:
+    # v6 (35 tokens): "You are a helpful AI assistant. Please carefully analyze..."
+    # v7 (6 tokens): "Analyze constraints. Show reasoning steps."
+    analysis: |
+      Analyze constraints. Show reasoning steps.
+    
+    coding: |
+      Write clean, efficient code. Explain key logic.
+    
+    reasoning: |
+      Solve step-by-step. Verify each step.
+    
+    instruction: |
+      Follow instructions precisely. Ask for clarification if unclear.
+    
+    default: |
+      Be concise and accurate.
+
+  # User prompt templates  
+  user:
+    # Template for constraint-based questions
+    constraint_solving: |
+      Problem: {problem}
+      Constraints: {constraints}
+      Solve showing all steps.
+    
+    # Template for code generation
+    code_generation: |
+      Task: {task}
+      Language: {language}
+      Requirements: {requirements}
+    
+    # Template for comparison
+    comparison: |
+      Compare {item_a} vs {item_b}.
+      Key differences:
+    
+    # Template for explanation
+    explanation: |
+      Explain {concept} simply.
+      Use an example.
+
+  # Chain-of-thought templates - structured but concise
+  cot:
+    # Structured reasoning format (compact)
+    structured: |
+      1. Identify: {key_elements}
+      2. Analyze: {constraints}
+      3. Solve: {approach}
+      4. Verify: {checks}
+    
+    # Minimal CoT for simple problems
+    minimal: |
+      Steps:
+      1. {step1}
+      2. {step2}
+      3. {step3}
+      Answer: {answer}
+
+# Compression rules
+rules:
+  # Remove filler words
+  remove_filler:
+    - "please"
+    - "carefully"
+    - "detailed"
+    - "thoroughly"
+    - "comprehensive"
+    - "in detail"
+    - "make sure to"
+  
+  # Replace verbose phrases with concise alternatives
+  replace_phrases:
+    "please provide a detailed explanation of": "Explain"
+    "it is important to note that": "Note:"
+    "in the context of": "Regarding"
+    "with respect to": "About"
+    "in order to": "To"
+    "due to the fact that": "Because"
+    "at this point in time": "Now"
+    "in the event that": "If"
+  
+  # Shorten common phrases
+  shorten:
+    "artificial intelligence": "AI"
+    "machine learning": "ML"
+    "large language model": "LLM"
+    "for example": "e.g."
+    "that is": "i.e."
+    "et cetera": "etc."
+
+# Compression targets by test dimension
+dimension_targets:
+  reasoning:
+    system_prompt_max: 40
+    user_prompt_max: 50
+    cot_max: 100
+  
+  coding:
+    system_prompt_max: 35
+    user_prompt_max: 45
+    cot_max: 80
+  
+  instruction:
+    system_prompt_max: 30
+    user_prompt_max: 40
+    cot_max: 60
+  
+  knowledge:
+    system_prompt_max: 25
+    user_prompt_max: 35
+    cot_max: 50
+  
+  safety:
+    system_prompt_max: 40
+    user_prompt_max: 50
+    cot_max: 80
+
+# Token counting method
+token_counting:
+  method: "estimate"  # "exact" (tiktoken) or "estimate"
+  estimate_ratio:
+    english: 0.25  # ~4 chars per token
+    chinese: 0.33  # ~3 chars per token
+    mixed: 0.30    # average
+  
+  # When to use exact vs estimate
+  use_exact_when:
+    - "budget_tracking"
+    - "final_report"
+  use_estimate_when:
+    - "quick_checks"
+    - "pre_detection"
+
+# Validation thresholds
+validation:
+  max_system_tokens: 45
+  max_user_tokens: 55
+  max_cot_tokens: 110
+  
+  alert_threshold:
+    warning: 0.9   # 90% of target
+    critical: 1.0  # exceeds target
+
+# Statistics tracking
+metrics:
+  track_compression_ratio: true
+  track_token_savings: true
+  log_prompt_versions: true  # v6 vs v7 comparison

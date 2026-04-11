@@ -1,0 +1,78 @@
+# LLM Inspector v7.0 - Python Dependencies
+# 
+# This file lists all Python dependencies for the LLM Inspector project.
+# Required packages are installed automatically by the startup scripts.
+#
+# Usage:
+#   pip install -r requirements.txt          # Install all
+#   pip install -r requirements.txt --extra  # Install optional too
+#
+# For automatic dependency management, use:
+#   python backend/scripts/setup_dependencies.py
+
+# ============================================
+# CORE DEPENDENCIES (Required)
+# ============================================
+
+# Scientific computing - Required for IRT calibration and factor analysis
+numpy>=1.24.0
+scipy>=1.10.0
+
+# ============================================
+# RECOMMENDED DEPENDENCIES (Auto-installed)
+# ============================================
+
+# Local semantic similarity for Semantic Judge v3 Tier 2
+# Falls back to rule-based evaluation if not installed
+sentence-transformers>=2.2.0
+
+# HTTP client for knowledge graph verification
+requests>=2.28.0
+
+# ============================================
+# OPTIONAL DEPENDENCIES (Install manually if needed)
+# ============================================
+
+# YAML configuration parsing
+# PyYAML>=6.0
+
+# Advanced NLP features
+# spacy>=3.7.0
+# Download models: python -m spacy download en_core_web_sm
+
+# Report template generation
+# jinja2>=3.1.0
+
+# Enhanced database support (SQLite is built-in)
+# sqlalchemy>=2.0.0
+
+# ============================================
+# DEVELOPMENT DEPENDENCIES (Install for development)
+# ============================================
+
+# Testing framework
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+
+# Type checking
+# mypy>=1.5.0
+
+# Code formatting
+# black>=23.7.0
+# isort>=5.12.0
+
+# Linting
+# flake8>=6.1.0
+# pylint>=2.17.0
+
+# ============================================
+# NOTE
+# ============================================
+# 
+# Core functionality only requires numpy and scipy.
+# All other dependencies are optional and will be
+# automatically detected at runtime with graceful
+# fallbacks if not installed.
+#
+# To check your current environment:
+#   python backend/scripts/setup_dependencies.py

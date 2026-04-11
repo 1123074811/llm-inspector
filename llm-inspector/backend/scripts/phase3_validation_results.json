@@ -1,0 +1,14 @@
+{
+  "total": 6,
+  "passed": 6,
+  "failed": 0,
+  "success_rate": 1.0,
+  "tests": {
+    "Semantic Fingerprinting": true,
+    "Advanced Extraction v2": true,
+    "Differential Consistency Testing": true,
+    "Tool Capability Probe": true,
+    "Adversarial Response Analysis": true,
+    "Pipeline Integration": true
+  }
+}

@@ -1,9 +1,22 @@
 """
-Pre-Detection Pipeline — 7 layers, zero to low token cost.
+Pre-Detection Pipeline — 12 layers, zero to low token cost.
 Attempts to identify the underlying LLM before spending tokens on full testing.
-Layers 0-5: passive fingerprinting (original).
-Layer 6: active prompt extraction + multi-turn context overload.
-Layer 7: logit bias architecture probe (when API supports it).
+
+Layer Architecture (v7 Phase 3):
+Layer 0: HTTP Header Analysis (zero token)
+Layer 1: Self-Report & Model Card (5 tokens)
+Layer 2: Identity Probe Matrix (20 tokens)
+Layer 3: Knowledge Cutoff Verification (10 tokens)
+Layer 4: Behavioral Bias Profiling (15 tokens)
+Layer 5: Tokenizer Fingerprint (5 tokens)
+Layer 6: Active Extraction (200 tokens) - ENHANCED
+Layer 7: Logprobs Fingerprint (10 tokens)
+Layer 8: Semantic Fingerprint (100 tokens) - NEW
+Layer 9: Advanced Extraction v2 (200 tokens) - NEW
+Layer 10: Differential Consistency Test (150 tokens) - NEW
+Layer 11: Tool Use Capability Probe (50 tokens) - NEW
+Layer 12: Multi-turn Context Overflow (300 tokens)
+Layer 13: Adversarial Response Analysis (100 tokens) - NEW
 """
 from __future__ import annotations
 
@@ -15,6 +28,13 @@ import time
 from app.core.schemas import LayerResult, PreDetectionResult, LLMRequest, Message
 from app.core.config import settings
 from app.core.logging import get_logger
+
+# v7 Phase 3: New detection layers
+from app.predetect.semantic_fingerprint import Layer8SemanticFingerprint
+from app.predetect.extraction_v2 import Layer7AdvancedExtraction  # Replaces/extends Layer6
+from app.predetect.differential_testing import Layer8DifferentialTesting
+from app.predetect.tool_capability import Layer9ToolCapability
+from app.predetect.adversarial_analysis import Layer11AdversarialAnalysis
 
 logger = get_logger(__name__)
 
@@ -340,17 +360,26 @@ _L2_MAX_TOKENS = 60  # tight cap — only needs short answers
 class Layer2Identity:
     """Identity probes: multi-probe cross-validation. ~50 tokens."""
 
-    def run(self, adapter, model_name: str) -> tuple[LayerResult, dict]:
-        """Returns (LayerResult, extra_data_for_layer3)."""
+    def run(self, adapter, model_name: str, progress_callback=None) -> tuple[LayerResult, dict]:
+        """Returns (LayerResult, extra_data_for_layer3).
+        
+        Args:
+            progress_callback: Optional callback(current_probe, probe_detail, evidence, tokens_used)
+        """
         evidence = []
         identified: str | None = None
         confidence = 0.0
         tokens_used = 0
         extra: dict = {}
 
+        def _report(probe_name: str, detail: dict = None):
+            if progress_callback:
+                progress_callback(probe_name, detail or {}, evidence, tokens_used)
+
         # Multi-probe cross-validation: run all 3 probes and compare
         probe_answers: list[str] = []
-        for probe in IDENTITY_PROBES:
+        for i, probe in enumerate(IDENTITY_PROBES):
+            _report(f"identity_probe_{i}", {"prompt": probe["content"][:50]})
             resp = adapter.chat(LLMRequest(
                 model=model_name,
                 messages=[Message("user", probe["content"])],
@@ -359,6 +388,7 @@ class Layer2Identity:
             tokens_used += resp.usage_total_tokens or _estimate_tokens(resp.content, 10)
             if resp.content:
                 probe_answers.append(resp.content.strip().lower())
+                _report(f"identity_probe_{i}_response", {"response": resp.content[:80], "tokens": tokens_used})
 
         # Extract identity keywords from all probes
         identity_patterns = {
@@ -406,6 +436,7 @@ class Layer2Identity:
                 evidence.append("Identity probes gave conflicting answers — possible model routing or masking")
 
         # Probe 2: Tokenizer fingerprint (tight max_tokens=5)
+        _report("tokenizer_count_probe", {"prompt": "How many tokens does 'supercalifragilistic' contain?"})
         resp2 = adapter.chat(LLMRequest(
             model=model_name,
             messages=[Message("user",
@@ -423,6 +454,7 @@ class Layer2Identity:
                 for tokenizer_name, expected in probe_map.items():
                     if count == expected:
                         evidence.append(f"Tokenizer count={count} matches {tokenizer_name}")
+                        _report("tokenizer_matched", {"count": count, "tokenizer": tokenizer_name})
                         if "OpenAI" in tokenizer_name and not identified:
                             identified = "OpenAI"
                             confidence = max(confidence, 0.72)
@@ -435,6 +467,7 @@ class Layer2Identity:
                         break
 
         # Probe 3: Training cutoff (hand off to layer 3)
+        _report("training_cutoff_probe", {"prompt": "What is your training data cutoff date?"})
         resp3 = adapter.chat(LLMRequest(
             model=model_name,
             messages=[Message("user",
@@ -446,8 +479,10 @@ class Layer2Identity:
         if resp3.content:
             extra["cutoff_response"] = resp3.content.strip()
             evidence.append(f"Self-reported training cutoff: '{resp3.content.strip()}'")
+            _report("training_cutoff_response", {"response": resp3.content.strip()})
 
         # Probe 4: Format fingerprint (list style)
+        _report("format_probe", {"prompt": "Name exactly 3 colors. Use a list."})
         resp4 = adapter.chat(LLMRequest(
             model=model_name,
             messages=[Message("user", "Name exactly 3 colors. Use a list.")],
@@ -456,6 +491,7 @@ class Layer2Identity:
         tokens_used += resp4.usage_total_tokens or _estimate_tokens(resp4.content, 20)
         if resp4.content:
             extra["list_format"] = resp4.content.strip()
+            _report("format_response", {"response_preview": resp4.content[:60]})
 
         return LayerResult(
             layer="identity",
@@ -1280,7 +1316,21 @@ class PreDetectionPipeline:
         total_tokens = 0
         layer3_extra: dict = {}
 
+        # Helper to report progress
+        def _report_progress(current_layer: str, current_probe: str = None, probe_detail: dict = None, evidence: list = None, tokens_used: int = 0):
+            if run_id:
+                from app.repository import repo
+                repo.update_predetect_progress(
+                    run_id, current_layer,
+                    layer_results=[r.to_dict() for r in layer_results],
+                    current_probe=current_probe,
+                    probe_detail=probe_detail,
+                    evidence=evidence,
+                    tokens_used=tokens_used,
+                )
+
         # Layer 0 — HTTP
+        _report_progress("Layer0/HTTP")
         logger.info("PreDetect Layer0: HTTP fingerprint", model=model_name)
         r0 = Layer0HTTP().run(adapter)
         layer_results.append(r0)
@@ -1337,6 +1387,7 @@ class PreDetectionPipeline:
                 routing_info["probe_latency_ms"] = probe.latency_ms
 
         # Layer 1 — Self-report (reuse quick probe response)
+        _report_progress("Layer1/SelfReport")
         logger.info("PreDetect Layer1: Self-report", model=model_name)
         r1 = Layer1SelfReport().run(adapter, model_name, prefetched_resp=probe)
         layer_results.append(r1)
@@ -1347,7 +1398,11 @@ class PreDetectionPipeline:
 
         # Layer 2 — Identity probes
         logger.info("PreDetect Layer2: Identity probes", model=model_name)
-        r2, layer3_extra = Layer2Identity().run(adapter, model_name)
+
+        def _l2_progress(probe_name: str, detail: dict, evidence: list, tokens: int):
+            _report_progress("Layer2/Identity", probe_name, detail, evidence, tokens)
+
+        r2, layer3_extra = Layer2Identity().run(adapter, model_name, progress_callback=_l2_progress)
         layer_results.append(r2)
         total_tokens += r2.tokens_used
         self._log_layer_result("Layer2/Identity", r2)
@@ -1384,6 +1439,7 @@ class PreDetectionPipeline:
             )
 
         # Layer 3 — Knowledge cutoff
+        _report_progress("Layer3/Knowledge")
         logger.info("PreDetect Layer3: Knowledge probes", model=model_name)
         r3 = Layer3Knowledge().run(adapter, model_name, layer3_extra)
         layer_results.append(r3)
@@ -1422,6 +1478,7 @@ class PreDetectionPipeline:
             )
 
         # Layer 4 — Bias / format
+        _report_progress("Layer4/Bias")
         logger.info("PreDetect Layer4: Bias fingerprint", model=model_name)
         r4 = Layer4Bias().run(adapter, model_name)
         layer_results.append(r4)
@@ -1431,6 +1488,7 @@ class PreDetectionPipeline:
             return self._build_result(True, r4, layer_results, total_tokens)
 
         # Layer 5 — Tokenizer fingerprint (only in full mode or when earlier layers inconclusive)
+        _report_progress("Layer5/Tokenizer")
         logger.info("PreDetect Layer5: Tokenizer fingerprint", model=model_name)
         r5 = Layer5Tokenizer().run(adapter, model_name)
         layer_results.append(r5)
@@ -1439,6 +1497,7 @@ class PreDetectionPipeline:
 
         # Layer 6 — Active Extraction (only in extraction mode or when confidence is low)
         if extraction_mode or (max(r.confidence for r in layer_results) < 0.60):
+            _report_progress("Layer6/Extraction")
             logger.info("PreDetect Layer6: Active extraction", model=model_name)
             r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
             layer_results.append(r6)
@@ -1449,6 +1508,7 @@ class PreDetectionPipeline:
 
             # Layer 6b — Multi-turn context overload
             if extraction_mode:
+                _report_progress("Layer6b/MultiTurn")
                 logger.info("PreDetect Layer6b: Multi-turn extraction", model=model_name)
                 r6b = Layer6MultiTurnProbes().run(adapter, model_name)
                 layer_results.append(r6b)
@@ -1458,6 +1518,7 @@ class PreDetectionPipeline:
                     return self._build_result(True, r6b, layer_results, total_tokens)
 
                 # Layer 7 — Logprobs tokenizer fingerprint (deep/extraction mode only)
+                _report_progress("Layer7/Logprobs")
                 logger.info("PreDetect Layer7: Logprobs fingerprint", model=model_name)
                 r7 = Layer7Logprobs().run(adapter, model_name)
                 layer_results.append(r7)
@@ -1465,6 +1526,66 @@ class PreDetectionPipeline:
                 self._log_layer_result("Layer7/Logprobs", r7)
                 if r7.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r7, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 8 — Semantic Fingerprint (NEW)
+                _report_progress("Layer8/SemanticFP")
+                logger.info("PreDetect Layer8: Semantic fingerprint", model=model_name)
+                r8 = Layer8SemanticFingerprint().run(adapter, model_name)
+                layer_results.append(r8)
+                total_tokens += r8.tokens_used
+                self._log_layer_result("Layer8/SemanticFP", r8)
+                if r8.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r8, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 9 — Advanced Extraction v2 (NEW)
+                _report_progress("Layer9/AdvExtractionV2")
+                logger.info("PreDetect Layer9: Advanced extraction v2", model=model_name)
+                r9 = Layer7AdvancedExtraction().run(adapter, model_name, run_id=run_id)
+                layer_results.append(r9)
+                total_tokens += r9.tokens_used
+                self._log_layer_result("Layer9/AdvExtractionV2", r9)
+                if r9.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r9, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 10 — Differential Consistency Test (NEW)
+                _report_progress("Layer10/Differential")
+                logger.info("PreDetect Layer10: Differential testing", model=model_name)
+                r10 = Layer8DifferentialTesting().run(adapter, model_name)
+                layer_results.append(r10)
+                total_tokens += r10.tokens_used
+                self._log_layer_result("Layer10/Differential", r10)
+                if r10.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r10, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 11 — Tool Use Capability (NEW)
+                _report_progress("Layer11/ToolCapability")
+                logger.info("PreDetect Layer11: Tool capability", model=model_name)
+                r11 = Layer9ToolCapability().run(adapter, model_name)
+                layer_results.append(r11)
+                total_tokens += r11.tokens_used
+                self._log_layer_result("Layer11/ToolCapability", r11)
+                if r11.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r11, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 12 — Multi-turn Context Overload (renamed from 6b)
+                _report_progress("Layer12/MultiTurn")
+                logger.info("PreDetect Layer12: Multi-turn context overload", model=model_name)
+                r12 = Layer6MultiTurnProbes().run(adapter, model_name)
+                layer_results.append(r12)
+                total_tokens += r12.tokens_used
+                self._log_layer_result("Layer12/MultiTurn", r12)
+                if r12.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r12, layer_results, total_tokens)
+
+                # v7 Phase 3: Layer 13 — Adversarial Response Analysis (NEW)
+                _report_progress("Layer13/Adversarial")
+                logger.info("PreDetect Layer13: Adversarial analysis", model=model_name)
+                r13 = Layer11AdversarialAnalysis().run(adapter, model_name)
+                layer_results.append(r13)
+                total_tokens += r13.tokens_used
+                self._log_layer_result("Layer13/Adversarial", r13)
+                if r13.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r13, layer_results, total_tokens)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

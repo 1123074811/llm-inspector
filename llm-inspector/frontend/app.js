@@ -2,7 +2,7 @@
 const API = '';  // Same origin
 let _pollTimer = null;
 let _currentRunId = null;
-let _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued' };
+let _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued', lastLayer: null, lastProbe: null, lastEvidenceCount: 0 };
 let _consoleLines = [];
 let _typingTimer = null;
 let _logPinnedToBottom = true;
@@ -205,7 +205,7 @@ async function submitRun() {
 
 function openTask(runId) {
   _currentRunId = runId;
-  _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued' };
+  _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued', lastLayer: null, lastProbe: null, lastEvidenceCount: 0 };
   _consoleLines = [{ text: '初始化任务上下文...', type: 'normal' }];
   showPage('task');
   document.getElementById('task-title').textContent = '检测: ' + runId.slice(0,8) + '...';
@@ -609,7 +609,73 @@ function animateProcessConsole(prog, status, pre, responses = []) {
   }
 
   if (status === 'pre_detecting') {
-    pushConsoleTyping('[预检测] 正在进行预检测：header / self-report / identity probe ...');
+    const currentLayer = pre?.current_layer || '';
+    const currentProbe = pre?.current_probe || '';
+    const probeDetail = pre?.probe_detail || {};
+    const evidence = pre?.evidence || [];
+
+    const layerNames = {
+      'Layer0/HTTP': 'HTTP指纹分析',
+      'Layer1/SelfReport': '模型自报身份',
+      'Layer2/Identity': '身份探针矩阵',
+      'Layer3/Knowledge': '知识截止日期',
+      'Layer4/Bias': '行为偏好指纹',
+      'Layer5/Tokenizer': 'Tokenizer指纹',
+      'Layer6/Extraction': '主动提取探测',
+      'Layer6b/MultiTurn': '多轮上下文',
+      'Layer7/Logprobs': 'Logprobs指纹',
+      'Layer8/SemanticFP': '语义指纹',
+      'Layer9/AdvExtractionV2': '高级提取v2',
+      'Layer10/Differential': '差分一致性',
+      'Layer11/ToolCapability': '工具能力',
+      'Layer12/MultiTurn': '多轮上下文',
+      'Layer13/Adversarial': '对抗分析',
+    };
+    const layerDisplay = layerNames[currentLayer] || currentLayer || '初始化';
+
+    // Show detailed probe info
+    if (currentProbe && prev.lastProbe !== currentProbe) {
+      const probeNames = {
+        'identity_probe_0': '身份探针 #1',
+        'identity_probe_1': '身份探针 #2',
+        'identity_probe_2': '身份探针 #3',
+        'identity_probe_3': '身份探针 #4',
+        'identity_probe_4': '身份探针 #5',
+        'tokenizer_count_probe': 'Tokenizer计数探针',
+        'tokenizer_matched': 'Tokenizer匹配',
+        'training_cutoff_probe': '训练截止日期探针',
+        'training_cutoff_response': '截止日期响应',
+        'format_probe': '格式指纹探针',
+        'format_response': '格式响应分析',
+      };
+      const probeDisplay = probeNames[currentProbe] || currentProbe;
+
+      if (probeDetail.prompt) {
+        pushConsole(`[预检测][${layerDisplay}] ${probeDisplay}`, 'meta');
+        pushConsole(`  提示: "${probeDetail.prompt}..."`, 'normal');
+      } else if (probeDetail.response) {
+        pushConsole(`  响应: "${probeDetail.response.substring(0, 60)}${probeDetail.response.length > 60 ? '...' : ''}"`, 'normal');
+      } else if (probeDetail.count && probeDetail.tokenizer) {
+        pushConsole(`  匹配: ${probeDetail.tokenizer} (count=${probeDetail.count})`, 'normal');
+      } else {
+        pushConsole(`[预检测][${layerDisplay}] ${probeDisplay} ...`, 'meta');
+      }
+
+      // Show collected evidence
+      if (evidence && evidence.length > 0) {
+        const newEvidence = evidence.slice(prev.lastEvidenceCount || 0);
+        newEvidence.forEach(ev => {
+          pushConsole(`  证据: ${ev.substring(0, 80)}${ev.length > 80 ? '...' : ''}`, 'normal');
+        });
+        prev.lastEvidenceCount = evidence.length;
+      }
+
+      prev.lastProbe = currentProbe;
+    } else if (prev.lastLayer !== currentLayer) {
+      pushConsole(`[预检测] 进入层: ${layerDisplay}`, 'meta');
+      prev.lastLayer = currentLayer;
+      prev.lastEvidenceCount = 0;
+    }
   }
 
   if (pre?.identified_as && !prev.predetectLogged) {
@@ -689,6 +755,9 @@ function animateProcessConsole(prog, status, pre, responses = []) {
     phase: status,
     predetectLogged: _lastProgressSnapshot.predetectLogged,
     responseSeen: seen,
+    lastLayer: _lastProgressSnapshot.lastLayer,
+    lastProbe: _lastProgressSnapshot.lastProbe,
+    lastEvidenceCount: _lastProgressSnapshot.lastEvidenceCount,
   };
 }
 
