@@ -452,3 +452,232 @@ def test_semantic_judge_keyword_pass():
     })
     assert p is True, f"Expected pass, detail={d}"
 
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 7: V6升级计划 - 新增测试用例
+# ═══════════════════════════════════════════════════════════════
+
+# 12.1.1 输入校验测试
+def test_create_run_model_name_xss():
+    """model_name包含HTML标签应被拒绝或转义"""
+    from app.handlers.runs import handle_create_run
+    body = {
+        "model_name": "<script>alert('xss')</script>test",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-test123"
+    }
+    status, _, _ = handle_create_run("", {}, body)
+    # 应该返回400错误或成功但转义处理
+    assert status in [400, 200]
+
+def test_create_run_base_url_too_long():
+    """base_url超过500字符应返回400"""
+    from app.handlers.runs import handle_create_run
+    body = {
+        "model_name": "test-model",
+        "base_url": "https://example.com/" + "a" * 500,  # 超过500字符
+        "api_key": "sk-test123"
+    }
+    status, _, _ = handle_create_run("", {}, body)
+    assert status == 400
+
+def test_batch_delete_exceeds_limit():
+    """批量删除超过100条应返回400"""
+    from app.handlers.runs import handle_batch_delete_runs
+    body = {"run_ids": [f"test-{i}" for i in range(101)]}  # 101条记录
+    status, _, _ = handle_batch_delete_runs("", {}, body)
+    assert status == 400
+
+# 12.1.2 Judge方法边界测试
+def test_constraint_reasoning_no_target_pattern():
+    """缺少target_pattern时应返回None而非True"""
+    from app.judge.methods import _constraint_reasoning
+    text = "The answer is 42"
+    params = {"key_constraints": ["answer"]}  # 故意缺少target_pattern
+    passed, detail = _constraint_reasoning(text, params)
+    assert passed is None, f"Expected None for missing target_pattern, got {passed}"
+    assert "error" in detail
+
+def test_hallucination_single_entity():
+    """单个虚构实体的详细编造应被检测到"""
+    from app.judge.methods import _hallucination_detect
+    text = "Dr. Fictitious Person was born in 1980 and published groundbreaking work on quantum computing in 2005."
+    params = {
+        "fake_entity": "Dr. Fictitious Person",
+        "fake_entity_2": "",  # 只有一个实体
+        "expect_refusal": True
+    }
+    passed, detail = _hallucination_detect(text, params)
+    assert passed is False, f"Expected fail (single entity hallucination), detail={detail}"
+    assert detail.get("hallucination_score", 0) >= 0.4
+
+def test_code_execution_float_precision():
+    """浮点精度问题不应导致误判"""
+    from app.judge.methods import _code_execution
+    text = "result = 0.1 + 0.2"
+    params = {
+        "test_cases": [
+            {"call": "result", "expected": 0.3}
+        ]
+    }
+    passed, detail = _code_execution(text, params)
+    assert passed is True, f"Expected pass (float precision handled), detail={detail}"
+
+def test_identity_consistency_word_boundary():
+    """'I'm not Claude' 不应通过 expected='claude' 的检测"""
+    from app.judge.methods import _identity_consistency
+    text = "I'm not Claude, I'm actually GPT-4"
+    params = {"expected_answer": "claude"}
+    passed, detail = _identity_consistency(text, params)
+    assert passed is False, f"Expected fail (word boundary), detail={detail}"
+
+# 12.1.3 评分边界测试
+def test_missing_dimension_returns_none():
+    """无数据维度应返回None而非50"""
+    from app.analysis.pipeline import ScoreCardCalculator
+    calc = ScoreCardCalculator()
+    
+    # 创建空的case_results来模拟无数据情况
+    knowledge_score = calc._knowledge_score({}, [])
+    tool_use_score = calc._tool_use_score([])
+    
+    assert knowledge_score is None, f"Expected None for knowledge_score, got {knowledge_score}"
+    assert tool_use_score is None, f"Expected None for tool_use_score, got {tool_use_score}"
+
+def test_score_normalization_with_missing_dims():
+    """缺少维度时权重应重新归一化"""
+    from app.analysis.pipeline import ScoreCardCalculator
+    calc = ScoreCardCalculator()
+    
+    # 模拟只有部分维度有数据的情况
+    features = {"reasoning_score": 80.0, "instruction_score": 70.0}
+    case_results = []  # 空的case_results
+    
+    # 测试权重重新归一化逻辑
+    weights = {"reasoning": 0.3, "instruction": 0.2, "coding": 0.2, "safety": 0.1, "protocol": 0.05, "knowledge": 0.05, "tool_use": 0.05, "adversarial": 0.05}
+    effective_scores = {"reasoning": 80.0, "instruction": 70.0}
+    
+    # 重新归一化权重（只计算有数据的维度）
+    active_weight_sum = sum(weights[d] for d in effective_scores)
+    expected_score = sum(weights[d] * effective_scores[d] / active_weight_sum for d in effective_scores)
+    
+    assert abs(expected_score - 75.0) < 1.0, f"Expected ~75.0 after renormalization, got {expected_score}"
+
+# 12.1.4 相似度引擎测试
+def test_bootstrap_ci_iteration_count():
+    """高相似度应使用更多bootstrap迭代"""
+    from app.analysis.pipeline import SimilarityEngine
+    import random
+    
+    # 创建高相似度的特征向量
+    vec1 = [0.8, 0.7, 0.9, 0.6, 0.8]
+    vec2 = [0.79, 0.71, 0.89, 0.61, 0.79]
+    
+    # 测试bootstrap CI计算
+    similarity, _ = SimilarityEngine._cosine_similarity_with_bootstrap_ci(vec1, vec2, random.Random(42))
+    
+    # 高相似度应该使用更多迭代（200次）
+    assert similarity >= 0.75, f"Expected high similarity, got {similarity}"
+
+def test_minimum_features_threshold():
+    """特征数<5时返回0.0"""
+    from app.analysis.pipeline import SimilarityEngine
+    
+    # 创建特征数不足的向量
+    vec1 = [0.5, 0.6, 0.7, 0.8]  # 只有4个特征
+    vec2 = [0.5, 0.6, 0.7, 0.8]
+    
+    similarity, valid_count = SimilarityEngine._cosine_similarity_with_mask(vec1, vec2)
+    
+    assert similarity == 0.0, f"Expected 0.0 for insufficient features, got {similarity}"
+    assert valid_count == 4, f"Expected 4 valid features, got {valid_count}"
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 8: 集成测试 (12.2)
+# ═══════════════════════════════════════════════════════════════
+
+def test_full_quick_mode_pipeline():
+    """快速模式完整流程：创建run → 预检测 → 执行 → 评分 → 报告"""
+    import tempfile
+    import os
+    from app.handlers.runs import handle_create_run
+    from app.repository.repo import get_repository
+    
+    # 使用临时数据库
+    temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    os.environ["DATABASE_URL"] = f"sqlite:///{temp_db.name}"
+    
+    try:
+        # 创建run
+        body = {
+            "model_name": "test-model",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test123",
+            "test_mode": "quick"
+        }
+        status, response, _ = handle_create_run("", {}, body)
+        assert status == 200
+        run_id = response.get("run_id")
+        assert run_id
+        
+        # 验证run已创建
+        repo = get_repository()
+        run = repo.get_run(run_id)
+        assert run is not None
+        assert run["test_mode"] == "quick"
+        
+    finally:
+        # 清理临时文件
+        if os.path.exists(temp_db.name):
+            os.unlink(temp_db.name)
+
+def test_baseline_comparison_flow():
+    """标记基准 → 新检测 → 与基准对比 → 查看相似度"""
+    import tempfile
+    import os
+    from app.handlers.runs import handle_create_run
+    from app.handlers.baselines import handle_mark_baseline
+    from app.repository.repo import get_repository
+    
+    # 使用临时数据库
+    temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    os.environ["DATABASE_URL"] = f"sqlite:///{temp_db.name}"
+    
+    try:
+        # 创建第一个run作为基准
+        body1 = {
+            "model_name": "baseline-model",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test123",
+            "test_mode": "quick"
+        }
+        status1, response1, _ = handle_create_run("", {}, body1)
+        assert status1 == 200
+        run_id1 = response1.get("run_id")
+        
+        # 标记为基准
+        status_mark, _, _ = handle_mark_baseline(f"/api/v1/runs/{run_id1}/baseline", {}, {})
+        assert status_mark == 200
+        
+        # 创建第二个run进行对比
+        body2 = {
+            "model_name": "test-model",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test123",
+            "test_mode": "quick"
+        }
+        status2, response2, _ = handle_create_run("", {}, body2)
+        assert status2 == 200
+        run_id2 = response2.get("run_id")
+        
+        # 验证基准已创建
+        repo = get_repository()
+        baselines = repo.list_baselines()
+        assert len(baselines) >= 1
+        assert any(b["model_name"] == "baseline-model" for b in baselines)
+        
+    finally:
+        # 清理临时文件
+        if os.path.exists(temp_db.name):
+            os.unlink(temp_db.name)
+

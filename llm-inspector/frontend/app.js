@@ -14,6 +14,55 @@ let _runPage = 1;
 const _runPageSize = 10;
 let _runSelected = new Set();
 
+// v6 fix: Event delegation for dynamic buttons (replaces vulnerable inline onclick)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const runId = btn.dataset.runId;
+  const baselineId = btn.dataset.baselineId;
+
+  if (action === 'cancel') cancelRun(runId);
+  else if (action === 'retry') retryRun(runId);
+  else if (action === 'markBaseline') markAsBaseline(runId);
+  else if (action === 'unmarkBaseline') unmarkAsBaseline(runId, baselineId);
+  else if (action === 'compareBaseline') compareWithBaseline(runId);
+  else if (action === 'exportPdf') exportReportPdf(runId);
+  else if (action === 'downloadRadar') downloadRadarSvg(runId);
+  else if (action === 'deleteRun') deleteRunFromList(e, runId);
+  else if (action === 'openTask') openTask(runId);
+  else if (action === 'toggleCase') toggleCase(btn.dataset.caseId);
+  else if (action === 'changePage') changeRunsPage(parseInt(btn.dataset.dir));
+  else if (action === 'viewBaseline') viewBaselineReport(baselineId);
+  else if (action === 'deleteBaseline') deleteBaseline(baselineId);
+  else if (action === 'continueFullTest') continueFullTest(runId);
+  else if (action === 'skipTesting') skipTesting(runId);
+  else if (action === 'previewIsomorphic') previewIsomorphicCases();
+  else if (action === 'applyIsomorphic') applyIsomorphicCases();
+});
+
+// v6: Toggle advanced settings panel
+function toggleAdvancedSettings() {
+  const content = document.getElementById('advanced-settings-content');
+  const icon = document.getElementById('advanced-toggle-icon');
+  if (!content || !icon) return;
+  
+  if (content.style.display === 'none') {
+    content.style.display = 'block';
+    icon.textContent = '▼';
+  } else {
+    content.style.display = 'none';
+    icon.textContent = '▶';
+  }
+}
+
+// v6 fix: Attribute escape helper (prevents XSS in data-* attributes)
+function escAttr(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 // ── Page routing ───────────────────────────────────────────────────────────
 
 function showPage(name) {
@@ -214,22 +263,23 @@ function renderTaskActions(runId, status, baselineId) {
   const canRetry = ['failed','partial_failed'].includes(status);
   const canExport = ['completed','partial_failed'].includes(status);
 
+  // v6 fix: Use data-* attributes with event delegation instead of inline onclick
   let html = '';
   if (canCancel) {
-    html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" onclick="cancelRun('${runId}')">停止任务</button>`;
+    html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" data-action="cancel" data-run-id="${escAttr(runId)}">停止任务</button>`;
   }
   if (canRetry) {
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="retryRun('${runId}')">从失败处重试</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="retry" data-run-id="${escAttr(runId)}">从失败处重试</button>`;
   }
   if (canExport) {
     if (!baselineId) {
-      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" onclick="markAsBaseline('${runId}')">标记为基准模型</button>`;
+      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="markBaseline" data-run-id="${escAttr(runId)}">标记为基准模型</button>`;
     } else {
-      html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" onclick="unmarkAsBaseline('${runId}', '${baselineId}')">取消基准标记</button>`;
+      html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" data-action="unmarkBaseline" data-run-id="${escAttr(runId)}" data-baseline-id="${escAttr(baselineId)}">取消基准标记</button>`;
     }
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="compareWithBaseline('${runId}')">与基准对比</button>`;
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="exportReportPdf('${runId}')">生成 PDF 报告</button>`;
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" onclick="downloadRadarSvg('${runId}')">导出雷达图</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="compareBaseline" data-run-id="${escAttr(runId)}">与基准对比</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="exportPdf" data-run-id="${escAttr(runId)}">打印/导出报告</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="downloadRadar" data-run-id="${escAttr(runId)}">导出雷达图</button>`;
   }
   el.innerHTML = html;
 }
@@ -718,10 +768,10 @@ function renderPredetectCard(pre, runId, status) {
   if (status === 'pre_detected' && pre.should_proceed_to_testing === false) {
     actionHtml = `
       <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
-        <button class="btn primary" style="padding:8px 16px;font-size:13px" onclick="continueFullTest('${runId}')">
+        <button class="btn primary" style="padding:8px 16px;font-size:13px" data-action="continueFullTest" data-run-id="${escAttr(runId)}">
           继续完整测试
         </button>
-        <button class="btn" style="padding:8px 16px;font-size:13px" onclick="skipTesting('${runId}')">
+        <button class="btn" style="padding:8px 16px;font-size:13px" data-action="skipTesting" data-run-id="${escAttr(runId)}">
           跳过测试，直接出报告
         </button>
         <span style="font-size:11px;color:var(--ink4)">完整测试将获得详细评分、相似度对比等数据</span>
@@ -970,12 +1020,22 @@ function renderReport(r) {
       </div>`;
   }
 
-  // Similarity
+  // Similarity (v6 enhanced with data source and confidence visualization)
   if (sim.length) {
+    // v6: Add confidence level visualization
+    const getConfidenceLevel = (score) => {
+      if (score >= 0.75) return { level: "高置信", color: "#16a34a", desc: "与基准模型高度相似" };
+      if (score >= 0.55) return { level: "中置信", color: "#f59e0b", desc: "与基准模型中度相似" };
+      return { level: "低置信", color: "#dc2626", desc: "与基准模型差异较大" };
+    };
+
     html += `
       <div class="card">
         <h2>相似度排名</h2>
-        ${sim.map(s => {
+        <div style="font-size:12px;color:var(--ink4);margin-bottom:12px">
+          📊 数据来源：基于特征向量余弦相似度计算，95%置信区间通过bootstrap采样获得
+        </div>
+        ${sim.map((s, idx) => {
           const pct = Math.round(s.score * 100);
           const hasCi = s.ci_95_low != null && s.ci_95_high != null;
           const ciLo = hasCi ? Math.round(s.ci_95_low * 100) : null;
@@ -986,9 +1046,19 @@ function renderReport(r) {
           const barColor = s.score > 0.75 ? '#E24B4A' : s.score > 0.55 ? '#EF9F27' : '#1D9E75';
           const ciBarLeft = hasCi ? ciLo : 0;
           const ciBarWidth = hasCi ? Math.max(1, ciHi - ciLo) : pct;
+          
+          // v6: Confidence level visualization
+          const confidence = getConfidenceLevel(s.score);
+          
           return `
-            <div class="sim-row">
-              <div class="sim-name">${escHtml(s.benchmark)}</div>
+            <div class="sim-row" style="position:relative">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="font-size:11px;color:var(--ink4);min-width:20px">#${idx + 1}</div>
+                <div class="sim-name">${escHtml(s.benchmark)}</div>
+                <div style="font-size:10px;padding:2px 6px;background:${confidence.color}20;color:${confidence.color};border-radius:3px">
+                  ${confidence.level}
+                </div>
+              </div>
               <div class="sim-bar-wrap">
                 <div class="sim-bar" style="width:${pct}%;background:${barColor}"></div>
                 <div class="sim-ci" style="left:${hasCi ? ciBarLeft : 0}%;width:${ciBarWidth}%;background:${barColor}"></div>
@@ -997,7 +1067,22 @@ function renderReport(r) {
               <div style="font-size:10px;color:var(--ink4);min-width:80px">${ciText}</div>
             </div>`;
         }).join('')}
-        <div style="font-size:11px;color:var(--ink4);margin-top:8px">[ ] 为 95% 置信区间</div>
+        <div style="font-size:11px;color:var(--ink4);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">
+          <div>📈 [ ] 为 95% 置信区间</div>
+          <div>🎯 相似度解读：≥75%高度相似，55-74%中度相似，&lt;55%差异较大</div>
+          <div>⚠️  置信区间宽度反映测量精度，区间越窄结果越可靠</div>
+        </div>
+      </div>`;
+  } else {
+    // v6: Show message when no similarity data
+    html += `
+      <div class="card">
+        <h2>相似度排名</h2>
+        <div style="padding:20px;text-align:center;color:var(--ink4)">
+          <div style="font-size:24px;margin-bottom:8px">📊</div>
+          <div>暂无相似度数据</div>
+          <div style="font-size:12px;margin-top:4px">需要基准模型进行对比分析</div>
+        </div>
       </div>`;
   }
 
@@ -1282,9 +1367,10 @@ function renderCaseItem(c) {
       ${s.output ? `<div class="sample-output">${escHtml(s.output)}</div>` : ''}
     </div>`).join('');
 
+  // v6 fix: Use data-* attributes instead of inline onclick
   return `
     <div class="case-item">
-      <div class="case-header" onclick="toggleCase('${tid}')">
+      <div class="case-header" data-action="toggleCase" data-case-id="${escAttr(tid)}">
         <span class="badge ${badgeCls}">${passRate}%</span>
         <span style="font-family:var(--mono);font-size:11px;color:var(--ink4)">${escHtml(c.case_id)}</span>
         <span style="font-size:12px;color:var(--ink2)">${escHtml(c.name)}</span>
@@ -1346,15 +1432,16 @@ function renderRunsPage() {
     const canExport = ['completed','partial_failed'].includes(r.status);
     const checked = _runSelected.has(r.run_id) ? 'checked' : '';
 
+    // v6 fix: Use data-* attributes instead of inline onclick
     return `
-      <div class="run-row" onclick="openTask('${r.run_id}')">
-        <input type="checkbox" ${checked} onclick="toggleRunSelect(event, '${r.run_id}')" />
+      <div class="run-row" data-action="openTask" data-run-id="${escAttr(r.run_id)}">
+        <input type="checkbox" ${checked} onclick="toggleRunSelect(event, '${escAttr(r.run_id)}')" />
         ${statusDot}
         <div class="run-model">${escHtml(r.model)}${pre}</div>
         <div class="run-url">${escHtml(r.base_url)}</div>
         <div style="width:80px">${renderStatusBadge(r.status)}</div>
         <div style="display:flex;gap:6px;align-items:center;width:60px;justify-content:flex-end">
-          <button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="deleteRunFromList(event, '${r.run_id}')">删除</button>
+          <button class="btn danger" style="padding:4px 8px;font-size:11px" data-action="deleteRun" data-run-id="${escAttr(r.run_id)}">删除</button>
         </div>
         <div class="run-time" style="width:80px;text-align:right">${fmtTime(r.created_at)}</div>
       </div>`;
@@ -1362,10 +1449,11 @@ function renderRunsPage() {
 
   document.getElementById('runs-list').innerHTML = html || '<div class="empty">筛选后暂无记录</div>';
 
+  // v6 fix: Use data-* attributes instead of inline onclick
   document.getElementById('runs-pager').innerHTML = `
-    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage <= 1 ? 'disabled' : ''} onclick="changeRunsPage(-1)">上一页</button>
+    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage <= 1 ? 'disabled' : ''} data-action="changePage" data-dir="-1">上一页</button>
     <span style="font-size:12px;color:var(--ink4);display:inline-flex;align-items:center">第 ${_runPage} / ${pages} 页 · 共 ${total} 条</span>
-    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage >= pages ? 'disabled' : ''} onclick="changeRunsPage(1)">下一页</button>
+    <button class="btn" style="padding:4px 10px;font-size:12px" ${_runPage >= pages ? 'disabled' : ''} data-action="changePage" data-dir="1">下一页</button>
   `;
 
   const hint = document.getElementById('runs-filter-hint');
@@ -1580,6 +1668,7 @@ async function loadBaselines() {
           <th>操作</th>
         </tr></thead>
         <tbody>
+          // v6 fix: Use data-* attributes instead of inline onclick
           ${baselines.map(b => `<tr>
             <td><strong>${escHtml(b.display_name || b.model_name)}</strong></td>
             <td>${fmtScore(b.total_score)}</td>
@@ -1588,8 +1677,8 @@ async function loadBaselines() {
             <td>${fmtScore(b.performance_score)}</td>
             <td>${fmtTime(b.created_at)}</td>
             <td>
-              <button class="btn" style="padding:4px 10px;font-size:11px" onclick="viewBaselineReport('${b.id}')">查看报告</button>
-              <button class="btn danger" style="padding:4px 10px;font-size:11px" onclick="deleteBaseline('${b.id}')">删除</button>
+              <button class="btn" style="padding:4px 10px;font-size:11px" data-action="viewBaseline" data-baseline-id="${escAttr(b.id)}">查看报告</button>
+              <button class="btn danger" style="padding:4px 10px;font-size:11px" data-action="deleteBaseline" data-baseline-id="${escAttr(b.id)}">删除</button>
             </td>
           </tr>`).join('')}
         </tbody>
@@ -1644,11 +1733,27 @@ function escHtml(s) {
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// v6 fix: Score color grading - different colors for different score ranges
 function fmtScore(v) {
-  if (v == null || v === '' || v === undefined) return '–';
+  if (v === null || v === undefined || v === '-') return '<span style="color:var(--ink4)">—</span>';
   const n = Number(v);
-  if (isNaN(n)) return '–';
-  return n.toFixed(1);
+  if (isNaN(n)) return '<span style="color:var(--ink4)">—</span>';
+  let color;
+  if (n >= 80) color = '#16a34a';      // 绿色: 优秀
+  else if (n >= 60) color = '#2563eb';  // 蓝色: 良好
+  else if (n >= 40) color = '#d97706';  // 橙色: 一般
+  else color = '#dc2626';               // 红色: 差
+  return `<span style="color:${color};font-weight:600">${n.toFixed(1)}</span>`;
+}
+
+// v6 fix: Render dimension score with null handling
+function renderDimensionScore(label, value) {
+  if (value === null || value === undefined) {
+    return `<div style="font-size:12px;color:var(--ink4)">
+      ${escHtml(label)}: <span style="font-style:italic">数据不足</span>
+    </div>`;
+  }
+  return `<div style="font-size:12px;color:var(--ink3)">${escHtml(label)}: ${fmtScore(value)}</div>`;
 }
 
 function fmtTime(iso) {

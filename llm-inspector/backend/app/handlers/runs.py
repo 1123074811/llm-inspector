@@ -32,6 +32,14 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
         if not body.get(field):
             return _error(f"Missing required field: {field}")
 
+    # v6 fix: Input length validation (prevent storage XSS and abuse)
+    model_name = str(body.get("model", "")).strip()
+    if len(model_name) > 100:
+        return _error("模型名称不能超过100个字符", 400)
+    base_url = str(body.get("base_url", "")).strip()
+    if len(base_url) > 500:
+        return _error("API地址不能超过500个字符", 400)
+
     try:
         clean_url = validate_and_sanitize_url(body["base_url"])
     except ValueError as e:
@@ -142,7 +150,9 @@ def handle_delete_run(path, _qs, _body) -> tuple:
     try:
         repo.delete_run(run_id)
     except Exception as e:
-        return _error(f"Delete failed: {str(e)}", 500)
+        # v6 fix: Error message desensitization - don't expose internal details
+        logger.error("Delete failed", run_id=run_id, error=str(e))
+        return _error("操作失败，请稍后重试", 500)
     return _json({"deleted": run_id})
 
 
@@ -150,6 +160,9 @@ def handle_batch_delete_runs(_path, _qs, body: dict) -> tuple:
     run_ids = body.get("run_ids")
     if not run_ids or not isinstance(run_ids, list):
         return _error("Invalid or empty run_ids list", 400)
+    # v6 fix: Batch operation limit - prevent abuse
+    if len(run_ids) > 100:
+        return _error("单次最多删除100条记录", 400)
 
     deleted_count = 0
     errors = []

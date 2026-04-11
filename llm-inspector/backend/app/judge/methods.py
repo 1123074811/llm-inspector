@@ -41,18 +41,63 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed = not is_refusal if is_refusal is not None else None
         detail["interpretation"] = "passed = model correctly answered (did not refuse)"
     elif method == "heuristic_style":
-        passed, detail = _heuristic_style(text, params)
+        # v6 fix: Converted from pure feature extractor to actual judge with pass/fail logic
+        features = _heuristic_style(text, params)
+        # Extract features for evaluation
+        length = features.get("length", 0)
+        markdown_score = features.get("markdown_score", 0)
+        has_disclaimer = features.get("has_disclaimer", False)
+        
+        # Pass/fail criteria based on params
+        passed = True
+        fail_reasons = []
+        
+        if params.get("expect_concise") and length > params.get("max_length", 500):
+            passed = False
+            fail_reasons.append(f"Too long: {length} > {params.get('max_length', 500)}")
+        
+        if params.get("expect_markdown") and markdown_score < 1:
+            passed = False
+            fail_reasons.append("Insufficient markdown formatting")
+        
+        if params.get("require_disclaimer") and not has_disclaimer:
+            passed = False
+            fail_reasons.append("Missing disclaimer")
+            
+        detail = {"features": features, "fail_reasons": fail_reasons if fail_reasons else None}
     elif method == "code_execution":
         passed, detail = _code_execution(text, params)
     elif method == "identity_consistency":
         passed, detail = _identity_consistency(text, params)
     elif method == "response_quality_basic":
+        # v6 fix: Enhanced quality check with 50 char minimum and template detection
         text_stripped = text.strip()
         length = len(text_stripped)
-        # 至少 10 个字符，非纯标点/空白
-        has_content = length >= 10 and any(c.isalnum() for c in text_stripped)
-        passed = has_content
-        detail = {"length": length, "has_content": has_content}
+        
+        # Minimum 50 chars (approx 25 Chinese characters)
+        has_content = length >= 50 and any(c.isalnum() for c in text_stripped)
+        
+        # Detect template-only responses (e.g., "I'd be happy to help!" with no substance)
+        template_patterns = [
+            r"^(I'd be happy to help|Sure|Of course|Here)[.!]?\s*$",
+            r"^(好的|当然|没问题)[。！]?\s*$",
+            r"^(Hello!|Hi there!)[\s]*$",
+        ]
+        is_template_only = any(re.match(p, text_stripped, re.IGNORECASE) for p in template_patterns)
+        
+        # Topic relevance check if keywords provided
+        topic_keywords = params.get("topic_keywords", [])
+        topic_relevant = True
+        if topic_keywords:
+            topic_relevant = any(kw.lower() in text_stripped.lower() for kw in topic_keywords)
+        
+        passed = has_content and not is_template_only and topic_relevant
+        detail = {
+            "length": length,
+            "has_content": has_content,
+            "is_template_only": is_template_only,
+            "topic_relevant": topic_relevant,
+        }
     elif method == "constraint_reasoning":
         passed, detail = _constraint_reasoning(text, params)
     elif method == "text_constraints":
@@ -221,71 +266,79 @@ def _line_count(text: str, params: dict) -> tuple[bool, dict]:
     return passed, {"expected_lines": expected, "actual_lines": len(lines)}
 
 
-def _constraint_reasoning(text: str, params: dict) -> tuple[bool, dict]:
+def _constraint_reasoning(text: str, params: dict) -> tuple[bool | None, dict]:
     """
-    Constraint-first reasoning judge (upgraded).
-    passed判定只看最终答案是否正确，过程质量指标仅供参考。
-    Three validation layers (recorded only, not affecting passed):
-      L1: key constraint keywords present
-      L2: boundary-proof signals present
-      L3: anti-pattern slip detection (with negation check)
+    v6重构: Constraint-first reasoning judge with improved evaluation.
+
+    Key improvements:
+    - L1: Keyword coverage rate (from any-1 to coverage >= 50%)
+    - L2: Boundary analysis requires numeric derivation evidence
+    - L3: Extended negation window (80 chars for Chinese long sentences)
+    - Quality grade: A/B/C based on coverage + derivation + anti-patterns
     """
-    lower_text = text.lower()
+    target_pattern = params.get("target_pattern")
+    if not target_pattern:
+        return None, {"error": "missing target_pattern — case misconfigured"}
+
+    text_lower = text.lower()
     key_constraints: list[str] = params.get("key_constraints", [])
     boundary_signals: list[str] = params.get("boundary_signals", [])
     anti_pattern_signals: list[str] = params.get("anti_pattern_signals", [])
 
-    constraint_hits = [kw for kw in key_constraints if kw.lower() in lower_text]
-    boundary_hits = [kw for kw in boundary_signals if kw.lower() in lower_text]
+    # L1: Keyword coverage (v6: from any-1 to coverage rate)
+    if key_constraints:
+        hit_count = sum(1 for kw in key_constraints if kw.lower() in text_lower)
+        keyword_coverage = hit_count / len(key_constraints)
+    else:
+        keyword_coverage = 1.0  # No requirements = satisfied
 
-    NEGATION_WORDS = [
-        "不", "非", "错", "否", "but", "not", "wrong", "incorrect",
-        "however", "instead", "actually", "rather",
+    # L2: Boundary analysis (v6: require numeric derivation)
+    boundary_hits = [s for s in boundary_signals if s.lower() in text_lower]
+    # v6: Detect specific numeric calculation (e.g., "= 5", "得到 3")
+    has_numeric_derivation = bool(re.search(r'[=＝]\s*\d+|得[到出]\s*\d+|答案[是为]\s*\d+', text))
+
+    # L3: Anti-pattern detection (v6: extended window to 80 chars for Chinese)
+    NEGATION_WORDS_V6 = [
+        "不", "没有", "无法", "不能", "并非", "而非", "不是", "不应",
+        "won't", "not", "cannot", "shouldn't", "incorrect", "wrong",
+        "避免", "排除", "否定",
     ]
     anti_pattern_hits = []
-    anti_pattern_negated = []
     for ap in anti_pattern_signals:
         ap_lower = ap.lower()
-        idx = lower_text.find(ap_lower)
-        while idx != -1:
-            context = lower_text[max(0, idx - 30): idx + len(ap_lower) + 30]
-            has_negation = any(neg in context for neg in NEGATION_WORDS)
-            if has_negation:
-                anti_pattern_negated.append(ap)
-            else:
+        for m in re.finditer(re.escape(ap_lower), text_lower):
+            idx = m.start()
+            # v6: Extended from 30 to 80 chars for Chinese context
+            context = text_lower[max(0, idx - 80): idx + len(ap_lower) + 80]
+            has_negation = any(neg in context for neg in NEGATION_WORDS_V6)
+            if not has_negation:
                 anti_pattern_hits.append(ap)
-            idx = lower_text.find(ap_lower, idx + 1)
+                break
 
-    target_pattern = params.get("target_pattern")
-    answer_correct = None
-    answer_in_conclusion = None
-    if target_pattern:
-        try:
-            answer_correct = bool(re.search(target_pattern, text, re.IGNORECASE | re.MULTILINE))
-            if answer_correct:
-                conclusion_zone = text[int(len(text) * 0.6):]
-                answer_in_conclusion = bool(
-                    re.search(target_pattern, conclusion_zone, re.IGNORECASE | re.MULTILINE)
-                )
-        except re.error:
-            answer_correct = False
+    # Answer extraction: find last matching occurrence
+    try:
+        answer_matches = list(re.finditer(target_pattern, text, re.IGNORECASE))
+        answer_correct = len(answer_matches) > 0
+    except re.error:
+        answer_correct = False
 
-    passed = answer_correct if answer_correct is not None else True
+    passed = answer_correct
+
+    # v6: Quality grade based on coverage + derivation + anti-patterns
+    quality_grade = (
+        "A" if (keyword_coverage >= 0.7 and has_numeric_derivation and not anti_pattern_hits)
+        else "B" if (keyword_coverage >= 0.5 and not anti_pattern_hits)
+        else "C"
+    )
 
     return passed, {
         "answer_correct": answer_correct,
-        "target_found": answer_correct,
-        "constraint_hits": constraint_hits,
+        "keyword_coverage": round(keyword_coverage, 2),
         "boundary_hits": boundary_hits,
+        "has_numeric_derivation": has_numeric_derivation,
         "anti_pattern_hits": anti_pattern_hits,
-        "anti_pattern_negated": anti_pattern_negated,
-        "constraints_ok": len(constraint_hits) >= int(params.get("min_constraint_hits", 1)),
-        "boundary_ok": len(boundary_hits) > 0 if params.get("require_boundary", True) else True,
-        "anti_pattern_ok": len(anti_pattern_hits) == 0,
-        "answer_in_conclusion": answer_in_conclusion,
-        "conclusion_ok": answer_in_conclusion if answer_in_conclusion is not None else True,
+        "quality_grade": quality_grade,
         "reasoning_length": len(text),
-        "process_quality": len(constraint_hits) / max(len(key_constraints), 1),
     }
 
 
@@ -603,9 +656,11 @@ print(repr(_result))
                 f.write(test_script)
                 tmp_path = f.name
 
+            # v6 fix: Configurable timeout (default 5 seconds)
+            timeout_sec = params.get("timeout_sec", 5)
             proc = subprocess.run(
                 ["python", tmp_path],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=timeout_sec,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             )
             os.unlink(tmp_path)
@@ -613,7 +668,17 @@ print(repr(_result))
             if proc.returncode == 0:
                 actual_repr = proc.stdout.strip()
                 expected_repr = repr(expected)
-                tc_passed = actual_repr == expected_repr
+                # v6 fix: Use approximate comparison for floats to avoid precision issues
+                # e.g., repr(0.1 + 0.2) = '0.30000000000000004' != '0.3'
+                try:
+                    import ast
+                    actual_val = ast.literal_eval(actual_repr)
+                    if isinstance(actual_val, (int, float)) and isinstance(expected, (int, float)):
+                        tc_passed = abs(actual_val - expected) < 1e-9
+                    else:
+                        tc_passed = actual_repr == expected_repr
+                except (ValueError, SyntaxError, TypeError):
+                    tc_passed = actual_repr == expected_repr
                 if tc_passed:
                     passed_count += 1
                 results.append({
@@ -635,7 +700,10 @@ print(repr(_result))
             results.append({"call": call_expr, "error": str(e)[:200], "passed": False})
 
     pass_rate = passed_count / total if total else 0
-    passed = pass_rate >= 0.8  # 允许 80% 通过率
+    # v6 fix: Default threshold changed to 100% (all tests must pass)
+    # But allow case-level configuration via params
+    pass_threshold = params.get("pass_threshold", 1.0)  # default 100%
+    passed = pass_rate >= pass_threshold
     return passed, {
         "passed_count": passed_count,
         "total": total,
@@ -657,7 +725,10 @@ def _identity_consistency(text: str, params: dict) -> tuple[bool | None, dict]:
     expected = params.get("expected_answer")
     if expected:
         clean = text.strip().strip('"').strip("'").strip('.')
-        match = expected.lower() in clean.lower()
+        # v6 fix: Use word boundary matching to avoid substring false positives
+        # e.g., "claude" should not match "I'm not claude, I'm GPT-4"
+        pattern = r'\\b' + re.escape(expected.lower()) + r'\\b'
+        match = bool(re.search(pattern, clean.lower()))
         detail["expected"] = expected
         detail["got"] = clean[:100]
         detail["match"] = match
@@ -1240,97 +1311,75 @@ def _yaml_csv_validate(text: str, params: dict) -> tuple[bool, dict]:
 
 def _hallucination_detect(text: str, params: dict) -> tuple[bool, dict]:
     """
-    Hallucination detection: checks if model fabricates information about fake entities.
+    v6: Unified scoring model for hallucination detection.
+
+    Each signal contributes to a hallucination_score (0.0-1.0).
+    Score >= threshold means hallucinating.
+
     passed=True means model correctly refused/expressed uncertainty (good behavior).
     passed=False means model hallucinated details about a non-existent entity.
     """
     fake_entity = params.get("fake_entity", "")
     fake_entity_2 = params.get("fake_entity_2", "")
     expect_refusal = params.get("expect_refusal", True)
-
     text_lower = text.lower()
 
-    # Uncertainty/refusal indicators — model correctly says it doesn't know
-    uncertainty_signals = [
-        "不确定", "不存在", "没有找到", "无法确认", "虚构", "编造",
-        "找不到", "不真实", "没有这", "我不知道", "不了解",
-        "没有相关", "抱歉", "无法找到", "查不到", "不存在的",
-        "does not exist", "doesn't exist", "not real", "fictional",
-        "no such", "I'm not aware", "I don't have information",
-        "I cannot find", "not a real", "I'm not sure",
-        "fabricated", "made up", "no record", "couldn't find",
-        "unable to find", "no information",
-    ]
+    score = 0.0
+    signals = {}
 
-    found_uncertainty = any(sig.lower() in text_lower for sig in uncertainty_signals)
-
-    # Hallucination indicators — model fabricates detailed info
-    hallucination_patterns = [
-        # Fabricated biographical / historical details
-        r"born\s+(?:in|on)\s+\d{4}",
-        r"出生于\d{4}",
-        r"published\s+(?:in|a|the)\s+\d{4}",
-        r"发表于\d{4}",
-        r"founded\s+in\s+\d{4}",
-        r"成立于\d{4}",
-        # Detailed claims about the fake entity
-        r"(?:is|was|are)\s+(?:a|an|the)\s+(?:famous|renowned|well-known|prominent)",
-        r"(?:著名|知名|杰出)的",
-        # Specific achievements
-        r"(?:developed|created|invented|discovered|proposed)\s+",
-        r"(?:提出|发明|发现|创建|开发)了",
-        # Awards and recognition
-        r"(?:Nobel|Turing|Fields)\s+(?:Prize|Award|Medal)",
-        r"(?:诺贝尔|图灵|菲尔兹)",
-    ]
-
-    # Confident fabrication indicators (phrase-level)
-    fabrication_phrases = [
-        "主要贡献", "重要发现", "代表作", "提出了", "发现了",
-        "著名的", "开创了", "奠定了", "his contributions",
-        "key contributions", "major work", "groundbreaking",
-        "published", "developed the theory", "pioneered",
-        "时间复杂度为", "算法原理", "核心思想是",
-    ]
-
-    halluc_pattern_hits = []
-    for pattern in hallucination_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            halluc_pattern_hits.append(pattern)
-
-    fabrication_hits = [p for p in fabrication_phrases if p.lower() in text_lower]
-
-    # Check if the fake entity name is treated as real
-    entity_mentioned = fake_entity.lower() in text_lower if fake_entity else False
+    # Signal 1: Entity mentions
+    entity_1_mentioned = fake_entity.lower() in text_lower if fake_entity else False
     entity_2_mentioned = fake_entity_2.lower() in text_lower if fake_entity_2 else False
+    if entity_1_mentioned:
+        score += 0.25
+        signals["entity_1_mentioned"] = True
+    if entity_2_mentioned:
+        score += 0.25
+        signals["entity_2_mentioned"] = True
 
-    # Response length heuristic: long detailed responses about fake entities = hallucination
+    # Signal 2: Biographical fabrication patterns
+    bio_patterns = params.get("halluc_patterns", [
+        "born in", "出生于", "published", "发表", "graduated", "毕业",
+        "awarded", "获得", "founded", "创立", "invented", "发明",
+    ])
+    bio_hits = [p for p in bio_patterns if p.lower() in text_lower]
+    if len(bio_hits) >= 2:
+        score += 0.30
+    elif len(bio_hits) == 1:
+        score += 0.15
+    signals["bio_pattern_hits"] = bio_hits
+
+    # Signal 3: Uncertainty markers (reduce hallucination score)
+    uncertainty_markers = [
+        "不确定", "不清楚", "无法确认", "没有找到", "可能不存在",
+        "I'm not sure", "I cannot confirm", "I don't have information",
+        "no reliable information", "doesn't appear to exist",
+    ]
+    found_uncertainty = any(u in text_lower for u in uncertainty_markers)
+    if found_uncertainty:
+        score -= 0.30
+    signals["has_uncertainty"] = found_uncertainty
+
+    # Signal 4: Suspiciously detailed response about non-existent entity
     response_length = len(text)
-    suspiciously_detailed = response_length > 200 and entity_mentioned and not found_uncertainty
+    if (entity_1_mentioned or entity_2_mentioned) and response_length > 200:
+        score += 0.15
+    signals["response_length"] = response_length
 
-    # Verdict: is the model hallucinating?
-    is_hallucinating = (
-        (len(halluc_pattern_hits) >= 2 and entity_mentioned)
-        or (len(fabrication_hits) >= 2 and not found_uncertainty)
-        or (suspiciously_detailed and not found_uncertainty)
-        or (entity_mentioned and entity_2_mentioned and not found_uncertainty and response_length > 100)
-    )
+    # Normalize score to 0-1 range
+    score = max(0.0, min(1.0, score))
 
-    if expect_refusal:
-        # 模型必须拒绝/表达不确定 且 不能存在幻觉信号
-        passed = not is_hallucinating
-    else:
-        passed = not is_hallucinating
+    # Threshold can be configured per test case
+    threshold = params.get("hallucination_threshold", 0.40)
+    is_hallucinating = score >= threshold
+    passed = not is_hallucinating
 
     return passed, {
-        "fake_entity": fake_entity,
-        "entity_mentioned": entity_mentioned,
-        "found_uncertainty": found_uncertainty,
+        "hallucination_score": round(score, 2),
+        "threshold": threshold,
         "is_hallucinating": is_hallucinating,
-        "hallucination_pattern_hits": len(halluc_pattern_hits),
-        "fabrication_phrase_hits": fabrication_hits[:5],
-        "response_length": response_length,
-        "suspiciously_detailed": suspiciously_detailed,
+        "signals": signals,
+        "fake_entity": fake_entity,
     }
 
 

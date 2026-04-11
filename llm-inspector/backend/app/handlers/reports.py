@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import urllib.parse
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
@@ -95,7 +96,26 @@ def handle_export_runs_zip(_path, qs, _body) -> tuple:
     run_ids = qs.get("run_ids", [[]])[0]
     if not run_ids:
         return _error("run_ids required")
+    
+    # v6 fix: Input validation and sanitization
     run_ids = run_ids.split(",")
+    
+    # Validate run_id format and count
+    if len(run_ids) > 50:
+        return _error("单次最多导出50条记录", 400)
+    
+    # Sanitize run_ids to prevent path traversal
+    sanitized_ids = []
+    for rid in run_ids:
+        rid = rid.strip()
+        # Basic validation: allow alphanumeric, hyphen, underscore
+        if not rid or not all(c.isalnum() or c in '-_' for c in rid):
+            return _error("无效的run ID格式", 400)
+        if len(rid) > 50:
+            return _error("run ID过长", 400)
+        sanitized_ids.append(rid)
+    
+    run_ids = sanitized_ids
 
     import zipfile
     buf = io.BytesIO()
@@ -204,6 +224,3 @@ def handle_get_pairwise(path, _qs, _body) -> tuple:
     if not row:
         return _error("Pairwise not found", 404)
     return _json({"run_id": run_id, **row})
-
-
-import json

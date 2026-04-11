@@ -37,7 +37,7 @@
     </div>
     <div class="form-group">
       <label>API Key</label>
-      <input type="password" id="f-key" placeholder="sk-...">
+      <input type="password" id="f-key" placeholder="sk-..." autocomplete="off">
       <div class="form-hint">密钥在服务端使用 AES-256-GCM 加密存储，72小时后自动清除</div>
     </div>
     <div class="form-row">
@@ -62,12 +62,22 @@
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-label">题库维护工具</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <button class="btn" onclick="previewIsomorphicCases()">预览增强测试项</button>
-      <button class="btn" onclick="applyIsomorphicCases()">更新实验室评测集</button>
-      <span id="iso-hint" style="font-size:12px;color:var(--ink4)">基于逻辑同构原理扩展约束推理/文本约束测试项</span>
+  <!-- v6: 高级设置折叠面板 -->
+  <div class="card" style="background:var(--bg2)">
+    <div class="card-label" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="toggleAdvancedSettings()">
+      <span id="advanced-toggle-icon">▶</span>
+      <span>高级设置</span>
+      <span style="font-size:11px;font-weight:normal;color:var(--ink4);margin-left:auto">题库维护、实验性功能</span>
+    </div>
+    <div id="advanced-settings-content" style="display:none;margin-top:12px">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">
+        <strong>题库维护工具</strong> — 基于逻辑同构原理扩展约束推理/文本约束测试项
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn" data-action="previewIsomorphic">预览增强测试项</button>
+        <button class="btn" data-action="applyIsomorphic">更新实验室评测集</button>
+        <span id="iso-hint" style="font-size:12px;color:var(--ink4)">谨慎操作：会影响后续所有检测任务的用例集</span>
+      </div>
     </div>
   </div>
 

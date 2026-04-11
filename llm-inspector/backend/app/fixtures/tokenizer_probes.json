@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "generated_at": "2026-04-11T11:52:01.823071",
+    "generator": "verify_tokenizer_probes.py",
+    "note": "Token counts for model fingerprinting probes. Update when tokenizer versions change."
+  },
+  "probe_words": [
+    "supercalifragilistic",
+    "cryptocurrency",
+    "counterintuitive",
+    "hallucination",
+    "multimodality"
+  ],
+  "tokenizers": {
+    "llama": {
+      "description": "Meta LLaMA models",
+      "token_counts": {
+        "supercalifragilistic": 6,
+        "cryptocurrency": 4,
+        "counterintuitive": 4,
+        "hallucination": 5,
+        "multimodality": 5
+      },
+      "source": "manual",
+      "note": "SentencePiece tokenizer - verify with actual model"
+    },
+    "gemini": {
+      "description": "Google Gemini models",
+      "token_counts": {
+        "supercalifragilistic": 7,
+        "cryptocurrency": 4,
+        "counterintuitive": 5,
+        "hallucination": 6,
+        "multimodality": 6
+      },
+      "source": "manual",
+      "note": "Gemini tokenizer - verify with actual model"
+    }
+  }
+}

@@ -305,3 +305,40 @@ body>*{position:relative;z-index:1}
   top: 0;
   z-index: 10;
 }
+
+/* v6 fix: Mobile adaptation */
+@media (max-width: 640px) {
+  .score-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+  .sim-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .data-table {
+    font-size: 11px;
+  }
+  .data-table th, .data-table td {
+    padding: 6px 4px;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  nav {
+    padding: 0 16px;
+    gap: 12px;
+  }
+  .nav-brand {
+    font-size: 14px;
+  }
+  .nav-link {
+    font-size: 12px;
+    padding: 4px 6px;
+  }
+  .page {
+    padding: 16px;
+  }
+}

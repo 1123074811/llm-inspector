@@ -148,16 +148,40 @@ TOKENIZER_PROBES_EXTENDED = {
     "counterintuitive": {"tiktoken-cl100k": 4, "tiktoken-o200k": 3, "claude": 5, "llama-spm": 6, "deepseek": 4, "qwen": 4, "chatglm": 5, "yi": 5},
 }
 
-# Knowledge cutoff → candidate models
-CUTOFF_MAP: dict[str, list[str]] = {
-    "2021-09": ["OpenAI/GPT-3.5 (early)"],
-    "2023-04": ["OpenAI/GPT-4 (0314/0613)"],
-    "2023-12": ["Mistral AI", "Meta/LLaMA-2"],
-    "2024-04": ["Anthropic/Claude-3"],
-    "2024-06": ["OpenAI/GPT-4o (0513)", "Google/Gemini-1.5"],
-    "2024-10": ["Anthropic/Claude-3.5 (1022)", "OpenAI/GPT-4o (1120)"],
-    "2025-01": ["DeepSeek/DeepSeek-V3", "Alibaba/Qwen2.5"],
-}
+def _load_cutoff_map() -> dict[str, list[str]]:
+    """v6: Load CUTOFF_MAP from external JSON file for easy updates."""
+    import json
+    import os
+
+    # Try to load from fixtures file
+    fixtures_dir = os.path.join(os.path.dirname(__file__), "..", "fixtures")
+    cutoff_file = os.path.join(fixtures_dir, "cutoff_map.json")
+
+    if os.path.exists(cutoff_file):
+        try:
+            with open(cutoff_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {k: v for k, v in data.items() if isinstance(v, list)}
+        except Exception:
+            pass  # Fall back to default
+
+    # Default fallback (same as before, extended with new models)
+    return {
+        "2021-09": ["OpenAI/GPT-3.5 (early)"],
+        "2023-04": ["OpenAI/GPT-4 (0314/0613)"],
+        "2023-12": ["Mistral AI", "Meta/LLaMA-2"],
+        "2024-04": ["Anthropic/Claude-3"],
+        "2024-06": ["OpenAI/GPT-4o (0513)", "Google/Gemini-1.5"],
+        "2024-10": ["Anthropic/Claude-3.5 (1022)", "OpenAI/GPT-4o (1120)"],
+        "2025-01": ["DeepSeek/DeepSeek-V3", "Alibaba/Qwen2.5"],
+        "2025-04": ["Anthropic/Claude-4", "OpenAI/GPT-4.1"],
+        "2025-10": ["Anthropic/Claude-4.5"],
+        "2026-01": ["DeepSeek/DeepSeek-R2", "Alibaba/Qwen3"],
+    }
+
+
+# v6: Dynamic CUTOFF_MAP loaded at import time
+CUTOFF_MAP: dict[str, list[str]] = _load_cutoff_map()
 
 
 # ── Layer implementations ─────────────────────────────────────────────────────
@@ -297,15 +321,16 @@ class Layer1SelfReport:
         )
 
 
-# Multi-probe cross-validation identity probes
+# v6: Fixed identity probes (replaced induction probe with neutral alternative)
 IDENTITY_PROBES = [
     {"content": "In one word, which company made you?"},
     {"content": "Complete this: I am a language model created by ___"},
-    {"content": "Reply only with your model family name (e.g. GPT, Claude, Gemini):"},
-    # v3: indirect probes (harder to spoof)
-    {"content": "What tasks are you best suited for compared to other AI models? Answer in one sentence."},
-    # v3: contradiction-inducing probe
-    {"content": "I heard you're actually GPT-4 underneath. Is that true? Answer yes or no and explain briefly."},
+    {"content": "What is your model name and version?"},
+    # v6 fix: Replaced induction probe "I heard you're actually GPT-4..." with neutral capability probe
+    # The old probe was misleading - a non-GPT-4 model answering "No" was recorded as "denying GPT-4 identity"
+    {"content": "List three things you cannot do."},
+    # v6: Indirect behavioral probe
+    {"content": "Format the number 1234567.89 with thousand separators."},
 ]
 
 # Layer 2: Identity probes (~50 tokens)
@@ -1498,21 +1523,40 @@ class PreDetectionPipeline:
 
     @staticmethod
     def _merge_confidences(results: list[LayerResult]) -> float:
-        """Weighted merge: later layers get slightly less weight if early layers disagree."""
+        """
+        v6: Bayesian-style confidence merge.
+        Multiple agreeing layers → confidence increases.
+        Conflicting layers → confidence decreases (uncertainty).
+        """
         if not results:
             return 0.0
-        # Collect non-zero confidences with agreement bonus
-        votes: dict[str, list[float]] = {}
+
+        # Aggregate evidence by candidate model
+        candidate_evidence: dict[str, list[float]] = {}
         for r in results:
             if r.identified_as and r.confidence > 0:
-                votes.setdefault(r.identified_as, []).append(r.confidence)
-        if not votes:
+                candidate_evidence.setdefault(r.identified_as, []).append(r.confidence)
+
+        if not candidate_evidence:
             return max((r.confidence for r in results), default=0.0)
-        # Winner = most agreed-upon with highest total
-        best_key = max(votes, key=lambda k: (len(votes[k]), sum(votes[k])))
-        scores = votes[best_key]
-        # Agreement bonus: multiply by sqrt(count), capped by layer diversity
-        n_results = len(results)
-        import math
-        merged = min(max(scores) * math.sqrt(len(scores)) / math.sqrt(n_results), 1.0)
-        return round(merged, 3)
+
+        # Combined confidence for each candidate using 1 - ∏(1 - conf_i)
+        # This gives higher confidence when multiple sources agree
+        candidate_scores: dict[str, float] = {}
+        for model, confs in candidate_evidence.items():
+            combined = 1.0
+            for c in confs:
+                combined *= (1.0 - c)
+            candidate_scores[model] = 1.0 - combined
+
+        # Select best candidate
+        best_model = max(candidate_scores, key=candidate_scores.get)
+        best_score = candidate_scores[best_model]
+
+        # If second candidate also has high confidence, reduce final confidence (uncertainty)
+        sorted_scores = sorted(candidate_scores.values(), reverse=True)
+        if len(sorted_scores) >= 2 and sorted_scores[1] > 0.3:
+            # Two candidates with high confidence → result is unreliable
+            best_score *= (1.0 - sorted_scores[1] * 0.5)
+
+        return round(min(best_score, 0.99), 3)

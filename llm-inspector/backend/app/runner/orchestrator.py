@@ -128,18 +128,67 @@ class TokenBudgetGuard:
     """
     Tracks cumulative token consumption during a run and gates
     low-value cases when the budget is exhausted.
+
+    v6: Estimates remaining budget using historical consumption from past runs
+    with the same model/base_url combination.
     """
 
-    def __init__(self, budget: int):
+    def __init__(self, budget: int, model_name: str = "", base_url: str = ""):
         self._budget = budget
         self._used = 0
         self._lock = threading.Lock()
+        self._model_name = model_name
+        self._base_url = base_url
+        self._historical_median = self._load_historical_median()
+
+    def _load_historical_median(self) -> int | None:
+        """v6: Load median token consumption from historical runs."""
+        if not self._model_name or not self._base_url:
+            return None
+        try:
+            from app.repository.repo import get_repository
+            repo = get_repository()
+            # Get last 20 runs with same model/base_url
+            history = repo.get_runs_by_model_base(
+                self._model_name, self._base_url, limit=20, status="completed"
+            )
+            if not history:
+                return None
+            # Extract total token consumption
+            consumptions = []
+            for run in history:
+                if isinstance(run, dict) and run.get("total_tokens"):
+                    consumptions.append(run["total_tokens"])
+            if len(consumptions) >= 3:
+                sorted_consumptions = sorted(consumptions)
+                return sorted_consumptions[len(sorted_consumptions) // 2]  # median
+        except Exception:
+            pass
+        return None
+
+    def estimate_tokens_needed(self, cases_count: int) -> int:
+        """v6: Estimate tokens needed based on historical median or conservative default."""
+        if self._historical_median:
+            # Use historical median per case, with 20% buffer
+            return int((self._historical_median / max(1, cases_count)) * cases_count * 1.2)
+        # Conservative default: 1000 tokens per case
+        return cases_count * 1000
 
     def consume(self, tokens: int) -> bool:
         """Returns False when budget is exhausted."""
         with self._lock:
             self._used += tokens
             return self._used <= self._budget
+
+    def should_run_case(self, case: TestCase) -> bool:
+        """v6: Decide whether to run a case based on remaining budget and case priority."""
+        # Always run high-priority/anchor cases
+        meta = case.params.get("_meta", {}) if case.params else {}
+        if meta.get("anchor") or case.weight >= 2.0:
+            return True
+        # Check if we have enough budget for this case (estimated)
+        est_cost = case.max_tokens * max(1, case.n_samples) * 2  # rough estimate
+        return self.remaining >= est_cost
 
     def record_result(self, result: CaseResult) -> int:
         """Extract tokens from a CaseResult and add to running total. Returns tokens consumed."""
@@ -289,7 +338,11 @@ def _case_value(c: TestCase) -> float:
     return (info_gain * max(0.2, c.weight)) / est_cost
 
 
-def _adaptive_samples(case: TestCase, mode: str) -> int:
+def _adaptive_samples(case: TestCase, mode: str, run_id: str | None = None) -> int:
+    """
+    v6: Adaptive sampling with historical variance check.
+    High variance items need more samples for stable estimation.
+    """
     judge = case.judge_method
 
     DETERMINISTIC_JUDGES = {
@@ -305,6 +358,24 @@ def _adaptive_samples(case: TestCase, mode: str) -> int:
     }
     if judge in EXTRACTION_JUDGES:
         return 1
+
+    # v6: Check historical variance from earlier cases in this run
+    if run_id:
+        try:
+            from app.repository.repo import get_repository
+            repo = get_repository()
+            historical = repo.get_case_results_for_run(run_id, case_id=case.id)
+            if historical and len(historical) >= 3:
+                # Calculate pass rate variance across historical samples
+                pass_results = [1 if r.get("passed") else 0 for r in historical]
+                if pass_results:
+                    mean_pass = sum(pass_results) / len(pass_results)
+                    variance = sum((p - mean_pass) ** 2 for p in pass_results) / len(pass_results)
+                    # High variance (>0.25 = 50% std dev) needs more samples
+                    if variance > 0.25 and mode in ("standard", "deep"):
+                        return max(case.n_samples, 3)
+        except Exception:
+            pass  # Fall through to mode-based logic
 
     if mode == "quick":
         return 1
@@ -551,6 +622,42 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
                             scorecard_cache=None) -> tuple[bool, dict | None, list | None, object | None]:
     if not case_results:
         return False, features_cache, sims_cache, scorecard_cache
+
+    # v6: Failure rate early stop for all modes
+    # If error rate > 80% after 10 cases, abort early (API likely broken)
+    total_cases = len(case_results)
+    if total_cases >= 10:
+        failed_cases = sum(1 for r in case_results if r.pass_rate == 0.0)
+        fail_rate = failed_cases / total_cases
+        if fail_rate > 0.80:
+            logger.warning(
+                "High failure rate detected, aborting early",
+                fail_rate=round(fail_rate, 2),
+                total_cases=total_cases,
+                test_mode=test_mode,
+            )
+            return True, features_cache, sims_cache, scorecard_cache
+
+    # v6: Quick mode 2-point early stop (minimum 2 cases)
+    if test_mode == "quick":
+        # After just 2 core cases, check if model is clearly identifiable
+        if len(case_results) >= 2:
+            extractor = FeatureExtractor()
+            features = extractor.extract(case_results)
+            similarities: list = sims_cache or []
+            if not similarities:
+                run_suite = case_results[0].case.suite_version if case_results else "v2"
+                similarities = SimilarityEngine().compare(features, _load_benchmarks(run_suite))
+
+            if similarities and len(similarities) >= 2:
+                top = similarities[0]
+                second = similarities[1]
+                # If similarity gap >= 0.15, we have strong identification
+                if top.similarity_score >= 0.70 and (top.similarity_score - second.similarity_score) >= 0.15:
+                    return True, features, similarities, scorecard_cache
+        # Otherwise continue to 6-case threshold for quick mode
+        if len(case_results) < 6:
+            return False, features_cache, sims_cache, scorecard_cache
 
     if len(case_results) < 6:
         return False, features_cache, sims_cache, scorecard_cache

@@ -1,0 +1,14 @@
+{
+  "_comment": "Knowledge cutoff date to candidate models mapping. Generated: 2026-04-11",
+  "2021-09": ["OpenAI/GPT-3.5 (early)"],
+  "2023-04": ["OpenAI/GPT-4 (0314/0613)"],
+  "2023-09": ["OpenAI/GPT-3.5-turbo (0914)"],
+  "2023-12": ["Mistral AI", "Meta/LLaMA-2"],
+  "2024-04": ["Anthropic/Claude-3"],
+  "2024-06": ["OpenAI/GPT-4o (0513)", "Google/Gemini-1.5"],
+  "2024-10": ["Anthropic/Claude-3.5 (1022)", "OpenAI/GPT-4o (1120)"],
+  "2025-01": ["DeepSeek/DeepSeek-V3", "Alibaba/Qwen2.5"],
+  "2025-04": ["Anthropic/Claude-4", "OpenAI/GPT-4.1"],
+  "2025-10": ["Anthropic/Claude-4.5"],
+  "2026-01": ["DeepSeek/DeepSeek-R2", "Alibaba/Qwen3"]
+}

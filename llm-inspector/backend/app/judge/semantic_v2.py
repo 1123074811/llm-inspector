@@ -91,6 +91,9 @@ class SemanticJudgeV2:
         response: str,
         reference: str | None = None,
         rubric: dict | None = None,
+        rubric_weights: dict[str, float] | None = None,
+        pass_threshold: float = 60.0,
+        llm_judge_weight: float = 0.6,
     ) -> SemanticJudgeResult:
         """
         三层级联评判
@@ -99,7 +102,10 @@ class SemanticJudgeV2:
             prompt: 原始问题提示
             response: 模型回答
             reference: 参考答案（可选）
-            rubric: 自定义评分标准（可选）
+            rubric: 自定义评分标准（可选，默认使用RUBRIC_DIMENSIONS）
+            rubric_weights: 自定义维度权重（可选，覆盖RUBRIC_DIMENSIONS中的权重）
+            pass_threshold: 通过阈值（默认60分）
+            llm_judge_weight: LLM评分在共识中的权重（默认0.6，本地评分占0.4）
         
         Returns:
             SemanticJudgeResult: 判题结果
@@ -409,24 +415,32 @@ class SemanticJudgeV2:
         
         return results
     
-    def _weighted_rubric_score(self, scores: RubricScores) -> float:
+    def _weighted_rubric_score(
+        self,
+        scores: RubricScores,
+        rubric_weights: dict[str, float] | None = None,
+    ) -> float:
         """计算加权总分"""
         total_weight = 0.0
         weighted_sum = 0.0
-        
+
         for dim_name, dim_info in self.RUBRIC_DIMENSIONS.items():
-            weight = dim_info.get("weight", 0.25)
+            # v6: Allow case-level weight override
+            if rubric_weights and dim_name in rubric_weights:
+                weight = rubric_weights[dim_name]
+            else:
+                weight = dim_info.get("weight", 0.25)
             score = scores.dimension_scores.get(dim_name, 5.0)
-            
+
             # 转换为0-100分制
             normalized_score = score * 10
-            
+
             weighted_sum += normalized_score * weight
             total_weight += weight
-        
+
         if total_weight == 0:
             return 50.0
-        
+
         return round(weighted_sum / total_weight, 1)
 
 
@@ -448,29 +462,40 @@ def semantic_judge_v2(
 ) -> tuple[bool, dict]:
     """
     兼容现有接口的语义判题v2函数
-    
+
     Args:
         text: 模型回答文本
-        params: 判题参数
-    
+        params: 判题参数 (支持 rubric_weights, pass_threshold, llm_judge_weight)
+
     Returns:
         (passed, detail_dict)
     """
     prompt = params.get("_original_prompt", "")
     reference = params.get("reference_answer")
     rubric = params.get("rubric", {})
-    
+    # v6: Extract configurable parameters
+    rubric_weights = params.get("rubric_weights")
+    pass_threshold = params.get("semantic_pass_threshold", 60.0)
+    llm_judge_weight = params.get("llm_judge_weight", 0.6)
+
     judge = get_semantic_judge_v2()
-    result = judge.judge(prompt, text, reference, rubric)
-    
+    result = judge.judge(
+        prompt, text, reference, rubric,
+        rubric_weights=rubric_weights,
+        pass_threshold=pass_threshold,
+        llm_judge_weight=llm_judge_weight,
+    )
+
     detail = {
         "method": result.method,
         "score": result.score,
         "confidence": result.confidence,
         "reasoning": result.reasoning,
+        "pass_threshold": pass_threshold,
+        "llm_judge_weight": llm_judge_weight,
     }
-    
+
     if result.dimensions:
         detail["dimensions"] = result.dimensions
-    
+
     return result.passed, detail

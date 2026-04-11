@@ -273,23 +273,19 @@ class HallucinationDetectorV2:
         fake_entities: list[str],
     ) -> dict | None:
         """
-        知识图谱事实核查（预留接口）
-        
-        实际实现需要连接到外部知识图谱API
+        [NOT IMPLEMENTED] 知识图谱事实核查（预留接口）
+
+        v6 fix: 此方法始终返回 enabled=False，因为 verified_count 始终为 0
+        下游检查 `fact_check.get("verified_count", 0) > 0` 永远为 False，这是误导性的死代码
+
+        如需实现，需要连接到外部知识图谱API (Wikidata、百度百科等)
         """
-        # 预留接口：未来可以连接到Wikidata、百度百科等
-        # 目前仅做实体存在性检查（基于已知虚假实体列表）
-        
-        kg_url = getattr(settings, "KNOWLEDGE_GRAPH_URL", None)
-        if not kg_url:
-            return None
-        
-        # TODO: 实现实际的知识图谱查询
+        # v6: 明确标记为未实现，返回 enabled=False
         return {
-            "enabled": True,
+            "enabled": False,
             "checked_entities": fake_entities,
             "verified_count": 0,
-            "note": "Knowledge graph check not fully implemented",
+            "note": "Knowledge graph check not implemented - requires external KG service",
         }
     
     def _calibrate_hallucination_verdict(
