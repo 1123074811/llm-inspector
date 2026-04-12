@@ -127,7 +127,7 @@ def verify_with_dbpedia(entity_name: str):
 ### Milestone 1: 基础设施与健壮性改造 (Infrastructure & Robustness)
 **目标**：解决测试任务执行不稳定的问题，引入分布式队列，重构核心调度。
 - [x] 更新 `requirements.txt` 和启动脚本（`start.bat` / `start.sh`）。
-- [x] 部署 Celery + Redis 分布式任务队列，替换 `ThreadPoolExecutor`。
+- [ ] TODO: 全面部署 Celery + Redis 分布式任务队列，替换现有的内存级队列（目前仅在 worker 中条件导入）。
 - [x] 实现任务执行的指数退避与抖动重试 (Exponential Backoff with Jitter)。
 - [x] 构建 SSE (Server-Sent Events) 接口，实现实时日志推送。
 
@@ -140,7 +140,7 @@ def verify_with_dbpedia(entity_name: str):
 
 ### Milestone 3: 核心评分与自适应探测 (Scoring & Adaptive Probing)
 **目标**：升级评分理论模型，实现 Token 消耗的最优化与精确评测。
-- [x] 在评分引擎中实现 MDIRT (多维项目反应理论) 算法，计算 $\theta_d$ 标准分。
+- [ ] TODO: 补充 MDIRT (多维项目反应理论) 算法实现 (`mdirt_engine.py`)，计算 $\theta_d$ 标准分。
 - [x] 实现基于 Glicko-2 的动态能力评分调整逻辑。
 - [x] 引入 LLMLingua 提示词无损压缩算法，在下发前压缩长文本。
 - [x] 重构 `SmartBudget` 和 Orchestrator，实现基于测量标准误 (SEM) 的计算机化自适应测试 (CAT) 提前终止策略。
