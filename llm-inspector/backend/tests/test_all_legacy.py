@@ -1,6 +1,10 @@
 """
-LLM Inspector — test suite.
+LLM Inspector — test suite (legacy compatibility).
 Run with: PYTHONPATH=backend python3 backend/tests/test_all.py
+
+Phase B note:
+- This file is kept for backward compatibility.
+- Prefer layered pytest files under backend/tests/.
 """
 import sys
 import os

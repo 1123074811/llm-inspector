@@ -22,6 +22,7 @@ _load_env_file()
 class Settings:
     # App
     APP_ENV: str = os.getenv("APP_ENV", "development")
+    STRICT_PROVENANCE: bool = os.getenv("STRICT_PROVENANCE", "false").lower() == "true"
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
@@ -97,6 +98,18 @@ class Settings:
     MAX_CONCURRENT_RUNS: int = int(os.getenv("MAX_CONCURRENT_RUNS", "5"))
     MAX_REQUEST_RETRIES: int = int(os.getenv("MAX_REQUEST_RETRIES", "3"))
     RATE_LIMIT_RPM: int = int(os.getenv("RATE_LIMIT_RPM", "60"))
+
+    # Phase C: execution concurrency tuning
+    CONCURRENCY_QUICK: int = int(os.getenv("CONCURRENCY_QUICK", "12"))
+    CONCURRENCY_STANDARD: int = int(os.getenv("CONCURRENCY_STANDARD", "8"))
+    CONCURRENCY_DEEP: int = int(os.getenv("CONCURRENCY_DEEP", "3"))
+
+    # Phase C: benchmark cache TTL (seconds)
+    BENCHMARK_CACHE_TTL_SEC: int = int(os.getenv("BENCHMARK_CACHE_TTL_SEC", "120"))
+
+    # Phase D: async pipeline rollout controls
+    ASYNC_PIPELINE_ENABLED: bool = os.getenv("ASYNC_PIPELINE_ENABLED", "false").lower() == "true"
+    ASYNC_PIPELINE_FALLBACK_SYNC: bool = os.getenv("ASYNC_PIPELINE_FALLBACK_SYNC", "true").lower() == "true"
 
     # Verdict engine overrides (JSON string of threshold overrides)
     VERDICT_TRUSTED_THRESHOLD: int = int(os.getenv("VERDICT_TRUSTED_THRESHOLD", "80"))

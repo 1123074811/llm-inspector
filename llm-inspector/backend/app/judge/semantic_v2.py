@@ -159,15 +159,20 @@ class SemanticJudgeV2:
                 logger.warning("Multi-round consensus failed", error=str(e))
         
         # 综合评分
-        final_score = self._weighted_rubric_score(llm_scores)
+        final_score = float(self._weighted_rubric_score(llm_scores))
+        
+        # Ensure dimensions are Python floats
+        serializable_dimensions = {
+            k: float(v) for k, v in llm_scores.dimension_scores.items()
+        }
         
         return SemanticJudgeResult(
-            passed=final_score >= 60,  # 从45提升到60
+            passed=bool(final_score >= 60),  # 从45提升到60
             score=final_score,
-            confidence=llm_scores.confidence,
+            confidence=float(llm_scores.confidence),
             method="semantic_v2",
-            dimensions=llm_scores.dimension_scores,
-            reasoning=llm_scores.reasoning,
+            dimensions=serializable_dimensions,
+            reasoning=str(llm_scores.reasoning),
         )
     
     def _get_embedding_model(self):

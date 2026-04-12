@@ -3041,7 +3041,60 @@ class ReportBuilder:
             })
         report["failed_cases_detail"] = failed_detail
 
+        # Phase B: token ROI billing for cost/benefit transparency
+        report["token_roi"] = self._build_token_roi(case_results)
+
         return report
+
+    @staticmethod
+    def _build_token_roi(case_results: list[CaseResult]) -> dict:
+        """Build per-case and aggregate token ROI summary.
+
+        ROI definition:
+            roi = information_gain / max(total_tokens, 1)
+        where information_gain ~= abs(pass_rate - 0.5) * 2 in [0, 1].
+        """
+        rows = []
+        total_tokens = 0
+        total_info = 0.0
+
+        for r in case_results:
+            case_tokens = 0
+            for s in r.samples:
+                t = s.response.usage_total_tokens
+                if isinstance(t, (int, float)) and t > 0:
+                    case_tokens += int(t)
+            info_gain = abs((r.pass_rate or 0.0) - 0.5) * 2.0
+            roi = info_gain / max(case_tokens, 1)
+
+            total_tokens += case_tokens
+            total_info += info_gain
+            rows.append({
+                "case_id": r.case.id,
+                "name": r.case.name,
+                "category": r.case.category,
+                "dimension": r.case.dimension or r.case.category,
+                "samples": len(r.samples),
+                "pass_rate": round(r.pass_rate, 4),
+                "information_gain": round(info_gain, 4),
+                "total_tokens": case_tokens,
+                "roi": round(roi, 6),
+            })
+
+        rows.sort(key=lambda x: x["roi"], reverse=True)
+        for idx, row in enumerate(rows, start=1):
+            row["roi_rank"] = idx
+
+        avg_roi = (total_info / total_tokens) if total_tokens > 0 else 0.0
+        return {
+            "summary": {
+                "total_cases": len(case_results),
+                "total_tokens": total_tokens,
+                "total_information_gain": round(total_info, 4),
+                "average_roi": round(avg_roi, 6),
+            },
+            "per_case": rows,
+        }
 
     def _build_evidence_chain(
         self,

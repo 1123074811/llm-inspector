@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v7.0 - Unix/Linux/Mac Startup Script
+# LLM Inspector v9.0 - Unix/Linux/Mac Startup Script
 # Automatically checks and installs dependencies before starting
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v7.0"
+echo "LLM Inspector v9.0"
 echo "===================================="
 
 # Colors for output
@@ -44,4 +44,4 @@ echo ""
 echo "===================================="
 echo "Starting Server..."
 echo "===================================="
-python start.py --port 8000
+python start.py --port 8000 --strict-provenance

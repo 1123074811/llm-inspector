@@ -243,8 +243,22 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
     return cases
 
 
+_benchmark_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
 def _load_benchmarks(suite_version: str) -> list[dict]:
-    return repo.get_benchmarks(suite_version)
+    """Load benchmarks with a short TTL cache to avoid repeated DB reads."""
+    now = time.time()
+    cached = _benchmark_cache.get(suite_version)
+    ttl = max(1, settings.BENCHMARK_CACHE_TTL_SEC)
+    if cached:
+        ts, data = cached
+        if now - ts <= ttl:
+            return data
+
+    data = repo.get_benchmarks(suite_version)
+    _benchmark_cache[suite_version] = (now, data)
+    return data
 
 
 def _save_case_results_batch(run_id: str, results: list[CaseResult]) -> None:
@@ -301,10 +315,10 @@ def _save_case_results_batch(run_id: str, results: list[CaseResult]) -> None:
 
 def _mode_concurrency(test_mode: str) -> int:
     if test_mode == "quick":
-        return 12
+        return max(1, settings.CONCURRENCY_QUICK)
     if test_mode == "deep":
-        return 3
-    return 8  # standard
+        return max(1, settings.CONCURRENCY_DEEP)
+    return max(1, settings.CONCURRENCY_STANDARD)
 
 
 def _case_value(c: TestCase) -> float:

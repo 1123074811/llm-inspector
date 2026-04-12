@@ -368,8 +368,26 @@ def row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def json_col(value) -> str:
-    """Serialize value to JSON string for TEXT columns."""
-    return json.dumps(value, ensure_ascii=False)
+    """Serialize value to JSON string for TEXT columns. Robustly handles numpy types."""
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        # Fallback for numpy types and other non-standard objects
+        import numpy as np
+        class RobustEncoder(json.JSONEncoder):
+            def default(self, o):
+                if isinstance(o, (np.integer, np.int64, np.int32)):
+                    return int(o)
+                if isinstance(o, (np.floating, np.float64, np.float32)):
+                    return float(o)
+                if isinstance(o, (np.bool_, np.bool)):
+                    return bool(o)
+                if isinstance(o, np.ndarray):
+                    return o.tolist()
+                if hasattr(o, "to_dict"):
+                    return o.to_dict()
+                return str(o)
+        return json.dumps(value, ensure_ascii=False, cls=RobustEncoder)
 
 
 def from_json_col(value: str | None):

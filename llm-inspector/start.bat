@@ -1,6 +1,6 @@
 @echo off
 echo ====================================
-echo LLM Inspector v7.0
+echo LLM Inspector v9.0
 echo ====================================
 
 REM Activate virtual environment
@@ -34,6 +34,6 @@ echo.
 echo ====================================
 echo Starting Server...
 echo ====================================
-python start.py --port 8000
+python start.py --port 8000 --strict-provenance
 
 pause

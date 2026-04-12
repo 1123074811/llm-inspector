@@ -9,11 +9,12 @@ Then implement CeleryTaskQueue in tasks/queue.py and call init_queue(CeleryTaskQ
 """
 from __future__ import annotations
 
-import os
+import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app.core.logging import get_logger
+from app.core.config import settings
 from app.tasks.queue import LocalTaskQueue, get_queue
 
 logger = get_logger(__name__)
@@ -26,40 +27,33 @@ _local_lock = threading.Lock()
 def submit_run(run_id: str) -> None:
     """Submit a run pipeline to the background thread pool.
 
-    When the environment variable ASYNCIO_MODE=1 is set, the async pipeline
-    (run_pipeline_async) is used instead of the sync pipeline, giving higher
-    concurrency and lower per-task overhead.
+    Phase D behavior:
+    - Prefer async pipeline when ASYNC_PIPELINE_ENABLED=true
+    - If async fails and ASYNC_PIPELINE_FALLBACK_SYNC=true, auto-fallback to sync pipeline
     """
-    use_async = os.environ.get("ASYNCIO_MODE", "0") == "1"
-
-    if use_async:
-        from app.runner.orchestrator import run_pipeline_async
-        import asyncio
-
-        def _task():
-            with _local_lock:
-                _local_running[run_id] = True
-            try:
-                asyncio.run(run_pipeline_async(run_id))
-            except Exception as e:
-                logger.error("Async pipeline exception", run_id=run_id, error=str(e))
-                from app.repository import repo
-                repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
-            finally:
-                with _local_lock:
-                    _local_running.pop(run_id, None)
-
-        _local_executor.submit(_task)
-        logger.info("Run submitted to async worker pool", run_id=run_id)
-        return
-
-    from app.runner.orchestrator import run_pipeline
+    use_async = settings.ASYNC_PIPELINE_ENABLED
 
     def _task():
         with _local_lock:
             _local_running[run_id] = True
         try:
+            if use_async:
+                from app.runner.orchestrator import run_pipeline_async
+                try:
+                    asyncio.run(run_pipeline_async(run_id))
+                    logger.info("Run finished with async pipeline", run_id=run_id)
+                    return
+                except Exception as async_err:
+                    logger.error("Async pipeline exception", run_id=run_id, error=str(async_err))
+                    if not settings.ASYNC_PIPELINE_FALLBACK_SYNC:
+                        from app.repository import repo
+                        repo.update_run_status(run_id, "failed", error_message=str(async_err)[:500])
+                        return
+                    logger.warning("Falling back to sync pipeline", run_id=run_id)
+
+            from app.runner.orchestrator import run_pipeline
             run_pipeline(run_id)
+            logger.info("Run finished with sync pipeline", run_id=run_id)
         except Exception as e:
             logger.error("Pipeline exception", run_id=run_id, error=str(e))
             from app.repository import repo
@@ -69,7 +63,12 @@ def submit_run(run_id: str) -> None:
                 _local_running.pop(run_id, None)
 
     _local_executor.submit(_task)
-    logger.info("Run submitted to worker pool", run_id=run_id)
+    logger.info(
+        "Run submitted to worker pool",
+        run_id=run_id,
+        async_enabled=use_async,
+        async_fallback_sync=settings.ASYNC_PIPELINE_FALLBACK_SYNC,
+    )
 
 
 

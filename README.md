@@ -1,4 +1,4 @@
-# LLM Inspector v6.0
+# LLM Inspector v9.0
 
 LLM 套壳检测与能力评估工具 —— 检测 LLM API 是否真正提供其声称的模型服务，还是在背后代理/包装了其他模型。
 

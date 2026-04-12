@@ -10,7 +10,6 @@ from app.analysis.pipeline import (
     AnalysisPipeline,
     FeatureExtractor,
     ScoreCalculator,
-    ScoreCardCalculator,
     SimilarityEngine,
     VerdictEngine,
     RiskEngine,
@@ -23,6 +22,7 @@ from app.analysis.pipeline import (
     ProxyLatencyAnalyzer,
     ExtractionAuditBuilder,
 )
+from app.analysis.score_calculator import ScoreCardCalculator
 
 # v5.0 新增组件
 from app.analysis.adaptive_scoring import (

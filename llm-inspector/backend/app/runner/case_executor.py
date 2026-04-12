@@ -9,6 +9,7 @@ from app.core.schemas import (
     TestCase, CaseResult, SampleResult, LLMRequest, Message
 )
 from app.judge.methods import judge
+from app.judge.consensus import should_run_consensus, arbitrate_with_semantic
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -115,7 +116,7 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
                 error_type=type(e).__name__,
                 error_message=str(e),
                 latency_ms=0,
-                token_usage=None,
+                usage_total_tokens=0,
             )
 
         # Inter-sample delay to avoid rate limits
@@ -147,6 +148,24 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
         else:
             consecutive_truncations = 0
             passed, detail = judge(case.judge_method, resp.content, case.params)
+
+            # Phase B: rule-vs-semantic consensus arbitration for complex cases
+            if should_run_consensus(case.judge_method, case.params):
+                try:
+                    passed, detail = arbitrate_with_semantic(
+                        method=case.judge_method,
+                        text=resp.content or "",
+                        params=case.params or {},
+                        rule_passed=passed,
+                        rule_detail=detail or {},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Consensus arbitration failed, fallback to rule judge",
+                        case_id=case.id,
+                        sample=i,
+                        error=str(e),
+                    )
 
             result.samples.append(SampleResult(
                 sample_index=i,
@@ -198,7 +217,7 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
                     error_type=type(e).__name__,
                     error_message=str(e),
                     latency_ms=0,
-                    token_usage=None,
+                    usage_total_tokens=0,
                 )
             if resp.content:
                 outputs.append(resp.content.strip())

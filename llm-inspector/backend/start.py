@@ -1,5 +1,5 @@
 """
-LLM Inspector v7.0 - Smart Startup Script
+LLM Inspector v9.0 - Smart Startup Script
 
 Automatically checks and installs dependencies before starting the service.
 
@@ -59,7 +59,7 @@ def run_dependency_check():
         return True
 
 
-def check_environment():
+def check_environment(strict_provenance: bool = False):
     """Check environment requirements."""
     print("\n" + "=" * 60)
     print("Environment Check")
@@ -94,6 +94,23 @@ def check_environment():
         else:
             issues.append(f"Required directory '{dir_name}' not found")
             print(f"[FAIL] Directory {dir_name}/ not found")
+
+    # v9 Phase A: provenance strict-mode validation
+    try:
+        from app.analysis.metric_registry import validate_required_metric_sources
+        p_issues = validate_required_metric_sources(strict=False)
+        if p_issues:
+            for issue in p_issues:
+                print(f"[WARN] Provenance: {issue}")
+            if strict_provenance:
+                issues.extend([f"Provenance validation failed: {x}" for x in p_issues])
+        else:
+            print("[OK] Metric provenance registry validation passed")
+    except Exception as e:
+        msg = f"Provenance check error: {e}"
+        print(f"[WARN] {msg}")
+        if strict_provenance:
+            issues.append(msg)
     
     if issues:
         print("\n[ERROR] Environment issues found:")
@@ -108,7 +125,7 @@ def check_environment():
 def run_server(host: str, port: int, reload: bool = False):
     """Run the HTTP server."""
     print("\n" + "=" * 60)
-    print("Starting LLM Inspector v7.0")
+    print("Starting LLM Inspector v9.0")
     print("=" * 60)
     print(f"Host: {host}")
     print(f"Port: {port}")
@@ -145,7 +162,7 @@ def run_server(host: str, port: int, reload: bool = False):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="LLM Inspector v7.0 Startup Script"
+        description="LLM Inspector v9.0 Startup Script"
     )
     parser.add_argument(
         "--port", "-p",
@@ -173,12 +190,17 @@ def main():
         action="store_true",
         help="Enable debug mode"
     )
+    parser.add_argument(
+        "--strict-provenance",
+        action="store_true",
+        help="Fail startup when required metric provenance is missing"
+    )
     
     args = parser.parse_args()
     
     # Print banner
     print("\n" + "=" * 60)
-    print("LLM Inspector v7.0 - Startup")
+    print("LLM Inspector v9.0 - Startup")
     print("=" * 60)
     
     # Check dependencies
@@ -191,7 +213,8 @@ def main():
         print("\n[NOTE] Skipping dependency check (--skip-deps)")
     
     # Check environment
-    if not check_environment():
+    strict_provenance = args.strict_provenance or os.getenv("STRICT_PROVENANCE", "false").lower() == "true"
+    if not check_environment(strict_provenance=strict_provenance):
         print("\n[ERROR] Environment check failed!")
         return 1
     

@@ -75,6 +75,24 @@ class LLMResponse:
     def ok(self) -> bool:
         return self.error_type is None and self.status_code == 200
 
+    def to_dict(self) -> dict:
+        """v6: Serialize to dict for caching/persistence."""
+        return {
+            "content": self.content,
+            "raw_json": self.raw_json,
+            "status_code": self.status_code,
+            "headers": self.headers,
+            "latency_ms": self.latency_ms,
+            "first_token_ms": self.first_token_ms,
+            "finish_reason": self.finish_reason,
+            "usage_prompt_tokens": self.usage_prompt_tokens,
+            "usage_completion_tokens": self.usage_completion_tokens,
+            "usage_total_tokens": self.usage_total_tokens,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "logprobs": self.logprobs,
+        }
+
 
 @dataclass
 class StreamChunk:
