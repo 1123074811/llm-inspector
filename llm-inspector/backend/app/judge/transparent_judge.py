@@ -9,12 +9,159 @@ Wraps existing judge methods to provide:
 
 Reference: V8_UPGRADE_PLAN.md Section 1.4.2
 """
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import time
 import uuid
+import json
 
-from app.judge.plugin_interface import JudgePlugin, JudgeResult, JudgeMetadata
+from app.judge.plugin_interface import JudgePlugin, JudgeResult, JudgeMetadata, JudgeTier
 from app.core.structured_logger import get_structured_logger, LogEventType, LogLevel
+from app.adapters.openai_compat import OpenAICompatibleAdapter
+from app.core.config import settings
+
+class ChainOfVerificationJudge(JudgePlugin):
+    """
+    v10: Chain-of-Verification (CoVe) logic for long-chain reasoning.
+    
+    Instead of simply returning True/False based on the final answer,
+    this judge requires the model to:
+    1. Generate verification questions based on its own answer.
+    2. Answer those verification questions independently.
+    3. Cross-check if the original answer is consistent with the verified facts.
+    
+    Reference: Dhuliawala et al. (2023) "Chain-of-Verification Reduces Hallucination in Large Language Models"
+    """
+    
+    @property
+    def metadata(self) -> JudgeMetadata:
+        return JudgeMetadata(
+            name="chain_of_verification",
+            version="1.0",
+            tier=JudgeTier.LLM,
+            supported_languages=["*"],
+            description="Chain-of-Verification (CoVe) logic for long-chain reasoning",
+            deterministic=False,
+            required_params=["expected_answer"]
+        )
+
+    def judge(self, response: str, params: Dict[str, Any]) -> JudgeResult:
+        """
+        Execute the CoVe pipeline.
+        Returns JudgeResult with detailed steps.
+        """
+        start_time = time.time()
+        trace_id = str(uuid.uuid4())[:8]
+        steps_log = []
+        tokens_used = 0
+        logger = get_structured_logger()
+        
+        # Determine model and API info
+        base_url = getattr(settings, "JUDGE_API_URL", "https://api.openai.com/v1")
+        api_key = getattr(settings, "JUDGE_API_KEY", "")
+        model_name = getattr(settings, "JUDGE_MODEL", "gpt-4o-mini")
+        
+        adapter = OpenAICompatibleAdapter(base_url=base_url, api_key=api_key)
+        
+        original_prompt = params.get("_original_prompt", "")
+        expected_answer = params.get("expected_answer", "")
+        
+        # Step 1: Generate Verification Questions
+        q_prompt = (
+            f"Original Question: {original_prompt}\n"
+            f"Original Answer: {response}\n\n"
+            f"Based on the above answer, generate 3 factual verification questions "
+            f"that can help determine if the core logic or final conclusion is correct. "
+            f"Return ONLY a JSON list of strings."
+        )
+        
+        try:
+            from app.core.schemas import LLMRequest, Message
+            
+            req1 = LLMRequest(
+                model=model_name,
+                messages=[Message("user", q_prompt)],
+                temperature=0.1,
+                max_tokens=300
+            )
+            resp1 = adapter.chat(req1)
+            tokens_used += (resp1.usage_total_tokens or 0)
+            
+            try:
+                # Extract JSON list
+                content = resp1.content
+                start = content.find('[')
+                end = content.rfind(']') + 1
+                questions = json.loads(content[start:end]) if start >= 0 else []
+            except Exception:
+                questions = ["Is the mathematical calculation correct?", "Does the conclusion follow the premises?"]
+                
+            steps_log.append({"step": "generate_questions", "questions": questions})
+            
+            # Step 2: Answer Verification Questions Independently
+            answered_facts = []
+            for q in questions[:3]:  # Limit to 3 to save tokens
+                req2 = LLMRequest(
+                    model=model_name,
+                    messages=[Message("user", f"Answer this factual question briefly: {q}")],
+                    temperature=0.0,
+                    max_tokens=100
+                )
+                resp2 = adapter.chat(req2)
+                tokens_used += (resp2.usage_total_tokens or 0)
+                answered_facts.append(f"Q: {q}\nA: {resp2.content}")
+                
+            steps_log.append({"step": "answer_questions", "facts": answered_facts})
+            
+            # Step 3: Final Cross-Check
+            facts_str = "\n".join(answered_facts)
+            cross_prompt = (
+                f"Original Question: {original_prompt}\n"
+                f"Original Answer: {response}\n"
+                f"Expected Ground Truth: {expected_answer}\n\n"
+                f"Verified Facts:\n{facts_str}\n\n"
+                f"Based on the verified facts and the expected ground truth, is the Original Answer correct? "
+                f"Reply with exactly 'CORRECT' or 'INCORRECT' followed by a one-sentence reason."
+            )
+            
+            req3 = LLMRequest(
+                model=model_name,
+                messages=[Message("user", cross_prompt)],
+                temperature=0.0,
+                max_tokens=100
+            )
+            resp3 = adapter.chat(req3)
+            tokens_used += (resp3.usage_total_tokens or 0)
+            
+            final_judgment = resp3.content.strip()
+            passed = final_judgment.upper().startswith("CORRECT")
+            
+            steps_log.append({"step": "cross_check", "judgment": final_judgment})
+            
+            detail = {
+                "cove_executed": True,
+                "steps": steps_log,
+                "trace_id": trace_id
+            }
+            
+            return JudgeResult(
+                passed=passed,
+                detail=detail,
+                confidence=0.8,
+                tokens_used=tokens_used,
+                latency_ms=int((time.time() - start_time) * 1000),
+                method=self.metadata.name,
+                version=self.metadata.version
+            )
+            
+        except Exception as e:
+            logger.log(LogEventType.JUDGE_ERROR, LogLevel.ERROR, "cove_judge", str(e), {"trace_id": trace_id})
+            return JudgeResult(
+                passed=None,
+                detail={"error": f"CoVe failed: {str(e)}", "trace_id": trace_id},
+                latency_ms=int((time.time() - start_time) * 1000),
+                method=self.metadata.name,
+                version=self.metadata.version
+            )
 
 
 class TransparentJudgeWrapper:

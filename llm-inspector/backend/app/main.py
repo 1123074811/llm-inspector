@@ -52,10 +52,21 @@ from app.handlers.v8_handlers import (
     handle_v8_threshold_references,
     handle_v8_list_plugins,
 )
+
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
 
 logger = get_logger(__name__)
 
+# v10 SSE handler
+from app.core.sse import publisher as sse_publisher
+from app.core.logging import set_sse_publisher
+import time
+
+def handle_sse_logs(path: str, qs: dict, body: dict):
+    """v10 SSE endpoint for real-time logs.
+    Handled specially in _dispatch due to streaming nature.
+    """
+    pass
 
 ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/health$",                  handle_health),
@@ -135,6 +146,42 @@ class InspectorHandler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
 
+        # v10: Handle SSE specially because it streams
+        if method == "GET" and re.match(r"^/api/v10/runs/[^/]+/logs/stream$", path):
+            run_id = path.split("/")[-3]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            import queue
+            q = queue.Queue()
+            def _listener(data: bytes):
+                q.put(data)
+            
+            sse_publisher.subscribe(run_id, _listener)
+            try:
+                # Send initial ping
+                self.wfile.write(b"event: ping\ndata: connected\n\n")
+                self.wfile.flush()
+                
+                # Keep connection alive and stream logs
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        self.wfile.write(data)
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b"event: ping\ndata: heartbeat\n\n")
+                        self.wfile.flush()
+            except Exception:
+                pass
+            finally:
+                sse_publisher.unsubscribe(run_id, _listener)
+            return
+
         body: dict = {}
         if method == "POST":
             length = int(self.headers.get("Content-Length", 0))
@@ -177,6 +224,9 @@ class InspectorHandler(BaseHTTPRequestHandler):
 
 def run_server(host: str = None, port: int = None) -> None:
     """Run the HTTP server with optional host/port override."""
+    # Wire up SSE to logger
+    set_sse_publisher(sse_publisher)
+
     setup_logging()
     logger.info("Initialising database")
     init_db()

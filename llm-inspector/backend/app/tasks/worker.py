@@ -11,25 +11,24 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import os
 
 from app.core.logging import get_logger
 from app.core.config import settings
-from app.tasks.queue import LocalTaskQueue, get_queue
+from app.tasks.queue import get_queue, submit_task
 
 logger = get_logger(__name__)
 
-_local_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="inspector-worker")
-_local_running: dict[str, bool] = {}
+# Fallback lock for local task tracking when not using the unified queue abstraction
 _local_lock = threading.Lock()
+_local_running: dict[str, bool] = {}
 
 
 def submit_run(run_id: str) -> None:
-    """Submit a run pipeline to the background thread pool.
+    """Submit a run pipeline to the background task queue.
 
-    Phase D behavior:
-    - Prefer async pipeline when ASYNC_PIPELINE_ENABLED=true
-    - If async fails and ASYNC_PIPELINE_FALLBACK_SYNC=true, auto-fallback to sync pipeline
+    v10: Replaced raw ThreadPoolExecutor with unified TaskQueue abstraction
+    that natively supports Celery.
     """
     use_async = settings.ASYNC_PIPELINE_ENABLED
 
@@ -62,9 +61,9 @@ def submit_run(run_id: str) -> None:
             with _local_lock:
                 _local_running.pop(run_id, None)
 
-    _local_executor.submit(_task)
+    submit_task(run_id, _task)
     logger.info(
-        "Run submitted to worker pool",
+        "Run submitted to task queue",
         run_id=run_id,
         async_enabled=use_async,
         async_fallback_sync=settings.ASYNC_PIPELINE_FALLBACK_SYNC,
@@ -91,13 +90,13 @@ def submit_compare(compare_id: str) -> None:
             with _local_lock:
                 _local_running.pop(task_key, None)
 
-    _local_executor.submit(_task)
-    logger.info("Compare run submitted to worker pool", compare_id=compare_id)
+    submit_task(task_key, _task)
+    logger.info("Compare run submitted to task queue", compare_id=compare_id)
 
 
 def is_running(run_id: str) -> bool:
-    with _local_lock:
-        return _local_running.get(run_id, False)
+    """v10: Use unified queue to check running status."""
+    return get_queue().is_running(run_id) or _local_running.get(run_id, False)
 
 
 def submit_calibration_replay(replay_id: str) -> None:
@@ -119,8 +118,8 @@ def submit_calibration_replay(replay_id: str) -> None:
             with _local_lock:
                 _local_running.pop(task_key, None)
 
-    _local_executor.submit(_task)
-    logger.info("Calibration replay submitted to worker pool", replay_id=replay_id)
+    submit_task(task_key, _task)
+    logger.info("Calibration replay submitted to task queue", replay_id=replay_id)
 
 
 def submit_continue(run_id: str) -> None:
@@ -140,8 +139,8 @@ def submit_continue(run_id: str) -> None:
             with _local_lock:
                 _local_running.pop(run_id, None)
 
-    _local_executor.submit(_task)
-    logger.info("Continue run submitted to worker pool", run_id=run_id)
+    submit_task(f"continue:{run_id}", _task)
+    logger.info("Continue run submitted to task queue", run_id=run_id)
 
 
 def submit_skip_testing(run_id: str) -> None:
@@ -161,8 +160,8 @@ def submit_skip_testing(run_id: str) -> None:
             with _local_lock:
                 _local_running.pop(run_id, None)
 
-    _local_executor.submit(_task)
-    logger.info("Skip testing submitted to worker pool", run_id=run_id)
+    submit_task(f"skip:{run_id}", _task)
+    logger.info("Skip testing submitted to task queue", run_id=run_id)
 
 
 def active_count() -> int:
@@ -182,20 +181,11 @@ def init_distributed_queue() -> bool:
 
     try:
         from app.tasks.celery_queue import CeleryTaskQueue
+        from app.tasks.queue import init_queue
         init_queue(CeleryTaskQueue(broker_url))
         logger.info("Distributed task queue initialized", broker_url=broker_url)
         return True
     except ImportError as e:
         logger.warning("Celery not available, falling back to local queue", error=str(e))
         return False
-
-
-def init_queue(queue) -> None:
-    """Initialize the global task queue."""
-    global _local_executor, _local_running
-    if _local_executor:
-        _local_executor.shutdown(wait=False)
-        _local_running.clear()
-    from app.tasks import queue
-    queue.init_queue(queue)
     logger.info("Task queue initialized")

@@ -704,6 +704,23 @@ class ThetaScoreConverter:
             return 100 * (0.5 * (1 + math.erf(theta / math.sqrt(2))))
 
 
+def get_calibrated_params(case_id: str) -> Optional[IRTParameters]:
+    """Get calibrated parameters for a test case from the database.
+    
+    Args:
+        case_id: Test case identifier
+        
+    Returns:
+        IRTParameters or None if not found
+    """
+    db = get_irt_db()
+    result = db.get_parameters(case_id)
+    if result:
+        params, _ = result
+        return params
+    return None
+
+
 def get_irt_db(db_path: Optional[str] = None) -> IRTParameterDB:
     """Get IRT parameter database instance."""
     return IRTParameterDB(db_path)

@@ -231,6 +231,7 @@ def local_semantic_judge(
     required_keywords: list[str] | None = None,
     forbidden_patterns: list[str] | None = None,
     accept_uncertainty: bool = False,
+    pass_threshold: float = 45.0,
 ) -> SemanticResult:
     """Enhanced local semantic evaluation using multi-signal scoring.
 
@@ -238,7 +239,7 @@ def local_semantic_judge(
     five independent scoring dimensions: relevance, completeness, structure,
     constraint compliance, and confidence calibration.
 
-    Total score range: 0-100.  Passing threshold: 45.
+    Total score range: 0-100.
     """
     if required_keywords is None:
         required_keywords = []
@@ -469,7 +470,7 @@ def local_semantic_judge(
     # -- Final aggregation ---------------------------------------------------
     total_score = relevance_score + completeness_score + structure_score + constraint_score + calibration_score
     total_score = max(0.0, min(100.0, total_score))
-    passed = total_score >= 45.0
+    passed = total_score >= pass_threshold
 
     # Confidence is based on how many signal dimensions had actual data
     # (5 possible signal sources: prompt keywords, required keywords,

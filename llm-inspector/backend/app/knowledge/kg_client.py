@@ -12,6 +12,13 @@ from datetime import datetime, timezone
 
 from app.knowledge.wikidata_client import WikidataClient, VerificationResult
 from app.core.logging import get_logger
+import time
+
+try:
+    from SPARQLWrapper import SPARQLWrapper, JSON
+    HAS_SPARQL = True
+except ImportError:
+    HAS_SPARQL = False
 
 logger = get_logger(__name__)
 
@@ -57,7 +64,8 @@ class KnowledgeGraphClient:
     
     # Signal weights for ensemble scoring (from v8 spec)
     SOURCE_WEIGHTS = {
-        "wikidata": 1.0,
+        "dbpedia": 1.0,  # v10: DBpedia has highest priority for factual verification
+        "wikidata": 0.9,
         "cache": 0.9,
         "heuristic": 0.3,
     }
@@ -65,6 +73,7 @@ class KnowledgeGraphClient:
     def __init__(
         self,
         use_wikidata: bool = True,
+        use_dbpedia: bool = True,
         wikidata_rate_limit: float = 0.2,
         cache_size: int = 1000,
     ):
@@ -73,13 +82,16 @@ class KnowledgeGraphClient:
         
         Args:
             use_wikidata: Enable Wikidata API
+            use_dbpedia: Enable DBpedia SPARQL API
             wikidata_rate_limit: Seconds between requests
             cache_size: Max cache entries
         """
         self.use_wikidata = use_wikidata
+        self.use_dbpedia = use_dbpedia and HAS_SPARQL
         self._cache: Dict[str, VerificationResult] = {}
         self._cache_size = cache_size
         self._stats = {
+            "dbpedia": KnowledgeSourceStats("dbpedia"),
             "wikidata": KnowledgeSourceStats("wikidata"),
             "cache": KnowledgeSourceStats("cache"),
             "heuristic": KnowledgeSourceStats("heuristic"),
@@ -114,6 +126,71 @@ class KnowledgeGraphClient:
         
         self._cache[key] = result
     
+    def _dbpedia_verify(self, entity_name: str) -> Optional[VerificationResult]:
+        """
+        Verify entity using DBpedia SPARQL API.
+        Returns VerificationResult if found, None if failed or not found.
+        """
+        if not self.use_dbpedia:
+            return None
+
+        self._stats["dbpedia"].queries_total += 1
+        start_time = time.time()
+        
+        try:
+            sparql = SPARQLWrapper("http://dbpedia.org/sparql")
+            query = f"""
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX dbo: <http://dbpedia.org/ontology/>
+            SELECT ?label ?abstract WHERE {{
+                ?s rdfs:label "{entity_name}"@en ;
+                   dbo:abstract ?abstract .
+                FILTER (lang(?abstract) = 'en')
+            }} LIMIT 1
+            """
+            sparql.setQuery(query)
+            sparql.setReturnFormat(JSON)
+            sparql.setTimeout(5)
+            results = sparql.query().convert()
+            
+            bindings = results.get("results", {}).get("bindings", [])
+            query_time_ms = int((time.time() - start_time) * 1000)
+            
+            if bindings:
+                self._stats["dbpedia"].queries_success += 1
+                self._update_avg_time("dbpedia", query_time_ms)
+                
+                abstract = bindings[0].get("abstract", {}).get("value", "")
+                evidence = ["Found in DBpedia."]
+                if abstract:
+                    # Provide a short snippet of abstract as evidence
+                    evidence.append(f"Abstract snippet: {abstract[:100]}...")
+                
+                return VerificationResult(
+                    is_verified=True,
+                    confidence=1.0,
+                    source="dbpedia",
+                    evidence=evidence,
+                    entity={"label": entity_name},
+                    query_time_ms=query_time_ms
+                )
+            
+            self._update_avg_time("dbpedia", query_time_ms)
+            return None
+            
+        except Exception as e:
+            logger.error(f"DBpedia verification failed for '{entity_name}': {e}")
+            query_time_ms = int((time.time() - start_time) * 1000)
+            self._update_avg_time("dbpedia", query_time_ms)
+            return None
+
+    def _update_avg_time(self, source: str, query_time_ms: int):
+        stats = self._stats[source]
+        stats.avg_response_time_ms = (
+            (stats.avg_response_time_ms * (stats.queries_total - 1) + query_time_ms) / 
+            stats.queries_total
+        )
+
     def _heuristic_verify(self, entity_name: str) -> VerificationResult:
         """
         Heuristic verification based on entity name patterns.
@@ -198,6 +275,12 @@ class KnowledgeGraphClient:
                 query_time_ms=0
             )
         
+        # Try DBpedia (v10 Primary)
+        dbpedia_res = self._dbpedia_verify(entity_name)
+        if dbpedia_res:
+            self._add_to_cache(cache_key, dbpedia_res)
+            return dbpedia_res
+
         # Try Wikidata
         if self._wikidata:
             try:

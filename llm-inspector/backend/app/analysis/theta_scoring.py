@@ -253,7 +253,60 @@ class ThetaScoringEngine:
         theta = max(-4.0, min(4.0, theta))
         
         return (theta, se)
-    
+
+    def calculate_mdirt_theta(
+        self,
+        responses: List[bool],
+        item_params: List[IRTParameters],
+        dimensions: List[str]
+    ) -> Dict[str, ThetaScore]:
+        """
+        v10: Multidimensional Item Response Theory (MDIRT) estimation.
+        Calculates orthogonal theta vector.
+        
+        Reference: Reckase (2009) Multidimensional Item Response Theory
+        
+        Returns:
+            Dict mapping dimension to ThetaScore (Standardized: Mean=500, SD=100)
+        """
+        # Map items to dimensions
+        dim_items = {}
+        for resp, param, dim in zip(responses, item_params, dimensions):
+            if resp is not None:
+                dim_items.setdefault(dim, []).append((resp, param))
+        
+        results = {}
+        for dim, items in dim_items.items():
+            dim_resps = [i[0] for i in items]
+            dim_params = [i[1] for i in items]
+            
+            # Estimate raw theta (-4 to 4)
+            raw_theta, se = self._mle_estimate(dim_resps, dim_params)
+            
+            # Convert to Standard Score (Mean 500, SD 100)
+            # theta=0 -> 500, theta=1 -> 600
+            standard_score = 500 + (raw_theta * 100)
+            standard_se = se * 100
+            
+            # Calculate info and reliability
+            total_info = sum(p.calculate_information(raw_theta) for p in dim_params)
+            reliability = total_info / (total_info + 1) if total_info > 0 else 0.0
+            
+            results[dim] = ThetaScore(
+                theta=standard_score,
+                standard_error=standard_se,
+                dimension=dim,
+                item_count=len(dim_resps),
+                test_length=len(dim_resps),
+                reliability=reliability,
+                information=total_info
+            )
+            # Override CI for standard score
+            results[dim].ci_lower = standard_score - (1.96 * standard_se)
+            results[dim].ci_upper = standard_score + (1.96 * standard_se)
+            
+        return results
+
     def _wle_estimate(
         self,
         responses: List[bool],

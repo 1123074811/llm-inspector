@@ -37,7 +37,7 @@ def _difficulty_to_irt_b(difficulty: float | None) -> float:
 
 def _seed_test_cases() -> None:
     total = 0
-    for suite_file in ("suite_v3.json", "suite_v2.json", "suite_v1.json", "suite_extraction.json", "suite_v1.js"):
+    for suite_file in ("suite_v10.json", "suite_v3.json", "suite_v2.json", "suite_v1.json", "suite_extraction.json", "suite_v1.js"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             continue

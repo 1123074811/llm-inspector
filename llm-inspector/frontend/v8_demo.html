@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>LLM Inspector v8.0 Phase 5 Demo</title>
+<title>LLM Inspector v10.0 Demo</title>
 
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="v8_styles.css">
@@ -91,20 +91,34 @@
 .status-ok { background: #1a6040; }
 .status-warn { background: #7a4a00; }
 .status-error { background: #8a1a1a; }
+
+/* v10 SSE Console */
+.sse-console {
+  background: #000;
+  color: #0f0;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 10px;
+  height: 200px;
+  overflow-y: scroll;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  margin-top: 10px;
+}
 </style>
 
 </head>
 <body>
 
 <nav>
-  <div class="nav-brand">LLM <span>Inspector</span> <span style="color: var(--ink4); font-weight: normal;">v8.0 Phase 5 Demo</span></div>
+  <div class="nav-brand">LLM <span>Inspector</span> <span style="color: var(--ink4); font-weight: normal;">v10.0 Demo</span></div>
   <div class="nav-spacer"></div>
   <div class="nav-status" id="nav-status">ready</div>
 </nav>
 
 <div class="demo-section">
-  <div class="demo-title">v8.0 Phase 5 前端升级演示</div>
-  <div class="demo-subtitle">数据来源可视化 · 置信度区间显示 · 实时判题过程展示</div>
+  <div class="demo-title">v10.0 前端核心功能演示</div>
+  <div class="demo-subtitle">MDIRT 标准分 · SSE 实时判题日志 · CoVe 链式校验展示</div>
 
   <!-- ═══════════════════════ SECTION 1: Provenance Visualization ═══════════════════════ -->
   <div class="card" style="margin-bottom: 24px;">
@@ -142,16 +156,16 @@
 
   <!-- ═══════════════════════ SECTION 2: Confidence Intervals ═══════════════════════ -->
   <div class="card" style="margin-bottom: 24px;">
-    <div class="card-label">置信度区间显示</div>
+    <div class="card-label">MDIRT 标准分展示 (v10)</div>
     
     <div class="demo-grid">
       <div class="demo-card">
-        <h3>📈 置信区间条</h3>
+        <h3>📈 MDIRT 标准分 (均值500, 标准差100)</h3>
         <div id="confidence-intervals"></div>
         <div class="demo-controls">
-          <button class="btn" onclick="addConfidenceInterval(0.75, 0.70, 0.80, 0.95)">高置信 (95%)</button>
-          <button class="btn" onclick="addConfidenceInterval(0.65, 0.55, 0.75, 0.80)">中置信 (80%)</button>
-          <button class="btn" onclick="addConfidenceInterval(0.45, 0.35, 0.55, 0.70)">低置信 (70%)</button>
+          <button class="btn" onclick="addConfidenceInterval(650, 610, 690, 0.95)">高置信标准分 (650)</button>
+          <button class="btn" onclick="addConfidenceInterval(500, 420, 580, 0.80)">平均标准分 (500)</button>
+          <button class="btn" onclick="addConfidenceInterval(350, 250, 450, 0.70)">低置信标准分 (350)</button>
         </div>
       </div>
       
@@ -169,29 +183,28 @@
 
   <!-- ═══════════════════════ SECTION 3: Real-time Judgment ═══════════════════════ -->
   <div class="card" style="margin-bottom: 24px;">
-    <div class="card-label">实时判题过程展示</div>
+    <div class="card-label">SSE 实时日志与 CoVe 校验</div>
     
     <div class="demo-grid">
       <div class="demo-card">
-        <h3>⏱️ 判题过程可视化</h3>
+        <h3>⏱️ CoVe 链式校验可视化</h3>
         <div id="judgment-process"></div>
         <div class="demo-controls">
-          <button class="btn" onclick="initJudgmentProcess()">初始化</button>
-          <button class="btn" onclick="startJudgmentStep(0)">开始第1步</button>
-          <button class="btn" onclick="startJudgmentStep(1)">开始第2步</button>
-          <button class="btn" onclick="completeJudgmentStep(0, true)">完成第1步</button>
-          <button class="btn" onclick="completeJudgmentStep(1, false)">完成第2步(失败)</button>
+          <button class="btn" onclick="initCoveProcess()">初始化 CoVe</button>
+          <button class="btn" onclick="startJudgmentStep(0)">1. 生成验证问题</button>
+          <button class="btn" onclick="startJudgmentStep(1)">2. 独立回答</button>
+          <button class="btn" onclick="startJudgmentStep(2)">3. 交叉比对</button>
+          <button class="btn" onclick="completeJudgmentStep(2, true)">完成判定</button>
         </div>
       </div>
       
       <div class="demo-card">
-        <h3>📝 判题日志流</h3>
-        <div id="judgment-log-stream"></div>
+        <h3>📝 SSE 实时服务器日志流</h3>
         <div class="demo-controls">
-          <button class="btn" onclick="initLogStream()">初始化</button>
-          <button class="btn" onclick="addLogEntry('step')">添加步骤日志</button>
-          <button class="btn" onclick="addLogEntry('threshold')">添加阈值日志</button>
+          <button class="btn" onclick="startMockSSE()">模拟连接 SSE</button>
+          <button class="btn" onclick="stopMockSSE()">断开 SSE</button>
         </div>
+        <div id="sse-console" class="sse-console">等待连接...</div>
       </div>
     </div>
   </div>
@@ -322,56 +335,69 @@ function addScoreCard(grade, value, lower, upper) {
 // ═══════════════════════════════════════════════════════════════
 
 let judgmentViz = null;
-let logStream = null;
+let mockSseInterval = null;
 
-function initJudgmentProcess() {
+function initCoveProcess() {
   const container = document.getElementById('judgment-process');
   container.innerHTML = '<div id="judgment-viz-container"></div>';
   
   judgmentViz = new window.v8Components.JudgmentProcessVisualizer('judgment-viz-container');
   
   judgmentViz.init([
-    { id: 'step1', name: '关键词覆盖检测', description: '检查响应中关键词的覆盖情况' },
-    { id: 'step2', name: '边界信号验证', description: '验证边界条件的满足程度' },
-    { id: 'step3', name: '反模式检测', description: '检测是否存在反模式' },
-    { id: 'step4', name: '最终判定', description: '综合评估并给出最终判定' }
+    { id: 'step1', name: '生成验证问题', description: '基于回答生成事实核查问题' },
+    { id: 'step2', name: '独立回答问题', description: '大模型独立对核查问题进行回答' },
+    { id: 'step3', name: '交叉比对验证', description: '比对事实与原始回答是否矛盾' }
   ]);
 }
 
 function startJudgmentStep(index) {
-  if (!judgmentViz) initJudgmentProcess();
-  const stepIds = ['step1', 'step2', 'step3', 'step4'];
+  if (!judgmentViz) initCoveProcess();
+  const stepIds = ['step1', 'step2', 'step3'];
   judgmentViz.startStep(stepIds[index]);
 }
 
 function completeJudgmentStep(index, passed) {
   if (!judgmentViz) return;
-  const stepIds = ['step1', 'step2', 'step3', 'step4'];
+  const stepIds = ['step1', 'step2', 'step3'];
   judgmentViz.completeStep(stepIds[index], {
     passed: passed,
-    confidence: passed ? 0.92 : 0.65
+    confidence: passed ? 0.95 : 0.65
   });
 }
 
-function initLogStream() {
-  const container = document.getElementById('judgment-log-stream');
-  container.innerHTML = '<div id="log-stream-container"></div>';
+function startMockSSE() {
+  const consoleEl = document.getElementById('sse-console');
+  consoleEl.innerHTML = "Connected to /api/v10/runs/mock_id/logs/stream...\n";
   
-  logStream = new window.v8Components.JudgmentLogStream('log-stream-container');
-  logStream.render();
+  if (mockSseInterval) clearInterval(mockSseInterval);
+  
+  const mockLogs = [
+    { level: "info", msg: "Run submitted to task queue", kwargs: { run_id: "mock_id", async_enabled: true } },
+    { level: "info", msg: "Async executing case", kwargs: { case_id: "reason_aime_2024_01", sample: 0 } },
+    { level: "debug", msg: "Prompt compressed.", kwargs: { "Ratio": 0.85, "Length": "120 -> 102" } },
+    { level: "info", msg: "Case done", kwargs: { case_id: "reason_aime_2024_01", pass_rate: 1.0, tokens: 420 } },
+    { level: "info", msg: "v10 CAT early stopping triggered (SEM < 0.3 for all dims)", kwargs: { test_mode: "quick", cases_run: 10 } }
+  ];
+  
+  let i = 0;
+  mockSseInterval = setInterval(() => {
+    if (i < mockLogs.length) {
+      const log = mockLogs[i];
+      const timeStr = new Date().toISOString().split('T')[1].substring(0, 8);
+      const logStr = `[${timeStr}] [${log.level.toUpperCase()}] ${log.msg} | ${JSON.stringify(log.kwargs)}\n`;
+      consoleEl.innerHTML += logStr;
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+      i++;
+    } else {
+      clearInterval(mockSseInterval);
+      consoleEl.innerHTML += "\nStream ended.\n";
+    }
+  }, 1000);
 }
 
-function addLogEntry(type) {
-  if (!logStream) initLogStream();
-  
-  if (type === 'step') {
-    logStream.addStepLog('keyword_coverage', {
-      input: { constraints: ['boundary', 'answer', 'calculated'] },
-      output: { coverage: 0.67, matched: ['boundary', 'answer'] }
-    });
-  } else if (type === 'threshold') {
-    logStream.addThresholdLog('coverage_threshold', 0.50, 'irt_calibration_v2026q1');
-  }
+function stopMockSSE() {
+  if (mockSseInterval) clearInterval(mockSseInterval);
+  document.getElementById('sse-console').innerHTML += "\nDisconnected.\n";
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -203,6 +203,8 @@ async function submitRun() {
 
 // ── Task detail page ───────────────────────────────────────────────────────
 
+let _eventSource = null;
+
 function openTask(runId) {
   _currentRunId = runId;
   _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued', lastLayer: null, lastProbe: null, lastEvidenceCount: 0 };
@@ -214,8 +216,31 @@ function openTask(runId) {
     '<div class="loading"><div class="spinner"></div><div>检测进行中，请稍候...</div></div>';
 
   if (_pollTimer) clearInterval(_pollTimer);
+  if (_eventSource) { _eventSource.close(); _eventSource = null; }
+
+  // Fallback polling for overall progress
   _pollTimer = setInterval(() => pollTask(runId), 2000);
   pollTask(runId);
+
+  // Setup SSE for real-time logs
+  setupSSE(runId);
+}
+
+function setupSSE(runId) {
+  _eventSource = new EventSource(API + '/api/v8/runs/' + runId + '/stream');
+  _eventSource.onmessage = (e) => {
+    try {
+      const log = JSON.parse(e.data);
+      if (log.message) {
+        pushConsole(`[SSE] ${log.message}`, log.level === 'error' ? 'del' : 'normal');
+      } else if (log.event === 'judgment') {
+        pushConsole(`[SSE 判题] ${log.method}: ${log.result?.passed ? '通过' : '未通过'}`, log.result?.passed ? 'normal' : 'del');
+      }
+    } catch (err) {}
+  };
+  _eventSource.onerror = () => {
+    _eventSource.close();
+  };
 }
 
 async function pollTask(runId) {
@@ -953,9 +978,9 @@ function renderReport(r) {
 
     html += `
       <div class="card">
-        <h2>相对能力标尺（Theta）</h2>
+        <h2>MDIRT 标准分 (均值500, 标准差100)</h2>
         <div class="score-grid" style="grid-template-columns:repeat(2,1fr)">
-          ${scoreCard(theta.global_theta, '综合评估水平 (θ)')}
+          ${scoreCard(theta.global_theta, '综合评估水平 (MDIRT)')}
           ${scoreCard(theta.global_percentile == null ? '-' : `${Number(theta.global_percentile).toFixed(1)}%`, '击败同期主流模型')}
         </div>
         <div class="card" style="margin-top:8px;padding:10px">${dimRows || '<div style="font-size:12px;color:var(--ink4)">暂无维度数据</div>'}</div>

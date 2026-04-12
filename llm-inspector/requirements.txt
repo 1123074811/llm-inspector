@@ -22,6 +22,12 @@ scipy>=1.10.0
 # RECOMMENDED DEPENDENCIES (Auto-installed)
 # ============================================
 
+# v10 Core Async Queue and Knowledge Graph
+celery>=5.3.6
+redis>=5.0.1
+SPARQLWrapper>=2.0.0
+tiktoken>=0.6.0
+
 # Local semantic similarity for Semantic Judge v3 Tier 2
 # Falls back to rule-based evaluation if not installed
 sentence-transformers>=2.2.0

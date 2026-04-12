@@ -522,6 +522,7 @@ def semantic_judge_v3(
     response: str,
     reference: str,
     rubric: Optional[Dict[str, Any]] = None,
+    pass_threshold: float = 60.0,
     **kwargs
 ) -> Tuple[bool, Dict[str, Any]]:
     """
@@ -531,6 +532,7 @@ def semantic_judge_v3(
         response: Response to evaluate
         reference: Reference answer
         rubric: Evaluation criteria
+        pass_threshold: Threshold to pass
         **kwargs: Additional options for SemanticJudgeV3
         
     Returns:
@@ -547,12 +549,12 @@ def semantic_judge_v3(
     
     result = judge.judge(response, reference, rubric)
     
-    # Determine pass/fail (threshold 60/100)
-    passed = result.score >= 60.0
+    # Determine pass/fail
+    passed = result.score >= pass_threshold
     
     detail = result.to_dict()
     detail["passed"] = passed
-    detail["threshold"] = 60.0
+    detail["threshold"] = pass_threshold
     
     return passed, detail
 

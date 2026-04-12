@@ -413,6 +413,8 @@ class LineCountPlugin(JudgePlugin):
 
 
 # Registry of all built-in plugins
+from app.judge.transparent_judge import ChainOfVerificationJudge
+
 BUILTIN_PLUGINS = [
     ExactMatchPlugin,
     RegexMatchPlugin,
@@ -420,6 +422,7 @@ BUILTIN_PLUGINS = [
     ConstraintReasoningPlugin,
     RefusalDetectPlugin,
     LineCountPlugin,
+    ChainOfVerificationJudge,
 ]
 
 

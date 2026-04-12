@@ -140,7 +140,7 @@ class SemanticJudgeV2:
             # LLM评分失败，退回到嵌入相似度
             final_score = emb_score * 100
             return SemanticJudgeResult(
-                passed=final_score >= 60,
+                passed=final_score >= pass_threshold,
                 score=final_score,
                 confidence=0.5,
                 method="embedding_fallback",
@@ -167,7 +167,7 @@ class SemanticJudgeV2:
         }
         
         return SemanticJudgeResult(
-            passed=bool(final_score >= 60),  # 从45提升到60
+            passed=bool(final_score >= pass_threshold),
             score=final_score,
             confidence=float(llm_scores.confidence),
             method="semantic_v2",

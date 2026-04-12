@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.adapters.openai_compat import OpenAICompatibleAdapter
 from app.predetect.pipeline import PreDetectionPipeline
 from app.runner.case_executor import execute_case
+from app.runner.compression import compressor as prompt_compressor
 from app.analysis.pipeline import (
     FeatureExtractor, ScoreCalculator,
     SimilarityEngine, RiskEngine, ReportBuilder,
@@ -214,20 +215,25 @@ class TokenBudgetGuard:
 
 
 def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
-    """Load test cases from DB (seeded from fixture JSON)."""
+    """Load test cases from DB (seeded from fixture JSON) and compress prompts."""
     raw_cases = repo.load_cases(suite_version, test_mode)
     cases = []
     for c in raw_cases:
         params = c.get("params", {})
         meta = (params.get("_meta") or {})
+        
+        # v10: Lossless prompt compression
+        compressed_user = prompt_compressor.compress(c["user_prompt"])
+        compressed_system = prompt_compressor.compress(c.get("system_prompt", "")) if c.get("system_prompt") else None
+
         cases.append(TestCase(
             id=c["id"],
             category=c["category"],
             name=c["name"],
-            user_prompt=c["user_prompt"],
+            user_prompt=compressed_user,
             expected_type=c["expected_type"],
             judge_method=c["judge_method"],
-            system_prompt=c.get("system_prompt"),
+            system_prompt=compressed_system,
             dimension=meta.get("dimension") or c.get("dimension"),
             tags=meta.get("tags") or c.get("tags", []),
             judge_rubric=meta.get("judge_rubric") or c.get("judge_rubric", {}),
@@ -637,9 +643,45 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     if not case_results:
         return False, features_cache, sims_cache, scorecard_cache
 
+    # v10: Computerized Adaptive Testing (CAT) early stopping
+    # If standard error of measurement (SEM) is low enough, we can stop early
+    total_cases = len(case_results)
+    if total_cases >= 10:
+        # Check CAT threshold
+        from app.analysis.irt_params import get_calibrated_params
+        
+        dim_info = {}
+        for cr in case_results:
+            dim = getattr(cr.case, 'dimension', 'unknown')
+            params = get_calibrated_params(cr.case.id)
+            if params:
+                # We don't know exact theta here without full recalculation, 
+                # so we use expected information at theta=0 as a heuristic proxy
+                info = params.calculate_information(0.0)
+                dim_info[dim] = dim_info.get(dim, 0.0) + info
+                
+        # If all major dimensions have SEM < 0.3 (Info > 11.1)
+        cat_satisfied = True
+        major_dims = [d for d in dim_info.keys() if d != "unknown"]
+        
+        if len(major_dims) >= 3:
+            for dim in major_dims:
+                info = dim_info[dim]
+                sem = 1.0 / (info ** 0.5) if info > 0 else 999.0
+                if sem > 0.3:
+                    cat_satisfied = False
+                    break
+                    
+            if cat_satisfied and test_mode != "deep":
+                logger.info(
+                    "v10 CAT early stopping triggered (SEM < 0.3 for all dims)",
+                    test_mode=test_mode,
+                    cases_run=total_cases
+                )
+                return True, features_cache, sims_cache, scorecard_cache
+
     # v6: Failure rate early stop for all modes
     # If error rate > 80% after 10 cases, abort early (API likely broken)
-    total_cases = len(case_results)
     if total_cases >= 10:
         failed_cases = sum(1 for r in case_results if r.pass_rate == 0.0)
         fail_rate = failed_cases / total_cases

@@ -662,16 +662,16 @@ def create_baseline(run_id: str, model_name: str, display_name: str, notes: str 
     ).fetchone()
     if not run:
         raise ValueError("run_id not found")
-    if run["status"] not in ("completed", "partial_failed"):
+    
+    # 允许在 queued 状态下创建（Mode 2：创建并排队）
+    if run["status"] not in ("completed", "partial_failed", "queued"):
         raise ValueError("run is not completed")
 
     feature_rows = conn.execute(
         "SELECT feature_name, feature_value FROM extracted_features WHERE run_id=?",
         (run_id,),
     ).fetchall()
-    if not feature_rows:
-        raise ValueError("no extracted_features found for run")
-    feature_vector = {r["feature_name"]: float(r["feature_value"] or 0.0) for r in feature_rows}
+    feature_vector = {r["feature_name"]: float(r["feature_value"] or 0.0) for r in feature_rows} if feature_rows else {}
 
     score_rows = conn.execute(
         "SELECT dimension, score FROM score_breakdown WHERE run_id=?",

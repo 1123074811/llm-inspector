@@ -101,10 +101,28 @@ async def async_execute_case(adapter, model_name: str, case: TestCase) -> CaseRe
         )
 
         try:
-            resp = await _achat(adapter, req)
+            # v10: Exponential Backoff with Jitter for robust execution
+            import random
+            max_retries = 3
+            base_delay = 1.0
+            for attempt in range(max_retries):
+                try:
+                    resp = await _achat(adapter, req)
+                    break
+                except Exception as e:
+                    is_rate_limit = "429" in str(e) or "rate_limit" in getattr(e, "error_type", "")
+                    if attempt < max_retries - 1 and is_rate_limit:
+                        sleep_time = random.uniform(0, min(60.0, base_delay * (2 ** attempt)))
+                        logger.warning(
+                            "Rate limited, retrying with exponential backoff",
+                            case_id=case.id, attempt=attempt+1, sleep_sec=sleep_time
+                        )
+                        await asyncio.sleep(sleep_time)
+                    else:
+                        raise e
         except Exception as e:
             logger.error(
-                "Async adapter chat failed",
+                "Async adapter chat failed after retries",
                 case_id=case.id, sample=i, category=case.category,
                 error=str(e), error_type=type(e).__name__,
             )

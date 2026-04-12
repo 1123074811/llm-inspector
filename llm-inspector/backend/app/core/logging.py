@@ -8,6 +8,13 @@ import sys
 import time
 from app.core.config import settings
 
+# Global SSE publisher (initialized in routes/main)
+_sse_publisher = None
+
+def set_sse_publisher(publisher):
+    """Set the global SSE publisher for real-time logs."""
+    global _sse_publisher
+    _sse_publisher = publisher
 
 class StructuredLogger:
     """Wraps stdlib Logger to accept keyword args like structlog."""
@@ -19,18 +26,34 @@ class StructuredLogger:
             extras = " ".join(f"{k}={v!r}" for k, v in kwargs.items())
             return f"{msg} | {extras}"
         return msg
+    
+    def _publish_sse(self, level: str, msg: str, kwargs: dict):
+        if _sse_publisher and "run_id" in kwargs:
+            try:
+                _sse_publisher.publish(kwargs["run_id"], {
+                    "level": level,
+                    "msg": msg,
+                    "kwargs": kwargs,
+                    "ts": time.time()
+                })
+            except Exception:
+                pass
 
     def info(self, msg: str, **kwargs):
         self._log.info(self._fmt(msg, kwargs))
+        self._publish_sse("info", msg, kwargs)
 
     def warning(self, msg: str, **kwargs):
         self._log.warning(self._fmt(msg, kwargs))
+        self._publish_sse("warning", msg, kwargs)
 
     def error(self, msg: str, **kwargs):
         self._log.error(self._fmt(msg, kwargs))
+        self._publish_sse("error", msg, kwargs)
 
     def debug(self, msg: str, **kwargs):
         self._log.debug(self._fmt(msg, kwargs))
+        self._publish_sse("debug", msg, kwargs)
 
 
 class JsonFormatter(logging.Formatter):

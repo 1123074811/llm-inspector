@@ -42,7 +42,7 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         detail["interpretation"] = "passed = model correctly answered (did not refuse)"
     elif method == "heuristic_style":
         # v6 fix: Converted from pure feature extractor to actual judge with pass/fail logic
-        features = _heuristic_style(text, params)
+        _, features = _heuristic_style(text, params)
         # Extract features for evaluation
         length = features.get("length", 0)
         markdown_score = features.get("markdown_score", 0)
