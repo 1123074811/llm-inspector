@@ -34,6 +34,8 @@ backend/app/
 │   ├── neural_similarity.py # 神经相似度
 │   ├── verdict_engine.py   # 硬规则判定引擎
 │   ├── attribution.py      # Shapley Value 归因
+│   ├── cdm_engine.py       # v11 DINA 认知诊断模型（微技能掌握概率估计）
+│   ├── shapley_attribution.py # v11 Shapley Value 评分归因（KernelSHAP 近似）
 │   ├── elo.py              # ELO 排行榜
 │   ├── factor_analysis.py  # 因子分析
 │   └── adaptive_testing.py # CAT 自适应测试
@@ -177,6 +179,21 @@ Theta 标准分: 均值=500, SD=100
 - SEM（测量标准误）驱动的提前终止
 - 三阶段: Sentinel → Core → Expansion
 
+### v11 CDM 认知诊断模型 (DINA)
+- 精细化微技能掌握概率估计，弥补 MDIRT 只给出维度分而不区分子技能的不足
+- 技能分类体系: 10+ 维度 × 2-4 微技能/维度 = 30+ 微技能
+- Q-矩阵: 自动从 CaseResult 构建题项-技能映射（支持 EvalTestCase.skill_vector 精确映射）
+- DINA 模型: 滑动(g)和猜测(s)参数估计 → 二值掌握模式(α) → 掌握概率
+- 输出: CDMReport（mastery_profile, attribute_pattern, strongest/weakest_skills, confidence）
+
+### v11 Shapley Value 评分归因
+- 回答"总分差了多少，每个特征贡献了多少"的归因问题
+- 12 个可归因特征: reasoning, adversarial_reasoning, instruction, coding, safety, protocol, consistency, behavioral_invariant, extraction_resistance, fingerprint_match, speed, stability
+- 值函数: 与 ScoreCard 一致的加权公式 (0.45×Capability + 0.30×Authenticity + 0.25×Performance)
+- KernelSHAP 近似: 采样 500 个子集求解加权最小二乘，O(N×M) 复杂度
+- 满足 Shapley 四公理: 效率性/对称性/虚拟玩家/可加性
+- 输出: AttributionReport（per-feature Shapley值, 贡献百分比, 正/负向排名, 叙事说明）
+
 ## Fingerprint System
 - **Tokenizer 覆盖 (8 种)**: tiktoken-cl100k, tiktoken-o200k, claude, llama-spm, deepseek, qwen, chatglm, yi
 - **探针词 (5 个)**: multimodality, cryptocurrency, hallucination, supercalifragilistic, counterintuitive
@@ -309,6 +326,11 @@ POST   /api/v1/circuit-breaker/reset      # 重置断路器
 GET    /api/v1/runs/{id}/trace            # 追踪数据
 GET    /api/v1/tracer/progress            # 所有活跃追踪进度
 
+# v11 CDM & Attribution (Phase 2)
+GET    /api/v1/cdm/skills                 # CDM 技能分类体系
+GET    /api/v1/runs/{id}/cdm              # CDM 认知诊断报告
+GET    /api/v1/runs/{id}/attribution      # Shapley Value 评分归因
+
 # v8 Transparency
 GET    /api/v8/health
 GET    /api/v8/plugins
@@ -340,6 +362,9 @@ GET    /api/v10/runs/{id}/logs/stream
   - `test_all.py` — 主测试套件
   - `test_v8_phase1.py` / `test_v8_phase4.py` / `test_v8_phase5.py` — v8 分阶段测试
   - `test_v9_phasea_regression.py` / `test_v9_phaseb_regression.py` / `test_v9_phasec_regression.py` — v9 回归测试
+  - `test_core_pipeline.py` — 核心管线单元测试（54 passed）
+  - `test_v11_phase1.py` — v11 Phase 1 测试（43 passed: 断路器+追踪器+EvalSchema）
+  - `test_v11_phase2.py` — v11 Phase 2 测试（27 passed: CDM引擎+Shapley归因+Handler）
 - 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http
 
 ## Task Queue Architecture

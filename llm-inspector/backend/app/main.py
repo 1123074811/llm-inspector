@@ -57,6 +57,9 @@ from app.handlers.v11_handlers import (
     handle_circuit_breaker_reset,
     handle_run_trace,
     handle_tracer_progress_all,
+    handle_run_cdm,
+    handle_run_attribution,
+    handle_cdm_skills,
 )
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
@@ -127,6 +130,10 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("POST",   r"^/api/v1/circuit-breaker/reset$",     handle_circuit_breaker_reset),
     ("GET",    r"^/api/v1/runs/[^/]+/trace$",          handle_run_trace),
     ("GET",    r"^/api/v1/tracers/progress$",           handle_tracer_progress_all),
+    # v11 Phase 2: CDM + Attribution
+    ("GET",    r"^/api/v1/runs/[^/]+/cdm$",            handle_run_cdm),
+    ("GET",    r"^/api/v1/runs/[^/]+/attribution$",    handle_run_attribution),
+    ("GET",    r"^/api/v1/cdm/skills$",                 handle_cdm_skills),
 ]
 
 

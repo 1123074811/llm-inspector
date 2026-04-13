@@ -15,6 +15,8 @@ from app.core.schemas import (
 from app.core.eval_schemas import EvalTestCase
 from app.core.circuit_breaker import circuit_breaker, CircuitState
 from app.core.tracer import get_tracer, remove_tracer
+from app.analysis.cdm_engine import cdm_engine
+from app.analysis.shapley_attribution import shapley_attributor
 from app.core.logging import get_logger
 from app.core.security import get_key_manager
 from app.core.config import settings
@@ -1487,6 +1489,38 @@ def _build_and_save_report(
             logger.error("Failed to update ELO rankings", error=str(e))
 
     # Build final report
+    # v11: CDM (Cognitive Diagnostic Model) — per-skill mastery diagnosis
+    cdm_report = None
+    try:
+        cdm_report = cdm_engine.diagnose(case_results, theta_report)
+        logger.info(
+            "CDM diagnosis complete",
+            run_id=run_id,
+            n_skills=cdm_report.n_skills,
+            overall_mastery=round(cdm_report.overall_mastery_rate, 3),
+            weakest=cdm_report.weakest_skills[:3],
+        )
+    except Exception as e:
+        logger.warning("CDM diagnosis failed, continuing without it", error=str(e))
+
+    # v11: Shapley Value attribution — score decomposition
+    attribution_report = None
+    try:
+        attribution_report = shapley_attributor.attribute(
+            scorecard=scorecard,
+            verdict=verdict,
+            features=features,
+        )
+        logger.info(
+            "Shapley attribution complete",
+            run_id=run_id,
+            score_delta=round(attribution_report.score_delta, 1),
+            top_positive=attribution_report.top_positive[:3],
+            top_negative=attribution_report.top_negative[:3],
+        )
+    except Exception as e:
+        logger.warning("Shapley attribution failed, continuing without it", error=str(e))
+
     builder = ReportBuilder()
     report = builder.build(
         run_id=run_id,
@@ -1506,6 +1540,13 @@ def _build_and_save_report(
         scoring_profile_version=scoring_profile_version,
         calibration_tag=calibration_tag,
     )
+
+    # v11: Append CDM and Shapley reports to the final report
+    if cdm_report is not None:
+        report["cdm"] = cdm_report.to_dict()
+    if attribution_report is not None:
+        report["attribution"] = attribution_report.to_dict()
+
     repo.save_report(run_id, report)
     return report
 

@@ -1,11 +1,17 @@
 """
-v11 API handlers — Circuit Breaker + Pipeline Tracing endpoints.
+v11 API handlers — Circuit Breaker + Pipeline Tracing + CDM + Attribution endpoints.
 
-Phase 1 of the v11 upgrade plan:
+Phase 1:
 - GET /api/v1/circuit-breaker          → circuit breaker state for all endpoints
-- GET /api/v1/circuit-breaker/{url}    → circuit breaker state for specific endpoint
+- GET /api/v1/circuit-breaker?url=<u>  → circuit breaker state for specific endpoint
 - POST /api/v1/circuit-breaker/reset   → reset circuit breaker (admin)
 - GET /api/v1/runs/{id}/trace          → pipeline trace for a completed/active run
+- GET /api/v1/tracers/progress         → progress info for all active tracers
+
+Phase 2:
+- GET /api/v1/runs/{id}/cdm            → CDM skill mastery diagnosis
+- GET /api/v1/runs/{id}/attribution    → Shapley Value score attribution
+- GET /api/v1/cdm/skills               → list all CDM skills (taxonomy)
 """
 from __future__ import annotations
 
@@ -65,7 +71,7 @@ def handle_run_trace(path: str, qs: dict, body: dict):
     parts = path.strip("/").split("/")
     # /api/v1/runs/{run_id}/trace
     if len(parts) < 4:
-        return _error(400, "Invalid trace path")
+        return _error("Invalid trace path", 400)
     run_id = parts[3]
 
     tracer = get_tracer(run_id)
@@ -96,4 +102,89 @@ def handle_tracer_progress_all(path: str, qs: dict, body: dict):
     return _json({
         "active_tracers": len(progress),
         "tracers": progress,
+    })
+
+
+# ── Phase 2: CDM + Attribution ──────────────────────────────────────────────
+
+def handle_run_cdm(path: str, qs: dict, body: dict):
+    """
+    GET /api/v1/runs/{id}/cdm
+
+    Returns CDM (Cognitive Diagnostic Model) skill mastery diagnosis
+    for a completed run. Includes per-skill mastery probabilities,
+    attribute pattern, and strongest/weakest skills.
+    """
+    parts = path.strip("/").split("/")
+    # /api/v1/runs/{run_id}/cdm
+    if len(parts) < 4:
+        return _error("Invalid CDM path", 400)
+    run_id = parts[3]
+
+    from app.repository import repo
+    report = repo.get_report(run_id)
+    if not report:
+        return _error(f"Run {run_id} not found", 404)
+
+    cdm_data = report.get("cdm")
+    if not cdm_data:
+        return _json({
+            "run_id": run_id,
+            "status": "unavailable",
+            "message": "CDM diagnosis not available for this run. Re-run with v11 pipeline to enable CDM.",
+        })
+
+    return _json({
+        "run_id": run_id,
+        "status": "available",
+        **cdm_data,
+    })
+
+
+def handle_run_attribution(path: str, qs: dict, body: dict):
+    """
+    GET /api/v1/runs/{id}/attribution
+
+    Returns Shapley Value score attribution for a completed run.
+    Shows which features/dimensions contributed most to the final score,
+    and how much each contributed.
+    """
+    parts = path.strip("/").split("/")
+    # /api/v1/runs/{run_id}/attribution
+    if len(parts) < 4:
+        return _error("Invalid attribution path", 400)
+    run_id = parts[3]
+
+    from app.repository import repo
+    report = repo.get_report(run_id)
+    if not report:
+        return _error(f"Run {run_id} not found", 404)
+
+    attr_data = report.get("attribution")
+    if not attr_data:
+        return _json({
+            "run_id": run_id,
+            "status": "unavailable",
+            "message": "Score attribution not available for this run. Re-run with v11 pipeline to enable attribution.",
+        })
+
+    return _json({
+        "run_id": run_id,
+        "status": "available",
+        **attr_data,
+    })
+
+
+def handle_cdm_skills(path: str, qs: dict, body: dict):
+    """
+    GET /api/v1/cdm/skills
+
+    Returns the CDM skill taxonomy — all micro-skills and their
+    dimension mappings. Useful for frontend skill radar chart.
+    """
+    from app.analysis.cdm_engine import SKILL_TAXONOMY, ALL_SKILLS
+    return _json({
+        "total_skills": len(ALL_SKILLS),
+        "skills": ALL_SKILLS,
+        "taxonomy": SKILL_TAXONOMY,
     })
