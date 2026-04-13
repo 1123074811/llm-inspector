@@ -17,6 +17,8 @@ from app.core.circuit_breaker import circuit_breaker, CircuitState
 from app.core.tracer import get_tracer, remove_tracer
 from app.analysis.cdm_engine import cdm_engine
 from app.analysis.shapley_attribution import shapley_attributor
+from app.analysis.suite_pruner import suite_pruner, gpqa_adapter
+from app.runner.prompt_optimizer import prompt_optimizer
 from app.core.logging import get_logger
 from app.core.security import get_key_manager
 from app.core.config import settings
@@ -1521,6 +1523,31 @@ def _build_and_save_report(
     except Exception as e:
         logger.warning("Shapley attribution failed, continuing without it", error=str(e))
 
+    # v11 Phase 3: Suite pruning analysis — mark non-discriminative cases
+    pruning_report = None
+    try:
+        case_dicts = [
+            {
+                "id": cr.case.id,
+                "irt_a": cr.case.irt_a,
+                "irt_b": cr.case.irt_b,
+                "irt_c": cr.case.irt_c if hasattr(cr.case, 'irt_c') else 0.25,
+                "weight": cr.case.weight,
+                "max_tokens": cr.case.max_tokens,
+            }
+            for cr in case_results
+        ]
+        pruning_report = suite_pruner.analyze_suite(case_dicts)
+        logger.info(
+            "Suite pruning analysis complete",
+            run_id=run_id,
+            total=pruning_report.total_cases,
+            non_discriminative=pruning_report.non_discriminative_cases,
+            token_savings=f"{pruning_report.estimated_token_savings_pct:.1f}%",
+        )
+    except Exception as e:
+        logger.warning("Suite pruning analysis failed, continuing without it", error=str(e))
+
     builder = ReportBuilder()
     report = builder.build(
         run_id=run_id,
@@ -1546,6 +1573,8 @@ def _build_and_save_report(
         report["cdm"] = cdm_report.to_dict()
     if attribution_report is not None:
         report["attribution"] = attribution_report.to_dict()
+    if pruning_report is not None:
+        report["suite_pruning"] = pruning_report.to_dict()
 
     repo.save_report(run_id, report)
     return report

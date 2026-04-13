@@ -17,6 +17,7 @@ Layer 10: Differential Consistency Test (150 tokens) - NEW
 Layer 11: Tool Use Capability Probe (50 tokens) - NEW
 Layer 12: Multi-turn Context Overflow (300 tokens)
 Layer 13: Adversarial Response Analysis (100 tokens) - NEW
+Layer 14: Multilingual Translation Attack (500 tokens) - v11 Phase 3
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ from app.predetect.extraction_v2 import Layer7AdvancedExtraction  # Replaces/ext
 from app.predetect.differential_testing import Layer8DifferentialTesting
 from app.predetect.tool_capability import Layer9ToolCapability
 from app.predetect.adversarial_analysis import Layer11AdversarialAnalysis
+# v11 Phase 3: Multilingual translation attack
+from app.predetect.multilingual_attack import Layer14MultilingualAttack
 
 logger = get_logger(__name__)
 
@@ -1586,6 +1589,16 @@ class PreDetectionPipeline:
                 self._log_layer_result("Layer13/Adversarial", r13)
                 if r13.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r13, layer_results, total_tokens)
+
+                # v11 Phase 3: Layer 14 — Multilingual Translation Attack
+                _report_progress("Layer14/Multilingual")
+                logger.info("PreDetect Layer14: Multilingual attack", model=model_name)
+                r14 = Layer14MultilingualAttack().run(adapter, model_name)
+                layer_results.append(r14)
+                total_tokens += r14.tokens_used
+                self._log_layer_result("Layer14/Multilingual", r14)
+                if r14.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r14, layer_results, total_tokens)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

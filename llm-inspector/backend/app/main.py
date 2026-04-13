@@ -60,6 +60,12 @@ from app.handlers.v11_handlers import (
     handle_run_cdm,
     handle_run_attribution,
     handle_cdm_skills,
+    # Phase 3
+    handle_suite_prune,
+    handle_suite_pruning_report,
+    handle_prompt_optimizer_report,
+    handle_gpqa_questions,
+    handle_multilingual_attacks,
 )
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
@@ -134,6 +140,12 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/runs/[^/]+/cdm$",            handle_run_cdm),
     ("GET",    r"^/api/v1/runs/[^/]+/attribution$",    handle_run_attribution),
     ("GET",    r"^/api/v1/cdm/skills$",                 handle_cdm_skills),
+    # v11 Phase 3: Suite Pruning + Prompt Optimizer + GPQA + Multilingual
+    ("POST",   r"^/api/v1/suite/prune$",                handle_suite_prune),
+    ("GET",    r"^/api/v1/suite/pruning-report$",       handle_suite_pruning_report),
+    ("GET",    r"^/api/v1/prompt-optimizer/report$",    handle_prompt_optimizer_report),
+    ("GET",    r"^/api/v1/gpqa/questions$",             handle_gpqa_questions),
+    ("GET",    r"^/api/v1/attacks/multilingual$",       handle_multilingual_attacks),
 ]
 
 

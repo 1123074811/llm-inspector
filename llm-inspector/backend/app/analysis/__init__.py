@@ -57,6 +57,18 @@ from app.analysis.irt_params import (
     ThetaScoreConverter,
     get_irt_db,
 )
+# v11 Phase 3: Suite pruning + GPQA
+from app.analysis.suite_pruner import (
+    SuitePruner,
+    CaseQualityMetrics,
+    PruningReport,
+    GPQAAdapter,
+    GPQAQuestion,
+    suite_pruner,
+    gpqa_adapter,
+    get_pruner,
+    get_gpqa_adapter,
+)
 
 __all__ = [
     # 原有组件
@@ -90,6 +102,16 @@ __all__ = [
     "IRTParameterDB",
     "ThetaScoreConverter",
     "get_irt_db",
+    # v11 Phase 3 新增 - Suite pruning + GPQA
+    "SuitePruner",
+    "CaseQualityMetrics",
+    "PruningReport",
+    "GPQAAdapter",
+    "GPQAQuestion",
+    "suite_pruner",
+    "gpqa_adapter",
+    "get_pruner",
+    "get_gpqa_adapter",
     # 便捷函数
     "get_calibrator",
     "get_confidence_estimator",
