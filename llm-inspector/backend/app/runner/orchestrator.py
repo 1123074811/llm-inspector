@@ -12,6 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from app.core.schemas import (
     TestCase, CaseResult, PreDetectionResult,
 )
+from app.core.eval_schemas import EvalTestCase
+from app.core.circuit_breaker import circuit_breaker, CircuitState
+from app.core.tracer import get_tracer, remove_tracer
 from app.core.logging import get_logger
 from app.core.security import get_key_manager
 from app.core.config import settings
@@ -215,10 +218,14 @@ class TokenBudgetGuard:
 
 
 def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
-    """Load test cases from DB (seeded from fixture JSON) and compress prompts."""
+    """Load test cases from DB (seeded from fixture JSON) and compress prompts.
+
+    v11: Returns EvalTestCase instances for CDM/Bayesian/telemetry support.
+    """
     raw_cases = repo.load_cases(suite_version, test_mode)
     cases = []
     for c in raw_cases:
+        # v11: Construct EvalTestCase which extends TestCase
         params = c.get("params", {})
         meta = (params.get("_meta") or {})
         
@@ -226,7 +233,7 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
         compressed_user = prompt_compressor.compress(c["user_prompt"])
         compressed_system = prompt_compressor.compress(c.get("system_prompt", "")) if c.get("system_prompt") else None
 
-        cases.append(TestCase(
+        cases.append(EvalTestCase(
             id=c["id"],
             category=c["category"],
             name=c["name"],
@@ -245,6 +252,7 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
             enabled=bool(c.get("enabled", 1)),
             suite_version=c.get("suite_version", "v1"),
             difficulty=c.get("difficulty"),
+            telemetry_span=f"case.{c['id']}",
         ))
     return cases
 
@@ -769,7 +777,8 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                           test_mode: str, run_id: str, phase_label: str,
                           case_results: list[CaseResult], failed_count_ref: dict,
                           backoff_state: dict,
-                          budget_guard: TokenBudgetGuard | None = None) -> bool:
+                          budget_guard: TokenBudgetGuard | None = None,
+                          base_url: str | None = None) -> bool:
     if not cases:
         return False
 
@@ -790,6 +799,15 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                 break
 
             while len(in_flight) < max_workers and idx < len(cases) and not budget_exhausted:
+                # v11: Check circuit breaker before submitting new cases
+                if base_url and circuit_breaker.is_open(base_url):
+                    logger.warning(
+                        "Circuit breaker OPEN, suspending case dispatch",
+                        run_id=run_id, phase=phase_label, base_url=base_url,
+                    )
+                    # Don't submit new cases; wait for in-flight to complete
+                    break
+
                 # Check token budget before submitting
                 if budget_guard and budget_guard.remaining < budget_threshold:
                     logger.info(
@@ -827,6 +845,10 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                     if budget_guard:
                         budget_guard.record_result(result)
                     
+                    # v11: Record circuit breaker success
+                    if base_url:
+                        circuit_breaker.record_success(base_url)
+                    
                     _update_backoff(backoff_state, result=result)
                     logger.info(
                         "Case done",
@@ -839,6 +861,9 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                 except Exception as e:
                     with lock:
                         failed_count_ref["count"] += 1
+                    # v11: Record circuit breaker failure
+                    if base_url:
+                        circuit_breaker.record_failure(base_url, str(e)[:200])
                     _update_backoff(backoff_state, error=e)
                     logger.warning("Case failed", run_id=run_id, case_id=case.id, error=str(e))
                     check_early_abort = True
@@ -860,20 +885,25 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
 
 def run_pipeline(run_id: str) -> None:
     """
-    Full pipeline:
+    Full pipeline (v11 — with circuit breaker + tracing):
       1. Pre-detection (0-token identification attempt)
       2. Connectivity check
-      3. Test case execution (with early-stop)
+      3. Test case execution (with early-stop, circuit breaker)
       4. Feature extraction + scoring
       5. Similarity + risk assessment
       6. Report generation
     """
     logger.info("Pipeline starting", run_id=run_id)
 
+    # ── v11: Initialize tracer ────────────────────────────────────────────────
+    tracer = get_tracer(run_id)
+    tracer.start()
+
     # ── Load run metadata ────────────────────────────────────────────────────
     run = repo.get_run(run_id)
     if not run:
         logger.error("Run not found", run_id=run_id)
+        remove_tracer(run_id)
         return
 
     km = get_key_manager()
@@ -881,22 +911,37 @@ def run_pipeline(run_id: str) -> None:
         api_key = km.decrypt(run["api_key_encrypted"])
     except Exception as e:
         repo.update_run_status(run_id, "failed", error_message=f"Key decrypt failed: {e}")
+        remove_tracer(run_id)
         return
 
     adapter = OpenAICompatibleAdapter(run["base_url"], api_key)
+    base_url = run["base_url"]
     suite_version = run.get("suite_version", "v1")
     test_mode = run.get("test_mode", "standard")
+
+    # ── v11: Check circuit breaker before proceeding ──────────────────────────
+    if circuit_breaker.is_open(base_url):
+        logger.warning("Circuit breaker is OPEN, suspending run", run_id=run_id, base_url=base_url)
+        repo.update_run_status(run_id, "suspended", error_message="API circuit breaker open — run suspended for retry")
+        tracer.add_event("circuit_open", base_url=base_url, action="suspended")
+        remove_tracer(run_id)
+        return
 
     # ── Step 1: Pre-detection ────────────────────────────────────────────────
     repo.update_run_status(run_id, "pre_detecting")
     logger.info("Running pre-detection", run_id=run_id)
     extraction_mode = test_mode == "deep"
     try:
-        pre_result: PreDetectionResult = PreDetectionPipeline().run(
-            adapter, run["model_name"],
-            extraction_mode=extraction_mode,
-            run_id=run_id,
-        )
+        with tracer.span("predetect", mode=test_mode) as span:
+            pre_result: PreDetectionResult = PreDetectionPipeline().run(
+                adapter, run["model_name"],
+                extraction_mode=extraction_mode,
+                run_id=run_id,
+            )
+            span.set_attribute("identified_as", pre_result.identified_as)
+            span.set_attribute("confidence", pre_result.confidence)
+            span.set_attribute("tokens_used", pre_result.total_tokens_used)
+            tracer.record_tokens("predetect", pre_result.total_tokens_used)
         repo.save_predetect_result(run_id, pre_result.to_dict())
         logger.info(
             "Pre-detection complete",
@@ -905,8 +950,12 @@ def run_pipeline(run_id: str) -> None:
             confidence=pre_result.confidence,
             tokens=pre_result.total_tokens_used,
         )
+        # v11: Record success for circuit breaker
+        circuit_breaker.record_success(base_url)
     except Exception as e:
         logger.warning("Pre-detection failed, continuing to full test", error=str(e))
+        # v11: Record failure for circuit breaker
+        circuit_breaker.record_failure(base_url, str(e))
         pre_result = PreDetectionResult(
             success=False, identified_as=None, confidence=0.0,
             layer_stopped=None, should_proceed_to_testing=True,
@@ -918,11 +967,13 @@ def run_pipeline(run_id: str) -> None:
     if not pre_result.should_proceed_to_testing and not extraction_mode:
         logger.info("Pre-detection sufficient, pausing for user decision", run_id=run_id)
         repo.update_run_status(run_id, "pre_detected")
+        remove_tracer(run_id)
         return
 
     # ── Step 2: Connectivity check ───────────────────────────────────────────
     repo.update_run_status(run_id, "running")
-    conn_check = adapter.list_models()
+    with tracer.span("connectivity", base_url=base_url) as conn_span:
+        conn_check = adapter.list_models()
     conn_status = conn_check.get("status_code")
     conn_error = conn_check.get("error")
 
@@ -935,6 +986,9 @@ def run_pipeline(run_id: str) -> None:
         )
         repo.update_run_status(run_id, "failed", error_message=msg)
         logger.error("Connectivity failed (network)", run_id=run_id, error=msg)
+        circuit_breaker.record_failure(base_url, f"network: {conn_error}")
+        tracer.add_event("connectivity_failed", reason="network", error=conn_error)
+        remove_tracer(run_id)
         return
 
     # Soft fail on /models (401/403/404): many providers (e.g. Baidu Qianfan
@@ -965,6 +1019,8 @@ def run_pipeline(run_id: str) -> None:
             )
             repo.update_run_status(run_id, "failed", error_message=msg)
             logger.error("Connectivity failed (chat probe network)", run_id=run_id, error=msg)
+            circuit_breaker.record_failure(base_url, f"chat_probe_network: {probe_resp.error_message}")
+            remove_tracer(run_id)
             return
 
         # Chat endpoint returns 401 → genuine auth failure
@@ -975,6 +1031,8 @@ def run_pipeline(run_id: str) -> None:
             )
             repo.update_run_status(run_id, "failed", error_message=msg)
             logger.error("Connectivity failed (auth 401)", run_id=run_id)
+            circuit_breaker.record_failure(base_url, "auth_401")
+            remove_tracer(run_id)
             return
 
         # Chat endpoint returns 404 → endpoint path is wrong
@@ -987,6 +1045,8 @@ def run_pipeline(run_id: str) -> None:
             )
             repo.update_run_status(run_id, "failed", error_message=msg)
             logger.error("Connectivity failed (404 on chat endpoint)", run_id=run_id)
+            circuit_breaker.record_failure(base_url, "endpoint_404")
+            remove_tracer(run_id)
             return
 
         # Any response (even 400/403/422/500) from the chat endpoint means it's
@@ -1002,10 +1062,13 @@ def run_pipeline(run_id: str) -> None:
         )
 
     # ── Step 3: Load test cases + execute ────────────────────────────────────
-    cases = _load_suite(suite_version, test_mode)
+    with tracer.span("load_cases", suite=suite_version, mode=test_mode) as load_span:
+        cases = _load_suite(suite_version, test_mode)
+        load_span.set_attribute("total_cases", len(cases))
     if not cases:
         logger.warning("No test cases found", suite_version=suite_version)
         repo.update_run_status(run_id, "failed", error_message="No test cases loaded")
+        remove_tracer(run_id)
         return
 
     # Targeted confirmation: when predetect has moderate confidence (0.60-0.84),
@@ -1074,22 +1137,31 @@ def run_pipeline(run_id: str) -> None:
         token_budget=budget_guard.budget,
     )
 
-    cancelled = _run_cases_concurrent(
-        adapter=adapter,
-        model_name=run["model_name"],
-        cases=phase1_cases,
-        test_mode=test_mode,
-        run_id=run_id,
-        phase_label="phase1",
-        case_results=case_results,
-        failed_count_ref=failed_count_ref,
-        backoff_state=backoff_state,
-        budget_guard=budget_guard,
-    )
+    # v11: Phase 1 execution with tracing and circuit breaker
+    with tracer.span("phase1", case_count=len(phase1_cases)) as p1_span:
+        cancelled = _run_cases_concurrent(
+            adapter=adapter,
+            model_name=run["model_name"],
+            cases=phase1_cases,
+            test_mode=test_mode,
+            run_id=run_id,
+            phase_label="phase1",
+            case_results=case_results,
+            failed_count_ref=failed_count_ref,
+            backoff_state=backoff_state,
+            budget_guard=budget_guard,
+            base_url=base_url,
+        )
+        p1_span.set_attribute("completed", len(case_results))
+        p1_span.set_attribute("failed", failed_count_ref["count"])
+        p1_span.set_attribute("tokens_used", budget_guard.used if budget_guard else 0)
+        if budget_guard:
+            tracer.record_tokens("phase1", budget_guard.used)
 
     if cancelled:
         repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
         logger.info("Pipeline cancelled", run_id=run_id)
+        remove_tracer(run_id)
         return
 
     stop_now, cached_features, cached_sims, _ = _checkpoint_should_stop(
@@ -1102,6 +1174,7 @@ def run_pipeline(run_id: str) -> None:
 
     if stop_now:
         logger.info("Early stop triggered", run_id=run_id, test_mode=test_mode)
+        tracer.add_event("early_stop", test_mode=test_mode)
         _build_and_save_report(
             run_id,
             run,
@@ -1114,6 +1187,8 @@ def run_pipeline(run_id: str) -> None:
         final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
         repo.update_run_status(run_id, final_status)
         logger.info("Pipeline complete", run_id=run_id, status=final_status)
+        tracer.finish()
+        remove_tracer(run_id)
         return
 
     if phase2_cases:
@@ -1133,21 +1208,27 @@ def run_pipeline(run_id: str) -> None:
             logger.warning("Failed to generate partial report", error=str(e))
             
         # Stage B targeted expansion is already value-ranked.
-        cancelled = _run_cases_concurrent(
-            adapter=adapter,
-            model_name=run["model_name"],
-            cases=phase2_cases,
-            test_mode=test_mode,
-            run_id=run_id,
-            phase_label="phase2",
-            case_results=case_results,
-            failed_count_ref=failed_count_ref,
-            backoff_state=backoff_state,
-            budget_guard=budget_guard,
-        )
+        with tracer.span("phase2", case_count=len(phase2_cases)) as p2_span:
+            cancelled = _run_cases_concurrent(
+                adapter=adapter,
+                model_name=run["model_name"],
+                cases=phase2_cases,
+                test_mode=test_mode,
+                run_id=run_id,
+                phase_label="phase2",
+                case_results=case_results,
+                failed_count_ref=failed_count_ref,
+                backoff_state=backoff_state,
+                budget_guard=budget_guard,
+                base_url=base_url,
+            )
+            p2_span.set_attribute("failed", failed_count_ref["count"])
+            if budget_guard:
+                tracer.record_tokens("phase2", budget_guard.used)
         if cancelled:
             repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
             logger.info("Pipeline cancelled", run_id=run_id)
+            remove_tracer(run_id)
             return
 
         # Stage C arbitration: only for standard mode when decision remains unstable.
@@ -1167,21 +1248,24 @@ def run_pipeline(run_id: str) -> None:
                 remaining.sort(key=_case_value, reverse=True)
                 arbitration = remaining[:settings.ARBITRATION_MAX]
                 if arbitration:
-                    cancelled = _run_cases_concurrent(
-                        adapter=adapter,
-                        model_name=run["model_name"],
-                        cases=arbitration,
-                        test_mode=test_mode,
-                        run_id=run_id,
-                        phase_label="phase3",
-                        case_results=case_results,
-                        failed_count_ref=failed_count_ref,
-                        backoff_state=backoff_state,
-                        budget_guard=budget_guard,
-                    )
+                    with tracer.span("phase3_arbitration", case_count=len(arbitration)) as p3_span:
+                        cancelled = _run_cases_concurrent(
+                            adapter=adapter,
+                            model_name=run["model_name"],
+                            cases=arbitration,
+                            test_mode=test_mode,
+                            run_id=run_id,
+                            phase_label="phase3",
+                            case_results=case_results,
+                            failed_count_ref=failed_count_ref,
+                            backoff_state=backoff_state,
+                            budget_guard=budget_guard,
+                            base_url=base_url,
+                        )
                     if cancelled:
                         repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
                         logger.info("Pipeline cancelled", run_id=run_id)
+                        remove_tracer(run_id)
                         return
 
     # ── 检查：是否几乎所有请求均失败（说明是连接/配置问题而非模型问题）────────────
@@ -1220,14 +1304,24 @@ def run_pipeline(run_id: str) -> None:
                     error_rate=error_rate,
                     top_error=top_error,
                 )
+                # v11: Record circuit breaker failure and trace event
+                circuit_breaker.record_failure(base_url, f"high_error_rate:{error_rate:.0%}:{top_error}")
+                tracer.add_event("high_error_rate_abort", error_rate=error_rate, top_error=top_error)
+                remove_tracer(run_id)
                 return
 
     # ── Steps 4-6: Analysis + report ─────────────────────────────────────────
-    _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
+    with tracer.span("analysis") as analysis_span:
+        _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
+        analysis_span.set_attribute("case_count", len(case_results))
 
     final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
     repo.update_run_status(run_id, final_status)
     logger.info("Pipeline complete", run_id=run_id, status=final_status)
+
+    # v11: Finalize trace and cleanup
+    trace = tracer.finish()
+    remove_tracer(run_id)
 
 
 def _build_and_save_report(
@@ -1432,8 +1526,20 @@ def continue_pipeline(run_id: str) -> None:
         return
 
     adapter = OpenAICompatibleAdapter(run["base_url"], api_key)
+    base_url = run["base_url"]
     suite_version = run.get("suite_version", "v1")
     test_mode = run.get("test_mode", "standard")
+
+    # v11: Initialize tracer for continue_pipeline
+    tracer = get_tracer(run_id)
+    tracer.start()
+
+    # v11: Check circuit breaker
+    if circuit_breaker.is_open(base_url):
+        logger.warning("Circuit breaker OPEN, cannot continue", run_id=run_id, base_url=base_url)
+        repo.update_run_status(run_id, "suspended", error_message="API circuit breaker open — run suspended for retry")
+        remove_tracer(run_id)
+        return
 
     # Reload predetect result
     pre_dict = run.get("predetect_result") or {}
@@ -1449,7 +1555,8 @@ def continue_pipeline(run_id: str) -> None:
 
     # Jump to Step 2: connectivity check + testing (same as run_pipeline from line 589)
     repo.update_run_status(run_id, "running")
-    conn_check = adapter.list_models()
+    with tracer.span("connectivity", base_url=base_url) as conn_span:
+        conn_check = adapter.list_models()
     conn_status = conn_check.get("status_code")
     conn_error = conn_check.get("error")
 
@@ -1460,6 +1567,8 @@ def continue_pipeline(run_id: str) -> None:
             f"网络是否可达，以及 API Key 是否有效。"
         )
         repo.update_run_status(run_id, "failed", error_message=msg)
+        circuit_breaker.record_failure(base_url, f"network: {conn_error}")
+        remove_tracer(run_id)
         return
 
     if conn_status and conn_status in (401, 403, 404):
@@ -1472,14 +1581,20 @@ def continue_pipeline(run_id: str) -> None:
         if probe_resp.error_type and not probe_resp.status_code:
             repo.update_run_status(run_id, "failed",
                                    error_message=f"无法连接到 API chat 端点：{probe_resp.error_message}")
+            circuit_breaker.record_failure(base_url, f"chat_probe: {probe_resp.error_message}")
+            remove_tracer(run_id)
             return
         if probe_resp.status_code == 401:
             repo.update_run_status(run_id, "failed",
                                    error_message=f"API 鉴权失败（HTTP 401）。base_url：{run['base_url']}")
+            circuit_breaker.record_failure(base_url, "auth_401")
+            remove_tracer(run_id)
             return
         if probe_resp.status_code == 404:
             repo.update_run_status(run_id, "failed",
                                    error_message=f"API 端点不存在（HTTP 404）。base_url：{run['base_url']}")
+            circuit_breaker.record_failure(base_url, "endpoint_404")
+            remove_tracer(run_id)
             return
 
     # Load and execute test cases
@@ -1515,15 +1630,19 @@ def continue_pipeline(run_id: str) -> None:
     }
     budget_guard = TokenBudgetGuard(budget_map.get(test_mode, settings.TOKEN_BUDGET_STANDARD))
 
-    cancelled = _run_cases_concurrent(
-        adapter=adapter, model_name=run["model_name"],
-        cases=phase1_cases, test_mode=test_mode, run_id=run_id,
-        phase_label="phase1", case_results=case_results,
-        failed_count_ref=failed_count_ref, backoff_state=backoff_state,
-        budget_guard=budget_guard,
-    )
+    with tracer.span("phase1", case_count=len(phase1_cases)) as p1_span:
+        cancelled = _run_cases_concurrent(
+            adapter=adapter, model_name=run["model_name"],
+            cases=phase1_cases, test_mode=test_mode, run_id=run_id,
+            phase_label="phase1", case_results=case_results,
+            failed_count_ref=failed_count_ref, backoff_state=backoff_state,
+            budget_guard=budget_guard, base_url=base_url,
+        )
+        p1_span.set_attribute("completed", len(case_results))
+        p1_span.set_attribute("failed", failed_count_ref["count"])
     if cancelled:
         repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
+        remove_tracer(run_id)
         return
 
     stop_now, cached_features, cached_sims, _ = _checkpoint_should_stop(
@@ -1536,18 +1655,23 @@ def continue_pipeline(run_id: str) -> None:
                                precomputed_similarities=cached_sims)
         final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
         repo.update_run_status(run_id, final_status)
+        tracer.finish()
+        remove_tracer(run_id)
         return
 
     if phase2_cases:
-        cancelled = _run_cases_concurrent(
-            adapter=adapter, model_name=run["model_name"],
-            cases=phase2_cases, test_mode=test_mode, run_id=run_id,
-            phase_label="phase2", case_results=case_results,
-            failed_count_ref=failed_count_ref, backoff_state=backoff_state,
-            budget_guard=budget_guard,
-        )
+        with tracer.span("phase2", case_count=len(phase2_cases)) as p2_span:
+            cancelled = _run_cases_concurrent(
+                adapter=adapter, model_name=run["model_name"],
+                cases=phase2_cases, test_mode=test_mode, run_id=run_id,
+                phase_label="phase2", case_results=case_results,
+                failed_count_ref=failed_count_ref, backoff_state=backoff_state,
+                budget_guard=budget_guard, base_url=base_url,
+            )
+            p2_span.set_attribute("failed", failed_count_ref["count"])
         if cancelled:
             repo.update_run_status(run_id, "failed", error_message="Cancelled by user")
+            remove_tracer(run_id)
             return
 
     # High error rate guard
@@ -1563,12 +1687,19 @@ def continue_pipeline(run_id: str) -> None:
             top_error = max(error_types, key=error_types.get) if error_types else "unknown"
             repo.update_run_status(run_id, "failed",
                                    error_message=f"API 连接/配置失败：90%+ 请求出错（{top_error}）。请修正配置后重试。")
+            circuit_breaker.record_failure(base_url, f"high_error_rate:{top_error}")
+            tracer.add_event("high_error_rate_abort", top_error=top_error)
+            remove_tracer(run_id)
             return
 
-    _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
+    with tracer.span("analysis") as analysis_span:
+        _build_and_save_report(run_id, run, pre_result, case_results, {}, suite_version)
+        analysis_span.set_attribute("case_count", len(case_results))
     final_status = "partial_failed" if failed_count_ref["count"] > 0 else "completed"
     repo.update_run_status(run_id, final_status)
     logger.info("Continue pipeline complete", run_id=run_id, status=final_status)
+    tracer.finish()
+    remove_tracer(run_id)
 
 
 def skip_testing_pipeline(run_id: str) -> None:

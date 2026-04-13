@@ -52,6 +52,12 @@ from app.handlers.v8_handlers import (
     handle_v8_threshold_references,
     handle_v8_list_plugins,
 )
+from app.handlers.v11_handlers import (
+    handle_circuit_breaker_status,
+    handle_circuit_breaker_reset,
+    handle_run_trace,
+    handle_tracer_progress_all,
+)
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
 
@@ -116,6 +122,11 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v8/runs/[^/]+/case/[^/]+/provenance$", handle_v8_case_provenance),
     ("GET",    r"^/api/v8/runs/[^/]+/data-lineage$",  handle_v8_data_lineage),
     ("GET",    r"^/api/v8/references/thresholds$",     handle_v8_threshold_references),
+    # v11 Phase 1 routes
+    ("GET",    r"^/api/v1/circuit-breaker$",           handle_circuit_breaker_status),
+    ("POST",   r"^/api/v1/circuit-breaker/reset$",     handle_circuit_breaker_reset),
+    ("GET",    r"^/api/v1/runs/[^/]+/trace$",          handle_run_trace),
+    ("GET",    r"^/api/v1/tracers/progress$",           handle_tracer_progress_all),
 ]
 
 

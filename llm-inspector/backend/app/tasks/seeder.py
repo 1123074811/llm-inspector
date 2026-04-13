@@ -37,11 +37,15 @@ def _difficulty_to_irt_b(difficulty: float | None) -> float:
 
 def _seed_test_cases() -> None:
     total = 0
-    for suite_file in ("suite_v1.json", "suite_v1.js", "suite_extraction.json", "suite_v2.json", "suite_v3.json", "suite_v10.json"):
+    for suite_file in ("suite_v1.json", "suite_extraction.json", "suite_v2.json", "suite_v3.json", "suite_v10.json"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             continue
-        data = json.loads(suite_path.read_text(encoding='utf-8'))
+        try:
+            data = json.loads(suite_path.read_text(encoding='utf-8'))
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse {suite_file}: {e}")
+            continue
         cases = data.get("cases", [])
         version = data.get("version", "v1")
         seeded_in_file = 0

@@ -31,7 +31,7 @@ from app.analysis.irt_params import (
     ThetaScoreConverter,
     get_irt_db,
 )
-from app.core.schemas import TestCaseV8
+from app.core.schemas import TestCase
 
 
 class TestDataProvenance:
@@ -480,95 +480,103 @@ class TestThetaScoreConverter:
         assert 10 < p16 < 20
 
 
-class TestTestCaseV8:
-    """Test v8.0 TestCase with provenance."""
+class TestTestCase:
+    """Test TestCase enhancements for data provenance."""
     
     def test_has_valid_provenance(self):
         """Test provenance validation."""
-        case = TestCaseV8(
+        case = TestCase(
             id="test_001",
             category="reasoning",
-            name="Test Case",
-            user_prompt="Test prompt",
-            expected_type="text",
-            judge_method="exact_match",
+            name="test",
+            user_prompt="test",
+            expected_type="str",
+            judge_method="exact"
         )
-        
-        # No provenance initially
         assert not case.has_valid_provenance
         
-        # Add provenance
-        case.weight_provenance = DataProvenance.from_irt_calibration(
-            "test_001", "v2026q1", 500, 0.85
+        case.weight_provenance = DataProvenance(
+            source="manual",
+            version="1.0",
+            value="1.0",
+            confidence=0.4
         )
+        assert not case.has_valid_provenance
+        
+        case.weight_provenance.confidence = 0.8
         assert case.has_valid_provenance
     
     def test_get_weight_with_fallback(self):
         """Test weight retrieval with fallback."""
-        case = TestCaseV8(
+        case = TestCase(
             id="test_001",
             category="reasoning",
-            name="Test Case",
-            user_prompt="Test prompt",
-            expected_type="text",
-            judge_method="exact_match",
-            weight=2.5,
+            name="test",
+            user_prompt="test",
+            expected_type="str",
+            judge_method="exact",
+            weight=2.0
         )
         
-        # Without provenance, should return fallback
-        weight, prov = case.get_weight_with_fallback()
-        assert weight == 1.0  # Fallback weight
-        assert prov.source_type == "fallback"
+        # 1. No provenance -> fallback to default weight
+        assert case.get_weight_with_fallback() == 2.0
         
-        # With provenance, should return actual weight
-        case.weight_provenance = DataProvenance.from_irt_calibration(
-            "test_001", "v2026q1", 500, 0.85
+        # 2. With valid provenance -> use provenance weight
+        prov = DataProvenance(
+            source="irt_calibration",
+            version="1.0",
+            value="3.5",
+            confidence=0.9
         )
-        weight, prov = case.get_weight_with_fallback()
-        assert weight == 2.5
-        assert prov.source_type == "irt_calibration"
+        case.weight_provenance = prov
+        assert case.get_weight_with_fallback() == 3.5
     
     def test_has_irt_params(self):
         """Test IRT parameter detection."""
-        case = TestCaseV8(
+        case = TestCase(
             id="test_001",
             category="reasoning",
-            name="Test Case",
-            user_prompt="Test prompt",
-            expected_type="text",
-            judge_method="exact_match",
+            name="test",
+            user_prompt="test",
+            expected_type="str",
+            judge_method="exact"
         )
-        
         assert not case.has_irt_params
         
         case.irt_a = 1.0
-        case.irt_b = 0.0
+        assert not case.has_irt_params
+        
+        case.irt_b = 0.5
         assert case.has_irt_params
     
     def test_to_dict(self):
         """Test dictionary conversion."""
-        case = TestCaseV8(
+        case = TestCase(
             id="test_001",
             category="reasoning",
-            name="Test Case",
-            user_prompt="Test prompt",
-            expected_type="text",
-            judge_method="exact_match",
-            weight=2.0,
-            irt_a=1.2,
-            irt_b=-0.5,
+            name="test",
+            user_prompt="test",
+            expected_type="str",
+            judge_method="exact"
         )
-        case.weight_provenance = DataProvenance.from_irt_calibration(
-            "test_001", "v2026q1", 500, 0.85
+        
+        prov = DataProvenance(
+            source="irt_calibration",
+            version="1.0",
+            value="1.5",
+            confidence=0.9
         )
+        case.weight_provenance = prov
+        case.irt_a = 1.0
+        case.irt_b = 0.5
         
         d = case.to_dict()
         assert d["id"] == "test_001"
-        assert d["weight"] == 2.0
-        assert d["has_provenance"]
-        assert d["has_irt"]
-        assert "irt_params" in d
-        assert d["irt_params"]["a"] == 1.2
+        assert d["category"] == "reasoning"
+        assert "weight_provenance" in d
+        assert d["weight_provenance"]["source"] == "irt_calibration"
+        assert d["irt_a"] == 1.0
+        assert d["irt_b"] == 0.5
 
 
 class TestIntegration:
@@ -612,26 +620,24 @@ class TestIntegration:
         assert db.store_parameters(params, provenance)
         
         # 4. Create test case
-        case = TestCaseV8(
+        case = TestCase(
             id="integration_test",
             category="reasoning",
             name="Integration Test",
             user_prompt="Test",
-            expected_type="text",
-            judge_method="exact_match",
-            weight=2.5,
-            irt_a=1.3,
-            irt_b=0.2,
-            weight_provenance=provenance
+            expected_type="str",
+            judge_method="exact",
+            weight=2.5
         )
+        case.weight_provenance = provenance
+        case.irt_a = 1.3
+        case.irt_b = 0.2
         
         # 5. Verify integration
         assert case.has_valid_provenance
         assert case.has_irt_params
         
-        weight, prov = case.get_weight_with_fallback()
-        assert weight == 2.5
-        assert prov.source_type == "irt_calibration"
+        assert case.get_weight_with_fallback() == 2.5
         
         # 6. Retrieve from database and verify
         result = db.get_parameters("integration_test")

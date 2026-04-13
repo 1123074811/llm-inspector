@@ -1,6 +1,6 @@
 @echo off
 echo ====================================
-echo LLM Inspector v9.0
+echo LLM Inspector v11.0
 echo ====================================
 
 REM Activate virtual environment

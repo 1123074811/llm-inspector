@@ -46,6 +46,9 @@ build/
 # Claude Code
 .claude/
 
+# WorkBuddy
+.workbuddy/
+
 # Local backup files
 llm-inspector/backend/app/fixtures/benchmarks/default_profiles.json.bak
 
