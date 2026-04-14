@@ -496,14 +496,24 @@ class TestTestCase:
         assert not case.has_valid_provenance
         
         case.weight_provenance = DataProvenance(
-            source="manual",
-            version="1.0",
-            value="1.0",
-            confidence=0.4
+            source_type="manual",
+            source_id="manual_v1.0",
+            collected_at="2026-01-01T00:00:00Z",
+            sample_size=0,
+            confidence=0.4,
+            verified=False
         )
         assert not case.has_valid_provenance
-        
-        case.weight_provenance.confidence = 0.8
+
+        # Frozen dataclass - recreate with higher confidence
+        case.weight_provenance = DataProvenance(
+            source_type="manual",
+            source_id="manual_v1.0",
+            collected_at="2026-01-01T00:00:00Z",
+            sample_size=0,
+            confidence=0.8,
+            verified=False
+        )
         assert case.has_valid_provenance
     
     def test_get_weight_with_fallback(self):
@@ -523,13 +533,16 @@ class TestTestCase:
         
         # 2. With valid provenance -> use provenance weight
         prov = DataProvenance(
-            source="irt_calibration",
-            version="1.0",
-            value="3.5",
-            confidence=0.9
+            source_type="irt_calibration",
+            source_id="irt_v1.0_test",
+            collected_at="2026-01-01T00:00:00Z",
+            sample_size=100,
+            confidence=0.9,
+            verified=True
         )
         case.weight_provenance = prov
-        assert case.get_weight_with_fallback() == 3.5
+        # Note: get_weight_with_fallback() returns weight when provenance is valid
+        assert case.get_weight_with_fallback() == 2.0
     
     def test_has_irt_params(self):
         """Test IRT parameter detection."""
@@ -561,10 +574,12 @@ class TestTestCase:
         )
         
         prov = DataProvenance(
-            source="irt_calibration",
-            version="1.0",
-            value="1.5",
-            confidence=0.9
+            source_type="irt_calibration",
+            source_id="irt_v1.0_test",
+            collected_at="2026-01-01T00:00:00Z",
+            sample_size=100,
+            confidence=0.9,
+            verified=True
         )
         case.weight_provenance = prov
         case.irt_a = 1.0
@@ -574,7 +589,7 @@ class TestTestCase:
         assert d["id"] == "test_001"
         assert d["category"] == "reasoning"
         assert "weight_provenance" in d
-        assert d["weight_provenance"]["source"] == "irt_calibration"
+        assert d["weight_provenance"]["source_type"] == "irt_calibration"
         assert d["irt_a"] == 1.0
         assert d["irt_b"] == 0.5
 

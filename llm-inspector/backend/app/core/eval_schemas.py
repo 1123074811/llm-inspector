@@ -54,7 +54,13 @@ class SkillVector:
     def from_dict(d: dict | None) -> SkillVector | None:
         if not d:
             return None
-        return SkillVector(required=d.get("required", {}))
+        # Support two formats:
+        #   1. {"required": {"skill_a": 1, "skill_b": 1}}  (canonical)
+        #   2. {"skill_a": 1, "skill_b": 1}                (flat, as in suite JSON)
+        if "required" in d:
+            return SkillVector(required=d["required"])
+        # Flat format: treat the whole dict as the required mapping
+        return SkillVector(required=d)
 
 
 @dataclass

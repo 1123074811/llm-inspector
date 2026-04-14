@@ -1,6 +1,10 @@
 """
 Computerized Adaptive Testing (CAT) Engine - v7.0 Core Algorithm
 
+⚠️  SCRIPT-ONLY — Not part of the production server pipeline.
+    Only referenced by scripts/validate_phase2.py for offline CAT validation.
+    The production orchestrator uses CAT logic embedded in orchestrator.py directly.
+
 Implements Item Response Theory-based adaptive testing for optimal
 test efficiency. Dynamically selects items to maximize measurement
 precision while minimizing test length.

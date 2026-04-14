@@ -229,35 +229,18 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
     raw_cases = repo.load_cases(suite_version, test_mode)
     cases = []
     for c in raw_cases:
-        # v11: Construct EvalTestCase which extends TestCase
-        params = c.get("params", {})
-        meta = (params.get("_meta") or {})
-        
-        # v10: Lossless prompt compression
-        compressed_user = prompt_compressor.compress(c["user_prompt"])
-        compressed_system = prompt_compressor.compress(c.get("system_prompt", "")) if c.get("system_prompt") else None
+        # v11: Use from_db_dict which properly parses skill_vector,
+        # bayesian_prior, and eval_meta from params._meta
+        eval_case = EvalTestCase.from_db_dict(c)
 
-        cases.append(EvalTestCase(
-            id=c["id"],
-            category=c["category"],
-            name=c["name"],
-            user_prompt=compressed_user,
-            expected_type=c["expected_type"],
-            judge_method=c["judge_method"],
-            system_prompt=compressed_system,
-            dimension=meta.get("dimension") or c.get("dimension"),
-            tags=meta.get("tags") or c.get("tags", []),
-            judge_rubric=meta.get("judge_rubric") or c.get("judge_rubric", {}),
-            params=params,
-            max_tokens=c.get("max_tokens", 5),
-            n_samples=c.get("n_samples", 1),
-            temperature=c.get("temperature", 0.0),
-            weight=c.get("weight", 1.0),
-            enabled=bool(c.get("enabled", 1)),
-            suite_version=c.get("suite_version", "v1"),
-            difficulty=c.get("difficulty"),
-            telemetry_span=f"case.{c['id']}",
-        ))
+        # v10: Lossless prompt compression (applied after construction)
+        compressed_user = prompt_compressor.compress(eval_case.user_prompt)
+        compressed_system = prompt_compressor.compress(eval_case.system_prompt) if eval_case.system_prompt else None
+
+        eval_case.user_prompt = compressed_user
+        eval_case.system_prompt = compressed_system
+
+        cases.append(eval_case)
     return cases
 
 

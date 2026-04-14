@@ -2,6 +2,13 @@
 Similarity Engine Module
 Calculate similarity between runs and manage baseline comparisons.
 
+⚠️  TEST-ONLY
+    The production orchestrator imports SimilarityEngine directly from
+    app.analysis.pipeline — NOT from this file.
+    This file is only used by tests/test_all.py and tests/test_core_pipeline.py.
+    Do NOT edit similarity logic here expecting it to affect live runs —
+    edit pipeline.py instead.
+
 Split from pipeline.py in V6 refactoring for better code organization.
 """
 from __future__ import annotations

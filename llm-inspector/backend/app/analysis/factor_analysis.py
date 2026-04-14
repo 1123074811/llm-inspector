@@ -1,6 +1,9 @@
 """
 Factor Analysis Module for Dimension Validation.
 
+⚠️  SCRIPT-ONLY — Not part of the production server pipeline.
+    Only referenced by scripts/validate_phase1.py for offline CFA validation.
+
 Implements Confirmatory Factor Analysis (CFA) to validate that scoring dimensions
 are statistically independent constructs with proper convergent and discriminant validity.
 

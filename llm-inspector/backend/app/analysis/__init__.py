@@ -22,7 +22,7 @@ from app.analysis.pipeline import (
     ProxyLatencyAnalyzer,
     ExtractionAuditBuilder,
 )
-from app.analysis.score_calculator import ScoreCardCalculator
+from app.analysis.pipeline import ScoreCardCalculator  # authoritative definition lives in pipeline.py
 
 # v5.0 新增组件
 from app.analysis.adaptive_scoring import (
