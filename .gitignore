@@ -49,6 +49,15 @@ build/
 # WorkBuddy
 .workbuddy/
 
+# AI Coding Tools Cache (Golutra, Cursor, Aider, Continue, Kimi, Windsurf, etc.)
+.golutra/
+.cursor/
+.aider/
+.continue/
+.kimi/
+.windsurf/
+.composer/
+
 # Local backup files
 llm-inspector/backend/app/fixtures/benchmarks/default_profiles.json.bak
 
