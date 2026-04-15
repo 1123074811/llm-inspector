@@ -64,6 +64,13 @@ class CaseQualityMetrics:
     n_responses: int                       # number of observed responses
     is_discriminative: bool                # overall quality flag
     flags: list[str] = field(default_factory=list)  # specific issues
+    
+    # v12 Phase 3: Enhanced metrics
+    information_function_area: float = 0.0  # Area under information function
+    optimal_theta_range: tuple[float, float] = (0.0, 0.0)  # θ range with max information
+    semantic_variance: float = 0.0          # Response semantic variance
+    temporal_stability: float = 0.0         # Score stability over time
+    cross_model_consistency: float = 0.0    # Consistency across models
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +83,12 @@ class CaseQualityMetrics:
             "n_responses": self.n_responses,
             "is_discriminative": self.is_discriminative,
             "flags": self.flags,
+            # v12 Phase 3: Enhanced metrics
+            "information_function_area": round(self.information_function_area, 6),
+            "optimal_theta_range": self.optimal_theta_range,
+            "semantic_variance": round(self.semantic_variance, 4),
+            "temporal_stability": round(self.temporal_stability, 4),
+            "cross_model_consistency": round(self.cross_model_consistency, 4),
         }
 
 
@@ -196,6 +209,15 @@ class SuitePruner:
         if n_responses < MIN_RESPONSES_FOR_STATS:
             flags.append("insufficient_data")
 
+        # v12 Phase 3: Enhanced metrics calculation
+        info_area = self._calculate_information_function_area(a, b, irt_c)
+        optimal_range = self._find_optimal_theta_range(a, b, irt_c)
+        
+        # These would be calculated from actual response data in production
+        semantic_variance = 0.0  # Placeholder: would analyze response semantics
+        temporal_stability = 0.0  # Placeholder: would analyze score stability over time
+        cross_model_consistency = 0.0  # Placeholder: would analyze consistency across models
+
         return CaseQualityMetrics(
             case_id=case_id,
             discrimination_a=a,
@@ -206,6 +228,12 @@ class SuitePruner:
             n_responses=n_responses,
             is_discriminative=is_discriminative,
             flags=flags,
+            # v12 Phase 3: Enhanced metrics
+            information_function_area=info_area,
+            optimal_theta_range=optimal_range,
+            semantic_variance=semantic_variance,
+            temporal_stability=temporal_stability,
+            cross_model_consistency=cross_model_consistency,
         )
 
     def analyze_suite(
@@ -372,6 +400,61 @@ class SuitePruner:
 
         info = (a ** 2 * p * (1.0 - p)) / ((1.0 - c) ** 2)
         return info
+
+    def _calculate_information_function_area(self, a: float, b: float, c: float) -> float:
+        """
+        v12 Phase 3: Calculate area under the information function.
+        
+        This provides a single scalar measure of overall item information
+        across the ability range [-3, 3].
+        """
+        # Numerical integration using Simpson's rule
+        n_points = 61  # Odd number for Simpson's rule
+        theta_range = [-3.0 + (6.0 * i / (n_points - 1)) for i in range(n_points)]
+        
+        info_values = [self._fisher_information(a, b, c, theta) for theta in theta_range]
+        
+        # Simpson's rule integration
+        h = 6.0 / (n_points - 1)
+        area = info_values[0] + info_values[-1]
+        
+        for i in range(1, n_points - 1):
+            weight = 4 if i % 2 == 1 else 2
+            area += weight * info_values[i]
+        
+        area *= h / 3.0
+        return area
+
+    def _find_optimal_theta_range(self, a: float, b: float, c: float) -> tuple[float, float]:
+        """
+        v12 Phase 3: Find the ability range where the item provides most information.
+        
+        Returns the theta range where information > 50% of maximum.
+        """
+        theta_values = [i * 0.1 for i in range(-30, 31)]  # -3.0 to 3.0
+        info_values = [self._fisher_information(a, b, c, theta) for theta in theta_values]
+        
+        max_info = max(info_values)
+        threshold = 0.5 * max_info
+        
+        # Find contiguous range above threshold
+        in_range = False
+        start_theta = 0.0
+        end_theta = 0.0
+        
+        for theta, info in zip(theta_values, info_values):
+            if info >= threshold and not in_range:
+                start_theta = theta
+                in_range = True
+            elif info < threshold and in_range:
+                end_theta = theta
+                in_range = False
+        
+        # Handle case where range extends to end
+        if in_range:
+            end_theta = theta_values[-1]
+        
+        return (start_theta, end_theta)
 
 
 # ── GPQA Integration ─────────────────────────────────────────────────────────

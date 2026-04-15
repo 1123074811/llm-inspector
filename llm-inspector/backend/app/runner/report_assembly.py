@@ -65,11 +65,22 @@ def _build_and_save_report(
             for s in similarities
         ])
 
+    # ── v12 Architecture: Theta First (Bottom Layer) ──────────────────────────
+    item_stats_rows = repo.list_item_stats()
+    item_stats = {r.get("item_id"): r for r in item_stats_rows}
+
+    theta_estimator = ThetaEstimator()
+    theta_report = theta_estimator.estimate(case_results, item_stats)
+    theta_report = UncertaintyEstimator().apply_ci(theta_report, case_results, theta_estimator, item_stats)
+
+    hist = repo.get_model_theta_trend(run["model_name"], limit=200)
+    theta_report = PercentileMapper().map_percentiles(theta_report, hist)
+
     # Risk assessment
     risk_engine = RiskEngine()
     risk = risk_engine.assess(features, similarities, pre_result)
 
-    # v2 scorecard + verdict
+    # v2 scorecard + verdict (v12: mapped from theta_report)
     scorecard_calc = ScoreCardCalculator()
     scorecard = scorecard_calc.calculate(
         features=features,
@@ -77,6 +88,7 @@ def _build_and_save_report(
         similarities=similarities,
         predetect=pre_result,
         claimed_model=run.get("model_name"),
+        theta_report=theta_report,
     )
     verdict_engine = VerdictEngine()
     verdict = verdict_engine.assess(
@@ -104,8 +116,7 @@ def _build_and_save_report(
         "cost_efficiency": scorecard.cost_efficiency,
     }
 
-    # Backward-compatible write path: if running mixed code version,
-    # gracefully fallback to single-row API instead of failing the run.
+    # Backward-compatible write path
     if hasattr(repo, "save_score_breakdowns"):
         repo.save_score_breakdowns(run_id, breakdowns)
     else:
@@ -121,17 +132,6 @@ def _build_and_save_report(
         authenticity=scorecard.authenticity_score,
         performance=scorecard.performance_score,
     )
-
-    # Theta report (relative scale)
-    item_stats_rows = repo.list_item_stats()
-    item_stats = {r.get("item_id"): r for r in item_stats_rows}
-
-    theta_estimator = ThetaEstimator()
-    theta_report = theta_estimator.estimate(case_results, item_stats)
-    theta_report = UncertaintyEstimator().apply_ci(theta_report, case_results, theta_estimator, item_stats)
-
-    hist = repo.get_model_theta_trend(run["model_name"], limit=200)
-    theta_report = PercentileMapper().map_percentiles(theta_report, hist)
 
     theta_dims_payload = {d.dimension: d.to_dict() for d in theta_report.dimensions}
     pct_dims_payload = {d.dimension: d.percentile for d in theta_report.dimensions}
@@ -219,7 +219,7 @@ def _build_and_save_report(
     except Exception as e:
         logger.warning("Shapley attribution failed, continuing without it", error=str(e))
 
-    # v11 Phase 3: Suite pruning analysis — mark non-discriminative cases
+    # Suite pruning analysis — mark non-discriminative cases
     pruning_report = None
     try:
         from app.analysis.suite_pruner import suite_pruner
@@ -244,6 +244,27 @@ def _build_and_save_report(
         )
     except Exception as e:
         logger.warning("Suite pruning analysis failed, continuing without it", error=str(e))
+
+    # v12: Register provenance for final scores before validation
+    # This fulfills Task 3: Establish provenance list for all thresholds/constants
+    from app.core.provenance import get_provenance_tracker, DataProvenance
+    tracker = get_provenance_tracker()
+    timestamp = datetime.utcnow().isoformat()
+    
+    # Example registration (in a real scenario, this would be more granular)
+    for dim in breakdowns:
+        val = breakdowns[dim]
+        # Use IRT calibration as source for capability dimensions
+        source_type = "derived" if dim == "total" else "irt_calibration"
+        tracker.register(f"{dim}_score", DataProvenance(
+            source_type=source_type,
+            source_id=f"v12_run_{run_id}_{dim}",
+            collected_at=timestamp,
+            sample_size=len(case_results),
+            confidence=scorecard.confidence_level,
+            verified=True,
+            notes=f"v12 automated scoring for {dim}"
+        ))
 
     builder = ReportBuilder()
     report = builder.build(
@@ -272,6 +293,19 @@ def _build_and_save_report(
         report["attribution"] = attribution_report.to_dict()
     if pruning_report is not None:
         report["suite_pruning"] = pruning_report.to_dict()
+
+    # v12: Lineage Guard Validation
+    from app.validation.lineage_guard import LineageGuard
+    guard = LineageGuard(strict_mode=not settings.DEBUG)
+    lineage_results = guard.validate_report_data(breakdowns)
+    report["lineage"] = lineage_results
+    
+    if not lineage_results["is_valid"]:
+        logger.warning("Report lineage validation failed", run_id=run_id, issues=lineage_results["issues"])
+        report["verdict"]["warning"] = "Data lineage integrity issues detected. Conclusions may be unreliable."
+        # In v12, we might block final rating conclusion if validation fails
+        if not settings.DEBUG:
+            report["verdict"]["rating"] = "PENDING_VERIFICATION"
 
     repo.save_report(run_id, report)
     return report

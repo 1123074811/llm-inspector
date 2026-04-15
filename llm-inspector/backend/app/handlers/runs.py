@@ -127,6 +127,7 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "started_at": run.get("started_at"),
         "completed_at": run.get("completed_at"),
         "error_message": run.get("error_message"),
+        "error_code": run.get("error_code"),
         "progress": {
             "completed": completed,
             "total": total,

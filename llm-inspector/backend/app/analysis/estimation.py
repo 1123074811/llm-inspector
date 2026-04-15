@@ -17,6 +17,7 @@ from app.core.schemas import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.provenance import get_provenance_tracker, DataProvenance
 
 logger = get_logger(__name__)
 
@@ -113,16 +114,26 @@ class ThetaEstimator:
     """Simple Rasch-like 1PL estimator from pass/fail case results."""
 
     def estimate(self, case_results, item_stats: dict[str, dict]) -> ThetaReport:
+        tracker = get_provenance_tracker()
         by_dim: dict[str, list[float]] = {}
+        total_samples = 0
+        calibrated_items = 0
+        
         for r in case_results:
             dim = (r.case.dimension or r.case.category or "unknown").lower()
             st = item_stats.get(r.case.id, {})
             b = float(st.get("irt_b", 0.0) or 0.0)
+            
+            # Check if item has IRT calibration data
+            if st.get("irt_a") and st.get("irt_b"):
+                calibrated_items += 1
+            
             for s in r.samples:
                 if s.judge_passed is None:
                     continue
                 x = 1.0 if s.judge_passed else 0.0
                 by_dim.setdefault(dim, []).append((x, b))
+                total_samples += 1
 
         dims: list[ThetaDimensionEstimate] = []
         all_thetas: list[float] = []
@@ -136,8 +147,25 @@ class ThetaEstimator:
                 n_items=len(obs),
             ))
             all_thetas.append(theta)
+            
+            # Register dimension theta provenance for v12
+            theta_key = f"theta_{dim}_{settings.CALIBRATION_VERSION}"
+            dim_provenance = DataProvenance.from_irt_calibration(
+                case_id=dim,
+                calibration_version=settings.CALIBRATION_VERSION,
+                sample_size=len(obs),
+                confidence=0.8 if len(obs) >= 5 else 0.6
+            )
+            tracker.register(theta_key, dim_provenance)
 
         if not all_thetas:
+            # Register fallback provenance for global theta
+            fallback_provenance = DataProvenance.create_fallback(
+                "theta_global", 
+                "insufficient judged samples"
+            )
+            tracker.register(f"theta_global_{settings.CALIBRATION_VERSION}", fallback_provenance)
+            
             return ThetaReport(
                 global_theta=0.0,
                 global_ci_low=-0.3,
@@ -149,6 +177,17 @@ class ThetaEstimator:
             )
 
         g = sum(all_thetas) / len(all_thetas)
+        
+        # Register global theta provenance for v12
+        global_theta_key = f"theta_global_{settings.CALIBRATION_VERSION}"
+        global_provenance = DataProvenance.from_irt_calibration(
+            case_id="global",
+            calibration_version=settings.CALIBRATION_VERSION,
+            sample_size=total_samples,
+            confidence=0.9 if total_samples >= 30 else 0.7
+        )
+        tracker.register(global_theta_key, global_provenance)
+        
         return ThetaReport(
             global_theta=g,
             global_ci_low=g - 0.25,

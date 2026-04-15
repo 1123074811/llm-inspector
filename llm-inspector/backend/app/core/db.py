@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
     started_at            TEXT,
     completed_at          TEXT,
     error_message         TEXT,
+    error_code            TEXT,
     metadata              TEXT DEFAULT '{}'
 );
 

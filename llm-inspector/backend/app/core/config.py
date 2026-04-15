@@ -22,6 +22,7 @@ _load_env_file()
 class Settings:
     # App
     APP_ENV: str = os.getenv("APP_ENV", "development")
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
     STRICT_PROVENANCE: bool = os.getenv("STRICT_PROVENANCE", "false").lower() == "true"
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -115,6 +116,10 @@ class Settings:
     VERDICT_TRUSTED_THRESHOLD: int = int(os.getenv("VERDICT_TRUSTED_THRESHOLD", "80"))
     VERDICT_SUSPICIOUS_THRESHOLD: int = int(os.getenv("VERDICT_SUSPICIOUS_THRESHOLD", "60"))
     VERDICT_HIGH_RISK_THRESHOLD: int = int(os.getenv("VERDICT_HIGH_RISK_THRESHOLD", "40"))
+
+    # v12 Phase 2: Semantic Judge V3 and Hallucination Detector V3
+    USE_EXTERNAL_LLM: bool = os.getenv("USE_EXTERNAL_LLM", "false").lower() == "true"
+    USE_KNOWLEDGE_GRAPH: bool = os.getenv("USE_KNOWLEDGE_GRAPH", "false").lower() == "true"
 
     @property
     def is_production(self) -> bool:

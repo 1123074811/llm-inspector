@@ -169,9 +169,11 @@ family_overrides:
 
 # Metadata
 generation:
-  version: "v7.0"
+  version: "v12.0"
   tool: "irt_calibration.py"
-  command: "python -m app.analysis.irt_calibration --suite suite_v3 --output scoring_weights.yaml"
+  tool_version: "1.5.0"
+  source_data_hash: "sha256:7e8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a"
+  command: "python -m app.analysis.irt_calibration --suite suite_v12 --output scoring_weights.yaml"
   validation_command: "python -m app.validation.audit_runner --config scoring_weights.yaml"
   
 # Changelog

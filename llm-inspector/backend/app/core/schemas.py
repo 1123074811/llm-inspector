@@ -242,6 +242,15 @@ class LayerResult:
     evidence: list[str] = field(default_factory=list)
     tokens_used: int = 0
 
+    def to_dict(self) -> dict:
+        return {
+            "layer": self.layer,
+            "confidence": round(self.confidence, 3),
+            "identified_as": self.identified_as,
+            "evidence": self.evidence,
+            "tokens_used": self.tokens_used,
+        }
+
 
 @dataclass
 class PreDetectionResult:
@@ -314,6 +323,8 @@ class ScoreCard:
     speed_score: float = 0.0
     stability_score: float = 0.0
     cost_efficiency: float = 0.0
+    # Confidence level (0-1)
+    confidence_level: float = 0.0
 
     def to_dict(self) -> dict:
         return {

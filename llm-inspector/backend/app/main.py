@@ -122,7 +122,7 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/calibration/replay$",       handle_list_calibration_replays),
     ("GET",    r"^/api/v1/calibration/replay/[^/]+$",handle_get_calibration_replay),
     ("POST",   r"^/api/v1/tools/generate-isomorphic$", handle_generate_isomorphic),
-    # v8.0 Phase 5 routes
+    # v8 API routes (backward compatible)
     ("GET",    r"^/api/v8/health$",                    handle_v8_health),
     ("GET",    r"^/api/v8/plugins$",                    handle_v8_list_plugins),
     ("GET",    r"^/api/v8/plugins/[^/]+/metadata$",   handle_v8_plugin_metadata),
@@ -131,16 +131,16 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v8/runs/[^/]+/case/[^/]+/provenance$", handle_v8_case_provenance),
     ("GET",    r"^/api/v8/runs/[^/]+/data-lineage$",  handle_v8_data_lineage),
     ("GET",    r"^/api/v8/references/thresholds$",     handle_v8_threshold_references),
-    # v11 Phase 1 routes
+    # Circuit breaker and tracing routes
     ("GET",    r"^/api/v1/circuit-breaker$",           handle_circuit_breaker_status),
     ("POST",   r"^/api/v1/circuit-breaker/reset$",     handle_circuit_breaker_reset),
     ("GET",    r"^/api/v1/runs/[^/]+/trace$",          handle_run_trace),
     ("GET",    r"^/api/v1/tracers/progress$",           handle_tracer_progress_all),
-    # v11 Phase 2: CDM + Attribution
+    # CDM and attribution routes
     ("GET",    r"^/api/v1/runs/[^/]+/cdm$",            handle_run_cdm),
     ("GET",    r"^/api/v1/runs/[^/]+/attribution$",    handle_run_attribution),
     ("GET",    r"^/api/v1/cdm/skills$",                 handle_cdm_skills),
-    # v11 Phase 3: Suite Pruning + Prompt Optimizer + GPQA + Multilingual
+    # Suite pruning, prompt optimization, GPQA and multilingual attack routes
     ("POST",   r"^/api/v1/suite/prune$",                handle_suite_prune),
     ("GET",    r"^/api/v1/suite/pruning-report$",       handle_suite_pruning_report),
     ("GET",    r"^/api/v1/prompt-optimizer/report$",    handle_prompt_optimizer_report),

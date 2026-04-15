@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v11.0 - Unix/Linux/Mac Startup Script
+# LLM Inspector v12.0 - Unix/Linux/Mac Startup Script
 # Automatically checks and installs dependencies before starting
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v11.0"
+echo "LLM Inspector v12.0"
 echo "===================================="
 
 # Colors for output

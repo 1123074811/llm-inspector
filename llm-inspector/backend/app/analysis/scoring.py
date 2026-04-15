@@ -171,16 +171,36 @@ class ScoreCardCalculator:
         similarities: list[SimilarityResult],
         predetect: PreDetectionResult | None,
         claimed_model: str | None = None,
+        theta_report: ThetaReport | None = None,
     ) -> ScoreCard:
         card = ScoreCard()
 
-        # ── Capability sub-scores ──
-        card.reasoning_score = self._reasoning_score(case_results)
-        card.adversarial_reasoning_score = self._adversarial_reasoning_score(case_results)
-        card.instruction_score = self._instruction_score(features)
-        card.coding_score = self._coding_score(case_results)
-        card.safety_score = self._safety_score(features)
-        card.protocol_score = self._protocol_score(features)
+        # v12: Derived from ThetaReport if available (Primary Truth)
+        if theta_report:
+            # Map theta (-4 to +4) to 0-100 scale
+            # Formula: 100 / (1 + exp(-theta))
+            def theta_to_100(t: float) -> float:
+                return round(100 / (1 + math.exp(-t)), 1)
+
+            card.total_score = theta_to_100(theta_report.global_theta)
+            
+            dim_map = {d.dimension: d.theta for d in theta_report.dimensions}
+            card.reasoning_score = theta_to_100(dim_map.get("reasoning", 0.0))
+            card.coding_score = theta_to_100(dim_map.get("coding", 0.0))
+            card.instruction_score = theta_to_100(dim_map.get("instruction", 0.0))
+            card.safety_score = theta_to_100(dim_map.get("safety", 0.0))
+            card.protocol_score = theta_to_100(dim_map.get("protocol", 0.0))
+            # Capability score is the average of these mapped dimensions in v12
+            active_dims = [card.reasoning_score, card.coding_score, card.instruction_score, card.safety_score, card.protocol_score]
+            card.capability_score = round(sum(active_dims) / len(active_dims), 1)
+        else:
+            # Fallback to pure feature-based scoring (legacy)
+            card.reasoning_score = self._reasoning_score(case_results)
+            card.adversarial_reasoning_score = self._adversarial_reasoning_score(case_results)
+            card.instruction_score = self._instruction_score(features)
+            card.coding_score = self._coding_score(case_results)
+            card.safety_score = self._safety_score(features)
+            card.protocol_score = self._protocol_score(features)
 
         # v3 new dimensions
         knowledge_score = self._knowledge_score(features, case_results)

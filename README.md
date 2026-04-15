@@ -1,4 +1,4 @@
-# LLM Inspector v11.0 (Next-Gen)
+﻿# LLM Inspector v11.0 (Next-Gen)
 
 LLM Inspector 是一款用于大语言模型（LLM）套壳检测与能力评估的权威工具 —— 旨在检测 LLM API 是否真正提供其声称的模型服务，还是在背后代理/包装了其他基座模型，并对其真实能力进行精准定级。
 
@@ -102,3 +102,20 @@ python -m app.main
 ## 📝 证书与开源协议
 
 本项目遵循 MIT 开源协议。欢迎提交 Issue 与 Pull Request 共同完善！
+---
+
+## 📋 v12.0 升级文档
+
+**v12.0 已进入 Phase 5（清理与发布阶段）**，重点解决数据可信、评分科学、测试真实、成本优化、执行完整、架构精简六大方向。
+
+### v12 核心改进
+- **数据链完整性**：新增 lineage_guard.py 强校验门禁，确保报告每个数字都可追溯
+- **评分体系优化**：统一 theta/CDM 主导，解耦家族权重与启发式规则
+- **测试集升级**：引入高区分度题目，增加防套壳探针
+- **Token 成本优化**：可学习预算分配器，目标降幅 20%~35%
+- **100% 执行完成率**：统一状态机，结构化日志
+
+### 相关文档
+- [v12 升级方案](docs/v12-upgrade-plan.md) - 详细升级路线图
+- [v12 变更说明](llm-inspector/docs/CHANGELOG_v12.md) - 完整变更日志
+- [v12 已知限制](llm-inspector/docs/KNOWN_LIMITATIONS_v12.md) - 当前版本限制说明

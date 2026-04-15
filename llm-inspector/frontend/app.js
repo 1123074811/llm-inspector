@@ -39,6 +39,12 @@ document.addEventListener('click', (e) => {
   else if (action === 'skipTesting') skipTesting(runId);
   else if (action === 'previewIsomorphic') previewIsomorphicCases();
   else if (action === 'applyIsomorphic') applyIsomorphicCases();
+  else if (action === 'copyDiagnostic') {
+    const msgEl = document.getElementById('error-msg-' + runId);
+    if (msgEl) {
+      copyText(msgEl.textContent);
+    }
+  }
 });
 
 // v6: Toggle advanced settings panel
@@ -60,7 +66,31 @@ function toggleAdvancedSettings() {
 function escAttr(s) {
   return String(s||'')
     .replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
-    .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\n/g,'\\n').replace(/\r/g,'\\r');
+}
+
+// Copy text to clipboard
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('已复制到剪贴板');
+  } catch (err) {
+    // Fallback for older browsers or non-secure contexts
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      showToast('已复制到剪贴板');
+    } catch (e) {
+      showToast('复制失败，请手动复制');
+    }
+    document.body.removeChild(textarea);
+  }
 }
 
 // ── Page routing ───────────────────────────────────────────────────────────
@@ -252,10 +282,10 @@ async function pollTask(runId) {
 
   const data = runRes.data;
   const responses = respRes.ok ? respRes.data : [];
-
   const status = data.status;
+
   document.getElementById('task-status-badge').innerHTML = renderStatusBadge(status);
-  renderTaskActions(runId, status, data.baseline_id);
+  renderTaskActions(runId, status, data.baseline_id, data);
   setNavStatus(status);
 
   renderTaskProgress(data, responses);
@@ -280,31 +310,31 @@ function renderStatusBadge(status) {
   return `<span class="badge ${c}">${labels[status]||status}</span>`;
 }
 
-function renderTaskActions(runId, status, baselineId) {
+function renderTaskActions(runId, status, baselineId, data) {
   const el = document.getElementById('task-actions');
   if (!el) return;
 
   const canCancel = ['queued','pre_detecting','running'].includes(status);
+  const canContinue = status === 'pre_detected';
   const canRetry = ['failed','partial_failed'].includes(status);
   const canExport = ['completed','partial_failed'].includes(status);
 
-  // v6 fix: Use data-* attributes with event delegation instead of inline onclick
   let html = '';
   if (canCancel) {
     html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" data-action="cancel" data-run-id="${escAttr(runId)}">停止任务</button>`;
   }
+  if (canContinue) {
+    html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="continueFullTest" data-run-id="${escAttr(runId)}">继续完整测试</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="skipTesting" data-run-id="${escAttr(runId)}">直接生成报告</button>`;
+  }
   if (canRetry) {
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="retry" data-run-id="${escAttr(runId)}">从失败处重试</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="retry" data-run-id="${escAttr(runId)}">重新重试</button>`;
   }
   if (canExport) {
     if (!baselineId) {
-      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="markBaseline" data-run-id="${escAttr(runId)}">标记为基准模型</button>`;
-    } else {
-      html += `<button class="btn danger" style="padding:6px 12px;font-size:12px" data-action="unmarkBaseline" data-run-id="${escAttr(runId)}" data-baseline-id="${escAttr(baselineId)}">取消基准标记</button>`;
+      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="markBaseline" data-run-id="${escAttr(runId)}">启用对比</button>`;
     }
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="compareBaseline" data-run-id="${escAttr(runId)}">与基准对比</button>`;
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="exportPdf" data-run-id="${escAttr(runId)}">打印/导出报告</button>`;
-    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="downloadRadar" data-run-id="${escAttr(runId)}">导出雷达图</button>`;
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="exportPdf" data-run-id="${escAttr(runId)}">导出报告</button>`;
   }
   el.innerHTML = html;
 }
@@ -456,7 +486,10 @@ function renderTaskProgress(data, responses = []) {
     </div>` : '';
 
   const errorHtml = data.error_message ? `<div class="card" style="border-color:#f0b8b8;background:var(--red-bg)">
-      <div style="color:var(--red);font-size:13px">错误: ${escHtml(data.error_message)}</div></div>` : '';
+      <div style="color:var(--red);font-size:13px;font-weight:600">诊断错误 (Code: ${data.error_code || 'E_RUN_FAIL'})</div>
+      <div style="color:var(--red);font-size:12px;margin-top:4px" id="error-msg-${data.run_id || 'current'}">${escHtml(data.error_message)}</div>
+      <div style="margin-top:8px"><button class="btn" style="padding:2px 8px;font-size:11px" data-action="copyDiagnostic" data-run-id="${escAttr(data.run_id || 'current')}">复制诊断信息</button></div>
+      </div>` : '';
 
   let html = `
     <div class="task-split">
@@ -1877,6 +1910,36 @@ async function deleteBaseline(baselineId) {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
+
+// Show toast notification
+function showToast(message, duration = 2000) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 10000;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    `;
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.style.opacity = '1';
+  setTimeout(() => {
+    toast.style.opacity = '0';
+  }, duration);
+}
 
 function escHtml(s) {
   return String(s||'')

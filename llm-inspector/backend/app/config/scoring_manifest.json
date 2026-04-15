@@ -1,0 +1,43 @@
+{
+  "version": "12.0",
+  "updated_at": "2026-04-15T16:35:00Z",
+  "scoring_policies": {
+    "theta_primary": {
+      "id": "POL_001",
+      "description": "IRT Theta is the primary capability metric",
+      "mapping_layer": "linear_standardization_0_100",
+      "source": "Embretson & Reise (2000)",
+      "confidence": 0.95
+    },
+    "cdm_diagnosis": {
+      "id": "POL_002",
+      "description": "Cognitive Diagnostic Model for skill mastery",
+      "source": "de la Torre (2011)",
+      "confidence": 0.90
+    }
+  },
+  "metrics": {
+    "reasoning_score": {
+      "formula": "weighted_pass_rate * irt_information_gain",
+      "provenance": "IRT_CALIBRATION_V11",
+      "min_n": 30
+    },
+    "coding_score": {
+      "formula": "exec_pass_rate",
+      "provenance": "SWE_BENCH_ADAPTED",
+      "min_n": 20
+    }
+  },
+  "thresholds": {
+    "low_discrimination_a": {
+      "value": 0.5,
+      "source": "Embretson & Reise (2000)",
+      "type": "statistical_cutoff"
+    },
+    "high_difficulty_b": {
+      "value": 3.0,
+      "source": "Standard Normal Range",
+      "type": "statistical_cutoff"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 @echo off
 echo ====================================
-echo LLM Inspector v11.0
+echo LLM Inspector v12.0
 echo ====================================
 
 REM Activate virtual environment
@@ -11,7 +11,7 @@ if exist ".venv\Scripts\activate.bat" (
     echo [Warning] .venv not found, using system Python
 )
 
-REM Enable asyncio-native concurrent pipeline (Phase P3)
+REM Enable asyncio-native concurrent pipeline
 REM Set to 0 to fall back to ThreadPoolExecutor mode
 SET ASYNCIO_MODE=1
 

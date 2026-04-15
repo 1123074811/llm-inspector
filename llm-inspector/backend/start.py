@@ -1,5 +1,5 @@
 """
-LLM Inspector v9.0 - Smart Startup Script
+LLM Inspector v12.0 - Smart Startup Script
 
 Automatically checks and installs dependencies before starting the service.
 
@@ -95,7 +95,7 @@ def check_environment(strict_provenance: bool = False):
             issues.append(f"Required directory '{dir_name}' not found")
             print(f"[FAIL] Directory {dir_name}/ not found")
 
-    # v9 Phase A: provenance strict-mode validation
+    # Provenance strict-mode validation
     try:
         from app.analysis.metric_registry import validate_required_metric_sources
         p_issues = validate_required_metric_sources(strict=False)
@@ -125,7 +125,7 @@ def check_environment(strict_provenance: bool = False):
 def run_server(host: str, port: int, reload: bool = False):
     """Run the HTTP server."""
     print("\n" + "=" * 60)
-    print("Starting LLM Inspector v9.0")
+    print("Starting LLM Inspector v12.0")
     print("=" * 60)
     print(f"Host: {host}")
     print(f"Port: {port}")
@@ -162,7 +162,7 @@ def run_server(host: str, port: int, reload: bool = False):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="LLM Inspector v9.0 Startup Script"
+        description="LLM Inspector v12.0 Startup Script"
     )
     parser.add_argument(
         "--port", "-p",
@@ -200,7 +200,7 @@ def main():
     
     # Print banner
     print("\n" + "=" * 60)
-    print("LLM Inspector v9.0 - Startup")
+    print("LLM Inspector v12.0 - Startup")
     print("=" * 60)
     
     # Check dependencies
