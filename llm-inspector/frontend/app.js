@@ -1820,7 +1820,6 @@ async function loadBaselines() {
           <th>操作</th>
         </tr></thead>
         <tbody>
-          // v6 fix: Use data-* attributes instead of inline onclick
           ${baselines.map(b => `<tr>
             <td><strong>${escHtml(b.display_name || b.model_name)}</strong></td>
             <td>${fmtScore(b.total_score)}</td>
