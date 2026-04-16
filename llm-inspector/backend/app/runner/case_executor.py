@@ -14,6 +14,18 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Appended to every system prompt (or used as sole system prompt when absent)
+# to discourage markdown formatting that pollutes plain-text execution logs.
+# Categories whose responses legitimately use code fences / structured text are excluded.
+_PLAIN_TEXT_INSTRUCTION = (
+    "【格式要求】请严格用纯文本回复，禁止使用任何 Markdown 格式符号，"
+    "包括但不限于：**加粗**、*斜体*、# 标题、- 列表符号、> 引用块、```代码块```。"
+    "直接输出内容，不加任何格式装饰。"
+    " [Format] Plain text only. No Markdown: no **bold**, *italic*, # headings, "
+    "- bullets, > blockquotes, or ```code fences```."
+)
+_SKIP_PLAIN_TEXT_CATEGORIES = frozenset({"coding", "tool_use"})
+
 TIMEOUT_MAP = {
     "protocol": 15,
     "instruction": 30,
@@ -70,7 +82,12 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
 
         messages = []
         if case.system_prompt:
-            messages.append(Message("system", case.system_prompt))
+            sys_content = case.system_prompt
+            if case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+            messages.append(Message("system", sys_content))
+        elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+            messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
         messages.append(Message("user", case.user_prompt))
 
         # Build extra_params from case params if needed
@@ -192,7 +209,12 @@ def _execute_param_comparison(adapter, model_name: str, case: TestCase) -> CaseR
         for i in range(n):
             messages = []
             if case.system_prompt:
-                messages.append(Message("system", case.system_prompt))
+                sys_content = case.system_prompt
+                if case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                    sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+                messages.append(Message("system", sys_content))
+            elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
             messages.append(Message("user", case.user_prompt))
             req = LLMRequest(
                 model=model_name, messages=messages,

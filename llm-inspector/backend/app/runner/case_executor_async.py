@@ -29,6 +29,16 @@ TIMEOUT_MAP = {
 
 INTER_SAMPLE_DELAY_BASE = 0.1
 
+# Shared plain-text instruction (mirrors case_executor.py)
+_PLAIN_TEXT_INSTRUCTION = (
+    "【格式要求】请严格用纯文本回复，禁止使用任何 Markdown 格式符号，"
+    "包括但不限于：**加粗**、*斜体*、# 标题、- 列表符号、> 引用块、```代码块```。"
+    "直接输出内容，不加任何格式装饰。"
+    " [Format] Plain text only. No Markdown: no **bold**, *italic*, # headings, "
+    "- bullets, > blockquotes, or ```code fences```."
+)
+_SKIP_PLAIN_TEXT_CATEGORIES = frozenset({"coding", "tool_use"})
+
 
 def _compute_new_delay(current: float, resp, success_count: int) -> tuple[float, int]:
     """Returns (new_delay, new_success_count) without mutating global state."""
@@ -77,7 +87,12 @@ async def async_execute_case(adapter, model_name: str, case: TestCase) -> CaseRe
 
         messages = []
         if case.system_prompt:
-            messages.append(Message("system", case.system_prompt))
+            sys_content = case.system_prompt
+            if case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+            messages.append(Message("system", sys_content))
+        elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+            messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
         messages.append(Message("user", case.user_prompt))
 
         extra: dict = {}
@@ -187,7 +202,12 @@ async def _async_execute_param_comparison(adapter, model_name: str, case: TestCa
         for i in range(n):
             messages = []
             if case.system_prompt:
-                messages.append(Message("system", case.system_prompt))
+                sys_content = case.system_prompt
+                if case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                    sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+                messages.append(Message("system", sys_content))
+            elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
             messages.append(Message("user", case.user_prompt))
             req = LLMRequest(
                 model=model_name, messages=messages,

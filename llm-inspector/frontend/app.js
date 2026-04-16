@@ -93,6 +93,22 @@ async function copyText(text) {
   }
 }
 
+// ── Markdown stripping (for plain-text log display) ───────────────────────
+function stripMd(s) {
+  if (!s) return s;
+  return s
+    .replace(/```[\s\S]*?```/g, t => t.replace(/```\w*\n?/g, '').replace(/```/g, ''))  // code fences
+    .replace(/\*\*(.+?)\*\*/g, '$1')    // **bold**
+    .replace(/\*(.+?)\*/g, '$1')        // *italic*
+    .replace(/__(.+?)__/g, '$1')        // __bold__
+    .replace(/_(.+?)_/g, '$1')          // _italic_
+    .replace(/^#{1,6}\s+/gm, '')        // # headings
+    .replace(/^>\s?/gm, '')             // > blockquotes
+    .replace(/^[-*+]\s+/gm, '• ')       // - / * / + list items → bullet
+    .replace(/^\d+\.\s+/gm, t => t)     // keep numbered lists
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');  // [text](url) → text
+}
+
 // ── Page routing ───────────────────────────────────────────────────────────
 
 function showPage(name) {
@@ -332,8 +348,9 @@ function renderTaskActions(runId, status, baselineId, data) {
   }
   if (canExport) {
     if (!baselineId) {
-      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="markBaseline" data-run-id="${escAttr(runId)}">启用对比</button>`;
+      html += `<button class="btn primary" style="padding:6px 12px;font-size:12px" data-action="markBaseline" data-run-id="${escAttr(runId)}">标记为基准</button>`;
     }
+    html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="compareBaseline" data-run-id="${escAttr(runId)}">与基准对比</button>`;
     html += `<button class="btn" style="padding:6px 12px;font-size:12px" data-action="exportPdf" data-run-id="${escAttr(runId)}">导出报告</button>`;
   }
   el.innerHTML = html;
@@ -784,7 +801,7 @@ function animateProcessConsole(prog, status, pre, responses = []) {
     }
 
     if (ans) {
-      pushConsole(`[回答] ${ans}`);
+      pushConsole(`[回答] ${stripMd(ans)}`);
     }
 
     if (r.error_type) {
@@ -998,12 +1015,16 @@ function renderReport(r) {
       const t = Number(d.theta || 0).toFixed(2);
       const lo = Number(d.ci_low || 0).toFixed(2);
       const hi = Number(d.ci_high || 0).toFixed(2);
-      const pct = d.percentile == null ? '-' : `${Number(d.percentile).toFixed(1)}%`;
-      const width = Math.max(2, Math.min(100, ((Number(d.theta || 0) + 4) / 8) * 100));
+      const pctVal = d.percentile != null ? Math.min(99.9, Number(d.percentile)) : null;
+      const pctText = pctVal != null ? `${pctVal.toFixed(1)}%` : '-';
+      // Bar width matches the displayed percentile; falls back to theta mapping if no percentile
+      const width = pctVal != null
+        ? Math.max(2, Math.min(100, pctVal))
+        : Math.max(2, Math.min(100, ((Number(d.theta || 0) + 4) / 8) * 100));
       return `<div style="margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3)">
           <span>${escHtml(zhLabel(d.dimension))}</span>
-          <span>${pct !== '-' ? `超越 ${pct}` : `得分为 ${t}`}</span>
+          <span>${pctText !== '-' ? `超越 ${pctText}` : `得分为 ${t}`}</span>
         </div>
         <div class="progress-bar" style="height:7px"><div class="progress-fill" style="width:${width}%"></div></div>
       </div>`;
@@ -1163,10 +1184,10 @@ function renderReport(r) {
           📊 数据来源：基于特征向量余弦相似度计算，95%置信区间通过bootstrap采样获得
         </div>
         ${sim.map((s, idx) => {
-          const pct = Math.round(s.score * 100);
+          const pct = Math.min(100, Math.round(s.score * 100));
           const hasCi = s.ci_95_low != null && s.ci_95_high != null;
-          const ciLo = hasCi ? Math.round(s.ci_95_low * 100) : null;
-          const ciHi = hasCi ? Math.round(s.ci_95_high * 100) : null;
+          const ciLo = hasCi ? Math.min(100, Math.round(s.ci_95_low * 100)) : null;
+          const ciHi = hasCi ? Math.min(100, Math.round(s.ci_95_high * 100)) : null;
           const ciText = hasCi
             ? `[${fmtScore(ciLo)}–${fmtScore(ciHi)}%]`
             : `[样本不足，CI 不可用]`;
@@ -1281,9 +1302,10 @@ function scoreCard(val, label) {
     : '–';
   let colorClass = 'score-neutral';
   if (typeof val === 'number') {
-    if (val >= 80) colorClass = 'score-excellent';
-    else if (val >= 60) colorClass = 'score-good';
-    else if (val >= 40) colorClass = 'score-warning';
+    // scores are on a 0–10000 scale (backend multiplies by 100)
+    if (val >= 8000) colorClass = 'score-excellent';
+    else if (val >= 6000) colorClass = 'score-good';
+    else if (val >= 4000) colorClass = 'score-warning';
     else colorClass = 'score-danger';
   }
   return `<div class="score-card ${colorClass}"><div class="score">${v}</div><div class="score-label">${label}</div></div>`;
@@ -1957,7 +1979,7 @@ function fmtScore(v) {
   else if (n >= 60) color = '#2563eb';  // 蓝色: 良好
   else if (n >= 40) color = '#d97706';  // 橙色: 一般
   else color = '#dc2626';               // 红色: 差
-  return `<span style="color:${color};font-weight:600">${n.toFixed(1)}</span>`;
+  return `<span style="color:${color};font-weight:600">${Math.round(n)}</span>`;
 }
 
 // v6 fix: Render dimension score with null handling

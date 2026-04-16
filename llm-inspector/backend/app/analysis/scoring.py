@@ -55,10 +55,10 @@ class ScoreCalculator:
         )
 
         return Scores(
-            protocol_score=min(100.0, round(protocol, 1)),
-            instruction_score=min(100.0, round(instruction, 1)),
-            system_obedience_score=min(100.0, round(system_obedience, 1)),
-            param_compliance_score=min(100.0, round(param, 1)),
+            protocol_score=min(100.0, round(protocol, 2)),
+            instruction_score=min(100.0, round(instruction, 2)),
+            system_obedience_score=min(100.0, round(system_obedience, 2)),
+            param_compliance_score=min(100.0, round(param, 2)),
         )
 
 
@@ -180,7 +180,7 @@ class ScoreCardCalculator:
             # Map theta (-4 to +4) to 0-100 scale
             # Formula: 100 / (1 + exp(-theta))
             def theta_to_100(t: float) -> float:
-                return round(100 / (1 + math.exp(-t)), 1)
+                return round(100 / (1 + math.exp(-t)), 2)
 
             card.total_score = theta_to_100(theta_report.global_theta)
             
@@ -192,7 +192,7 @@ class ScoreCardCalculator:
             card.protocol_score = theta_to_100(dim_map.get("protocol", 0.0))
             # Capability score is the average of these mapped dimensions in v12
             active_dims = [card.reasoning_score, card.coding_score, card.instruction_score, card.safety_score, card.protocol_score]
-            card.capability_score = round(sum(active_dims) / len(active_dims), 1)
+            card.capability_score = round(sum(active_dims) / len(active_dims), 2)
         else:
             # Fallback to pure feature-based scoring (legacy)
             card.reasoning_score = self._reasoning_score(case_results)
@@ -229,12 +229,12 @@ class ScoreCardCalculator:
             }
             card.capability_score = min(100.0, round(
                 sum(normalized_weights[k] * effective_scores[k] for k in effective_scores),
-                1,
+                2,
             ))
         else:
             card.capability_score = min(100.0, round(
                 sum(weights.get(k, 0) * v for k, v in effective_scores.items()),
-                1,
+                2,
             ))
 
         # ── Authenticity sub-scores ──
@@ -275,7 +275,7 @@ class ScoreCardCalculator:
             + (auth_weights.get("extraction", 0) * extraction_resistance if extraction_resistance is not None else 0)
             + auth_weights["predetect"] * (card.predetect_confidence if card.predetect_confidence is not None else 0)
             + auth_weights["fingerprint"] * (fingerprint_match if fingerprint_match is not None else 0),
-            1,
+            2,
         ))
 
         # ── Performance sub-scores ──
@@ -291,7 +291,7 @@ class ScoreCardCalculator:
             + 0.25 * (card.stability_score if card.stability_score is not None else 0)
             + 0.25 * (card.cost_efficiency if card.cost_efficiency is not None else 0)
             + 0.15 * ttft_plausibility,
-            1,
+            2,
         ))
 
         # ── Total ──
@@ -299,17 +299,17 @@ class ScoreCardCalculator:
             0.45 * (card.capability_score if card.capability_score is not None else 0)
             + 0.30 * (card.authenticity_score if card.authenticity_score is not None else 0)
             + 0.25 * (card.performance_score if card.performance_score is not None else 0),
-            1,
+            2,
         )
 
         # Store v3 breakdown extras
         # v6: Use None for missing data instead of fake 50.0
         card.breakdown = getattr(card, "breakdown", {})
-        card.breakdown["knowledge_score"] = round(knowledge_score, 1) if knowledge_score is not None else None
-        card.breakdown["tool_use_score"] = round(tool_use_score, 1) if tool_use_score is not None else None
-        card.breakdown["extraction_resistance"] = round(extraction_resistance, 1) if extraction_resistance is not None else None
-        card.breakdown["fingerprint_match"] = round(fingerprint_match, 1)
-        card.breakdown["ttft_plausibility"] = round(ttft_plausibility, 1)
+        card.breakdown["knowledge_score"] = round(knowledge_score, 2) if knowledge_score is not None else None
+        card.breakdown["tool_use_score"] = round(tool_use_score, 2) if tool_use_score is not None else None
+        card.breakdown["extraction_resistance"] = round(extraction_resistance, 2) if extraction_resistance is not None else None
+        card.breakdown["fingerprint_match"] = round(fingerprint_match, 2)
+        card.breakdown["ttft_plausibility"] = round(ttft_plausibility, 2)
 
         return card
 

@@ -57,7 +57,7 @@ async def _run_cases_async(
     from app.runner.orchestrator import _mode_concurrency
     max_workers = _mode_concurrency(test_mode)
     semaphore = _asyncio.Semaphore(max_workers)
-    budget_threshold = (budget_guard.budget * 0.05) if budget_guard else 0
+    budget_threshold = (budget_guard.budget * 0.05) if (budget_guard and test_mode == "quick") else 0
     pending_saves: list = []
     budget_exhausted = False
 
@@ -122,8 +122,8 @@ async def _run_cases_async(
             pass_rate=round(result.pass_rate, 2), phase=phase_label,
         )
 
-        # Early abort on >80% failure rate after 10+ results
-        if check_early_abort and len(case_results) >= 10:
+        # Early abort on >80% failure rate — quick mode only
+        if check_early_abort and test_mode == "quick" and len(case_results) >= 10:
             total = len(case_results)
             failed = failed_count_ref["count"]
             if total > 0 and (failed / total) > 0.8:

@@ -303,9 +303,21 @@ class AsyncDetectionPipeline:
             # 调用适配器
             from app.core.schemas import Message, LLMRequest
             
+            _PLAIN_TEXT_INSTRUCTION = (
+                "请用纯文本回复，不要使用 Markdown 格式（不要使用 **加粗**、*斜体*、# 标题、"
+                "- 列表符号、> 引用块等格式符号），直接给出答案内容。"
+            )
+            _SKIP_PLAIN_TEXT_CATEGORIES = frozenset({"coding", "tool_use"})
+            category = getattr(case, "category", "")
+
             messages = [Message(role="user", content=user_prompt)]
             if system_prompt:
-                messages.insert(0, Message(role="system", content=system_prompt))
+                sys_content = system_prompt
+                if category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                    sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+                messages.insert(0, Message(role="system", content=sys_content))
+            elif category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+                messages.insert(0, Message(role="system", content=_PLAIN_TEXT_INSTRUCTION))
             
             request = LLMRequest(
                 model=getattr(adapter, "model", "unknown"),

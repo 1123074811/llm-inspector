@@ -62,8 +62,8 @@ class Settings:
     CORE_SIZE: int = int(os.getenv("CORE_SIZE", "12"))
     EXPANSION_SIZE: int = int(os.getenv("EXPANSION_SIZE", "10"))
     ARBITRATION_MAX: int = int(os.getenv("ARBITRATION_MAX", "6"))
-    DEFAULT_MAX_TOKENS_CAP: int = int(os.getenv("DEFAULT_MAX_TOKENS_CAP", "120"))
-    LONG_FORM_MAX_TOKENS_CAP: int = int(os.getenv("LONG_FORM_MAX_TOKENS_CAP", "250"))
+    DEFAULT_MAX_TOKENS_CAP: int = int(os.getenv("DEFAULT_MAX_TOKENS_CAP", "600"))
+    LONG_FORM_MAX_TOKENS_CAP: int = int(os.getenv("LONG_FORM_MAX_TOKENS_CAP", "1200"))
 
     # Token budget guards (per-run token spending limits)
     TOKEN_BUDGET_QUICK: int = int(os.getenv("TOKEN_BUDGET_QUICK", "15000"))

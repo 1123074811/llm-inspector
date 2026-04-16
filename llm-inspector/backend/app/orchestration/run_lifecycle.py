@@ -162,8 +162,9 @@ class RunLifecycleManager:
             repo.update_run_status(self.run_id, "failed", error_message="No cases found in bank", error_code="E_EMPTY_SUITE")
             return
 
-        # 2. Filter for confirmatory if needed
-        if (test_mode != "full" and pre_result.success and 
+        # 2. Filter for confirmatory if needed (quick mode only —
+        #    standard/deep must run all assigned cases for data accuracy)
+        if (test_mode == "quick" and pre_result.success and
             0.60 <= pre_result.confidence < settings.PREDETECT_CONFIDENCE_THRESHOLD):
             cases = _select_confirmatory_cases(cases, pre_result.identified_as)
 

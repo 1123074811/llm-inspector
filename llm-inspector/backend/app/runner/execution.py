@@ -57,11 +57,17 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     if not case_results:
         return False, features_cache, sims_cache, scorecard_cache
 
-    # v10: Computerized Adaptive Testing (CAT) early stopping
-    # If standard error of measurement (SEM) is low enough, we can stop early
     total_cases = len(case_results)
+
+    # Only Quick mode gets any early stopping.
+    # Standard and Deep must run all assigned test cases for data accuracy.
+    if test_mode != "quick":
+        return False, features_cache, sims_cache, scorecard_cache
+
+    # ── Quick mode intelligent stop ──────────────────────────────────────────
+
+    # v10: CAT early stopping — SEM < 0.3 across all major dimensions
     if total_cases >= 10:
-        # Check CAT threshold
         from app.analysis.irt_params import get_calibrated_params
 
         dim_info = {}
@@ -69,12 +75,9 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
             dim = getattr(cr.case, 'dimension', 'unknown')
             params = get_calibrated_params(cr.case.id)
             if params:
-                # We don't know exact theta here without full recalculation,
-                # so we use expected information at theta=0 as a heuristic proxy
                 info = params.calculate_information(0.0)
                 dim_info[dim] = dim_info.get(dim, 0.0) + info
 
-        # If all major dimensions have SEM < 0.3 (Info > 11.1)
         cat_satisfied = True
         major_dims = [d for d in dim_info.keys() if d != "unknown"]
 
@@ -86,55 +89,33 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
                     cat_satisfied = False
                     break
 
-            if cat_satisfied and test_mode != "deep":
+            if cat_satisfied:
                 logger.info(
                     "v10 CAT early stopping triggered (SEM < 0.3 for all dims)",
                     test_mode=test_mode,
-                    cases_run=total_cases
+                    cases_run=total_cases,
                 )
                 return True, features_cache, sims_cache, scorecard_cache
 
-    # v6: Failure rate early stop for all modes
-    # If error rate > 80% after 10 cases, abort early (API likely broken)
-    if total_cases >= 10:
-        failed_cases = sum(1 for r in case_results if r.pass_rate == 0.0)
-        fail_rate = failed_cases / total_cases
-        if fail_rate > 0.80:
-            logger.warning(
-                "High failure rate detected, aborting early",
-                fail_rate=round(fail_rate, 2),
-                total_cases=total_cases,
-                test_mode=test_mode,
-            )
-            return True, features_cache, sims_cache, scorecard_cache
-
     # v6: Quick mode 2-point early stop (minimum 2 cases)
-    if test_mode == "quick":
-        # After just 2 core cases, check if model is clearly identifiable
-        if len(case_results) >= 2:
-            extractor = FeatureExtractor()
-            features = extractor.extract(case_results)
-            similarities: list = sims_cache or []
-            if not similarities:
-                from app.runner.orchestrator import _load_benchmarks
-                run_suite = case_results[0].case.suite_version if case_results else "v2"
-                similarities = SimilarityEngine().compare(features, _load_benchmarks(run_suite))
+    if len(case_results) >= 2:
+        extractor = FeatureExtractor()
+        features = extractor.extract(case_results)
+        similarities: list = sims_cache or []
+        if not similarities:
+            from app.runner.orchestrator import _load_benchmarks
+            run_suite = case_results[0].case.suite_version if case_results else "v2"
+            similarities = SimilarityEngine().compare(features, _load_benchmarks(run_suite))
 
-            if similarities and len(similarities) >= 2:
-                top = similarities[0]
-                second = similarities[1]
-                # If similarity gap >= 0.15, we have strong identification
-                if top.similarity_score >= 0.70 and (top.similarity_score - second.similarity_score) >= 0.15:
-                    return True, features, similarities, scorecard_cache
-        # Otherwise continue to 6-case threshold for quick mode
-        if len(case_results) < 6:
-            return False, features_cache, sims_cache, scorecard_cache
+        if similarities and len(similarities) >= 2:
+            top = similarities[0]
+            second = similarities[1]
+            # Strong identification: large gap between top-1 and top-2 similarity
+            if top.similarity_score >= 0.70 and (top.similarity_score - second.similarity_score) >= 0.15:
+                return True, features, similarities, scorecard_cache
 
+    # Require at least 6 cases before the threshold check
     if len(case_results) < 6:
-        return False, features_cache, sims_cache, scorecard_cache
-
-    # Deep mode: no early stopping — always run full suite
-    if test_mode == "deep":
         return False, features_cache, sims_cache, scorecard_cache
 
     extractor = FeatureExtractor()
@@ -142,7 +123,7 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     if not features:
         return False, features_cache, sims_cache, scorecard_cache
 
-    similarities: list = sims_cache or []
+    similarities = sims_cache or []
     if not similarities:
         from app.runner.orchestrator import _load_benchmarks
         run_suite = case_results[0].case.suite_version if case_results else "v2"
@@ -155,30 +136,7 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
     second = similarities[1] if len(similarities) > 1 else None
     delta = (top.similarity_score - second.similarity_score) if second else 1.0
 
-    if test_mode == "quick":
-        return (top.similarity_score >= 0.78 and delta >= 0.10), features, similarities, scorecard_cache
-
-    if test_mode == "standard":
-        sc = scorecard_cache
-        if sc is None:
-            sc = ScoreCardCalculator().calculate(
-                features=features,
-                case_results=case_results,
-                similarities=similarities,
-                predetect=None,
-                claimed_model=None,
-            )
-
-        if top.similarity_score >= 0.85 and delta >= 0.12:
-            near_boundary = abs(sc.total_score - 70.0) <= 5.0 or abs(sc.authenticity_score - 70.0) <= 6.0
-            unstable = delta < 0.05
-            if not near_boundary and not unstable:
-                return True, features, similarities, sc
-
-        if top.similarity_score >= 0.92 and delta >= 0.08:
-            return True, features, similarities, sc
-
-    return False, features, similarities, scorecard_cache
+    return (top.similarity_score >= 0.78 and delta >= 0.10), features, similarities, scorecard_cache
 
 
 def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
@@ -199,8 +157,9 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
     in_flight = {}
     lock = threading.Lock()
 
-    # Token budget thresholds: stop dispatching new work when < 5% budget remains
-    budget_threshold = (budget_guard.budget * 0.05) if budget_guard else 0
+    # Token budget thresholds: only enforce hard cutoff in quick mode.
+    # Standard and deep modes must run all assigned cases for data accuracy.
+    budget_threshold = (budget_guard.budget * 0.05) if (budget_guard and test_mode == "quick") else 0
     pending_saves = []
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=f"case-{phase_label}") as pool:
@@ -220,8 +179,8 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                     # Don't submit new cases; wait for in-flight to complete
                     break
 
-                # Check token budget before submitting
-                if budget_guard and budget_guard.remaining < budget_threshold:
+                # Check token budget before submitting (quick mode only)
+                if budget_threshold > 0 and budget_guard and budget_guard.remaining < budget_threshold:
                     logger.info(
                         "Token budget exhausted, skipping remaining phase cases",
                         run_id=run_id, phase=phase_label,
@@ -280,7 +239,7 @@ def _run_cases_concurrent(adapter, model_name: str, cases: list[TestCase],
                     logger.warning("Case failed", run_id=run_id, case_id=case.id, error=str(e))
                     check_early_abort = True
 
-            if check_early_abort:
+            if check_early_abort and test_mode == "quick":
                 with lock:
                     total = len(case_results)
                     failed = failed_count_ref["count"]

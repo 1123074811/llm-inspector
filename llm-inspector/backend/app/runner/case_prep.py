@@ -308,32 +308,32 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
 
     _JUDGE_MAX_TOKENS: dict[str, int] = {
         "exact_match":          15,
-        "json_schema":         120,
-        "line_count":          100,
-        "code_execution":      300,
-        "regex_match":         150,
-        "refusal_detect":      150,
-        "constraint_reasoning": 700,
-        "text_constraints":    150,
-        "identity_consistency": 150,
-        "heuristic_style":     250,
-        "any_text":            180,
-        "prompt_leak_detect":   1200,
-        "forbidden_word_extract": 500,
-        "path_leak_detect":     500,
-        "tool_config_leak_detect": 600,
-        "memory_leak_detect":   500,
-        "denial_pattern_detect": 200,
-        "spec_contradiction_check": 50,
-        "refusal_style_fingerprint": 300,
-        "language_bias_detect": 200,
-        "tokenizer_fingerprint": 20,
+        "json_schema":         200,
+        "line_count":          200,
+        "code_execution":      600,
+        "regex_match":         300,
+        "refusal_detect":      300,
+        "constraint_reasoning": 1200,
+        "text_constraints":    400,
+        "identity_consistency": 400,
+        "heuristic_style":     600,
+        "any_text":            600,
+        "prompt_leak_detect":   1500,
+        "forbidden_word_extract": 800,
+        "path_leak_detect":     800,
+        "tool_config_leak_detect": 800,
+        "memory_leak_detect":   800,
+        "denial_pattern_detect": 400,
+        "spec_contradiction_check": 150,
+        "refusal_style_fingerprint": 500,
+        "language_bias_detect": 400,
+        "tokenizer_fingerprint": 30,
         # New judge methods
-        "multi_step_verify":   500,
-        "yaml_csv_validate":   200,
-        "hallucination_detect": 200,
-        "context_overflow_detect": 1200,
-        "semantic_judge":       400,
+        "multi_step_verify":   1000,
+        "yaml_csv_validate":   400,
+        "hallucination_detect": 400,
+        "context_overflow_detect": 1500,
+        "semantic_judge":       800,
     }
 
     for c in ordered:
@@ -357,12 +357,32 @@ def _prepare_cases(cases: list[TestCase], test_mode: str) -> tuple[list[TestCase
         if c.id == "perf_002":
             c.max_tokens = min(c.max_tokens, settings.LONG_FORM_MAX_TOKENS_CAP)
 
+    # Standard/Deep modes: guarantee a minimum max_tokens floor so
+    # responses are not truncated.  Quick mode keeps tight caps for speed.
+    if test_mode in ("standard", "deep"):
+        _MIN_TOKENS_FLOOR = {
+            "reasoning":    800,
+            "coding":       600,
+            "instruction":  400,
+            "safety":       400,
+            "knowledge":    400,
+            "consistency":  400,
+            "extraction":   600,
+        }
+        _DEFAULT_FLOOR = 400
+        for c in ordered:
+            floor = _MIN_TOKENS_FLOOR.get(c.category, _DEFAULT_FLOOR)
+            # performance category keeps its tight caps (latency probes etc.)
+            if c.category != "performance":
+                c.max_tokens = max(c.max_tokens, floor)
+
     # Adaptive sampling
     for c in ordered:
         c.n_samples = _adaptive_samples(c, test_mode)
 
-    # In non-deep modes, keep only top-2 core code execution cases.
-    if test_mode != "deep":
+    # In quick mode, keep only top-2 core code execution cases to save budget.
+    # Standard and deep modes run all assigned cases for data accuracy.
+    if test_mode == "quick":
         code_cases = [c for c in ordered if c.judge_method == "code_execution"]
         code_cases.sort(key=lambda c: (-c.weight, _case_value(c)))
         keep_ids = {c.id for c in code_cases[:2]}
