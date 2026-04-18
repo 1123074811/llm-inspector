@@ -13,6 +13,10 @@ import pytest
 # Ensure backend is on path
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+# Exclude legacy phase-acceptance tests from default collection.
+# Run them explicitly with: pytest backend/tests/legacy/ -q
+collect_ignore_glob = ["legacy/*.py"]
+
 # Use isolated test database
 os.environ["DATABASE_URL"] = "sqlite:///./test_inspector.db"
 

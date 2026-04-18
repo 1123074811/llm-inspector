@@ -326,36 +326,50 @@ def test_handler_health(setup_database):
 
 
 # ═══════════════════════════════════════════════════════════════
-# SECTION 10: v3 Mode restructuring
+# SECTION 10: Mode level validation (v13: updated to suite_v10)
+# Note: suite_v1/v2/v3 archived to docs/archive/fixtures_legacy/
 # ═══════════════════════════════════════════════════════════════
 
 def test_mode_level_in_suite():
-    """Verify all cases in suite_v3 have mode_level assigned."""
+    """Verify all cases in suite_v10 have a valid mode_level assigned."""
     import json, pathlib
-    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v3.json"
+    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v10.json"
     with open(suite_path, encoding="utf-8") as f:
         suite = json.load(f)
+    VALID_LEVELS = {"quick", "standard", "deep"}
+    invalid = []
     for case in suite["cases"]:
         meta = case.get("params", {}).get("_meta", {})
         ml = meta.get("mode_level")
-        assert ml in ("quick", "standard", "deep"), (
-            f"Case {case['id']} has invalid mode_level={ml}"
-        )
+        if ml not in VALID_LEVELS:
+            invalid.append(f"{case['id']}={ml!r}")
+    assert not invalid, (
+        f"{len(invalid)} cases have invalid mode_level (expected quick/standard/deep): "
+        f"{invalid[:5]}"
+    )
 
 
 def test_mode_level_counts():
-    """Verify mode_level distribution is reasonable."""
+    """Verify mode_level distribution is reasonable in suite_v10."""
     import json, pathlib
-    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v3.json"
+    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v10.json"
     with open(suite_path, encoding="utf-8") as f:
         suite = json.load(f)
-    counts = {"quick": 0, "standard": 0, "deep": 0}
+    counts: dict[str, int] = {"quick": 0, "standard": 0, "deep": 0, "other": 0}
     for case in suite["cases"]:
         meta = case.get("params", {}).get("_meta", {})
-        counts[meta.get("mode_level", "standard")] += 1
+        ml = meta.get("mode_level", "standard")
+        if ml in counts:
+            counts[ml] += 1
+        else:
+            counts["other"] += 1
     assert counts["quick"] >= 10, f"Too few quick cases: {counts['quick']}"
     assert counts["standard"] >= 15, f"Too few standard cases: {counts['standard']}"
     assert counts["deep"] >= 10, f"Too few deep cases: {counts['deep']}"
+    assert counts["other"] == 0, (
+        f"Found {counts['other']} cases with unknown mode_level — "
+        f"all 'full' entries must be migrated to 'deep'"
+    )
 
 
 def test_handler_create_run_mode_deep(create_run):

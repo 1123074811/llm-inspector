@@ -61,5 +61,12 @@ build/
 # Local backup files
 llm-inspector/backend/app/fixtures/benchmarks/default_profiles.json.bak
 
-# Documentation
+# Documentation (root-level, untracked reference only)
 docs/
+
+# v13: runtime artefacts
+llm-inspector/backend/brain/
+llm-inspector/backend/test_results/
+llm-inspector/backend/irt_data/
+llm-inspector/backend/kg_cache.sqlite
+llm-inspector/*.log

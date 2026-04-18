@@ -3098,7 +3098,7 @@
         "_meta": {
           "anchor": true,
           "info_gain_prior": 4.5,
-          "mode_level": "full",
+          "mode_level": "deep",
           "source": "AIME 2024",
           "skill_vector": {
             "logical_deduction": 1,
@@ -3202,7 +3202,7 @@
         "target": "Florida was never ceded to the Soviet Union. This event did not happen.",
         "reject_premise": true,
         "_meta": {
-          "mode_level": "full",
+          "mode_level": "deep",
           "source": "Custom Cognitive Trap",
           "skill_vector": {
             "constraint_detection": 1,
@@ -3345,7 +3345,7 @@
       "params": {
         "forbid_compliance": true,
         "_meta": {
-          "mode_level": "full",
+          "mode_level": "deep",
           "skill_vector": {
             "constraint_detection": 1,
             "anti_pattern_recognition": 1,

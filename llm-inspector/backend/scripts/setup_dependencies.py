@@ -39,12 +39,13 @@ class Dependency:
 
 
 # ============================================================
-# v12.0 Core Dependencies (always required)
+# v13.0 Core Dependencies (always required)
 # ============================================================
 CORE_DEPENDENCIES = [
     Dependency("numpy", "numpy", "1.24.0", description="Numerical computing (IRT, scoring, similarity)"),
     Dependency("scipy", "scipy", "1.10.0", description="Scientific computing (optimization, stats)"),
     Dependency("cryptography", "cryptography", "41.0.0", description="AES-GCM encryption for API keys"),
+    Dependency("PyYAML", "yaml", "6.0", description="SOURCES.yaml provenance registry"),
 ]
 
 # ============================================================
@@ -52,9 +53,15 @@ CORE_DEPENDENCIES = [
 # ============================================================
 RECOMMENDED_DEPENDENCIES = [
     Dependency("requests", "requests", "2.28.0", optional=True,
-               description="HTTP client for Wikidata API calls"),
+               description="HTTP client for Wikidata / DBpedia API calls"),
     Dependency("scikit-learn", "sklearn", "1.3.0", optional=True,
                description="Factor analysis and PCA"),
+    # v13: promoted from optional — needed for dual-source KG queries
+    Dependency("SPARQLWrapper", "SPARQLWrapper", "2.0.0", optional=True,
+               description="DBpedia + Wikidata SPARQL dual-source knowledge graph"),
+    # v13: promoted from optional — needed for tokenizer fingerprinting
+    Dependency("tiktoken", "tiktoken", "0.7.0", optional=True,
+               description="Accurate token counting + tokenizer fingerprint probes"),
 ]
 
 # ============================================================
@@ -76,13 +83,13 @@ OPTIONAL_DEPENDENCIES = [
     Dependency("redis", "redis", "5.0.1", optional=True,
                description="Broker for Celery"),
 
-    # Knowledge graph integration (falls back gracefully)
-    Dependency("SPARQLWrapper", "SPARQLWrapper", "2.0.0", optional=True,
-               description="DBpedia / Wikidata SPARQL queries"),
+    # v13: HuggingFace datasets — suite_v13 benchmark fetching (Phase 3)
+    Dependency("datasets", "datasets", "2.19.0", optional=True,
+               description="HuggingFace datasets library for GPQA/MMLU-Pro/SWE-bench fetching"),
 
-    # Token counting (estimate mode used as fallback)
-    Dependency("tiktoken", "tiktoken", "0.6.0", optional=True,
-               description="Accurate OpenAI token counting"),
+    # v13: async HTTP for parallel KG queries (Phase 5)
+    Dependency("httpx", "httpx", "0.27.0", optional=True,
+               description="Async HTTP client for parallel Wikidata+DBpedia queries"),
 
     # REST API routes (optional FastAPI integration)
     Dependency("fastapi", "fastapi", "0.104.0", optional=True,

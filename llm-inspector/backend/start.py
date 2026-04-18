@@ -1,13 +1,15 @@
 """
-LLM Inspector v12.0 - Smart Startup Script
+LLM Inspector v13.0 - Smart Startup Script
 
 Automatically checks and installs dependencies before starting the service.
 
 Usage:
     python start.py [--port 8080] [--host 0.0.0.0] [--skip-deps]
+    python start.py --verify-sources          # validate SOURCES.yaml only, then exit
 
 Features:
-- Dependency check with auto-install
+- Idempotent dependency check (skips already-installed packages)
+- SOURCES.yaml provenance registry validation
 - Server health check
 - Graceful error handling
 - Environment validation
@@ -95,17 +97,17 @@ def check_environment(strict_provenance: bool = False):
             issues.append(f"Required directory '{dir_name}' not found")
             print(f"[FAIL] Directory {dir_name}/ not found")
 
-    # Provenance strict-mode validation
+    # v13: SOURCES.yaml provenance validation
     try:
-        from app.analysis.metric_registry import validate_required_metric_sources
-        p_issues = validate_required_metric_sources(strict=False)
-        if p_issues:
-            for issue in p_issues:
-                print(f"[WARN] Provenance: {issue}")
-            if strict_provenance:
-                issues.extend([f"Provenance validation failed: {x}" for x in p_issues])
+        from app._data.provenance_guard import ProvenanceGuard
+        report = ProvenanceGuard().verify(strict=strict_provenance)
+        if report.passed:
+            print("[OK] SOURCES.yaml provenance registry validated")
         else:
-            print("[OK] Metric provenance registry validation passed")
+            for f in report.failures:
+                print(f"[WARN] Provenance: {f.name}: {f.detail}")
+            if strict_provenance:
+                issues.extend([f"Provenance: {f.detail}" for f in report.failures])
     except Exception as e:
         msg = f"Provenance check error: {e}"
         print(f"[WARN] {msg}")
@@ -125,7 +127,7 @@ def check_environment(strict_provenance: bool = False):
 def run_server(host: str, port: int, reload: bool = False):
     """Run the HTTP server."""
     print("\n" + "=" * 60)
-    print("Starting LLM Inspector v12.0")
+    print("Starting LLM Inspector v13.0")
     print("=" * 60)
     print(f"Host: {host}")
     print(f"Port: {port}")
@@ -159,10 +161,27 @@ def run_server(host: str, port: int, reload: bool = False):
     return 0
 
 
+def verify_sources_only(strict: bool) -> int:
+    """Run SOURCES.yaml validation and exit (used by --verify-sources flag)."""
+    print("\n" + "=" * 60)
+    print("LLM Inspector v13.0 - Provenance Verification")
+    print("=" * 60)
+    try:
+        from app._data.provenance_guard import ProvenanceGuard
+        report = ProvenanceGuard().verify(strict=False)
+        report.print_summary()
+        if not report.passed and strict:
+            return 1
+        return 0
+    except Exception as exc:
+        print(f"[ERROR] Provenance check raised: {exc}")
+        return 1
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="LLM Inspector v12.0 Startup Script"
+        description="LLM Inspector v13.0 Startup Script"
     )
     parser.add_argument(
         "--port", "-p",
@@ -195,12 +214,22 @@ def main():
         action="store_true",
         help="Fail startup when required metric provenance is missing"
     )
-    
+    parser.add_argument(
+        "--verify-sources",
+        action="store_true",
+        help="Validate SOURCES.yaml provenance registry and exit (no server start)"
+    )
+
     args = parser.parse_args()
-    
+
+    # --verify-sources: standalone mode — validate and exit
+    if args.verify_sources:
+        strict = args.strict_provenance or os.getenv("STRICT_PROVENANCE", "false").lower() == "true"
+        sys.exit(verify_sources_only(strict=strict))
+
     # Print banner
     print("\n" + "=" * 60)
-    print("LLM Inspector v12.0 - Startup")
+    print("LLM Inspector v13.0 - Startup")
     print("=" * 60)
     
     # Check dependencies

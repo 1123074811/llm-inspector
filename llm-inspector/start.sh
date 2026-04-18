@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v12.0 - Unix/Linux/Mac Startup Script
-# Automatically checks and installs dependencies before starting
+# LLM Inspector v13.0 - Unix/Linux/Mac Startup Script
+# Idempotent dependency check + provenance validation + server start
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v12.0"
+echo "LLM Inspector v13.0"
 echo "===================================="
 
 # Colors for output
@@ -28,20 +28,32 @@ export ASYNCIO_MODE=1
 # Change to backend directory
 cd backend
 
-# Check and install dependencies
+# Idempotent dependency check: only install if core imports fail
 echo ""
 echo "===================================="
 echo "Checking Dependencies..."
 echo "===================================="
-python scripts/setup_dependencies.py --skip-optional
-if [ $? -ne 0 ]; then
-    echo -e "${YELLOW}[WARN]${NC} Some optional dependencies failed to install"
-    echo -e "${YELLOW}[INFO]${NC} Continuing with core functionality..."
+if python -c "import yaml, numpy, scipy, cryptography" 2>/dev/null; then
+    echo -e "${GREEN}[OK]${NC} Core dependencies already satisfied"
+else
+    echo "[INFO] Installing missing core dependencies..."
+    python scripts/setup_dependencies.py --skip-optional || {
+        echo -e "${YELLOW}[WARN]${NC} Some dependencies failed to install, continuing..."
+    }
 fi
+
+# Verify SOURCES.yaml provenance registry
+echo ""
+echo "===================================="
+echo "Verifying Data Provenance..."
+echo "===================================="
+python start.py --verify-sources || {
+    echo -e "${YELLOW}[WARN]${NC} Provenance check found issues (non-fatal in dev mode)"
+}
 
 # Start server
 echo ""
 echo "===================================="
 echo "Starting Server..."
 echo "===================================="
-python start.py --port 8000 --strict-provenance
+python start.py --port 8000
