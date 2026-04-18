@@ -133,15 +133,40 @@ class ScoreCardCalculator:
 
         return {dim: round(a / total, 3) for dim, a in dim_mean_a.items()}
 
+    def _weights_from_src(self, family: str = "default") -> dict[str, float] | None:
+        """Load capability weights from SOURCES.yaml if available."""
+        try:
+            from app._data import SRC
+            dims = ["reasoning", "adversarial", "instruction", "coding",
+                    "safety", "protocol", "knowledge", "tool_use"]
+            weights = {}
+            for d in dims:
+                key = f"capability.weight.{d}.default"
+                if key in SRC:
+                    weights[d] = float(SRC[key].value)
+            if len(weights) >= 6:  # at least 6/8 dims have sourced weights
+                return weights
+            return None
+        except Exception:
+            return None
+
     def _resolve_weights(
         self,
         claimed_model: str | None,
         item_stats: dict | None = None,
     ) -> dict:
         """
-        v6: Resolve weights with data-driven option.
-        Priority: data-driven (if enough stats) > family weights > default
+        v13: Resolve weights. Priority:
+        1. SRC-based weights (data-fitted in Phase 2, placeholders until then)
+        2. data-driven from IRT discrimination (if enough stats)
+        3. family-based weights
+        4. default weights
         """
+        # v13: Try SRC-based weights first (data-fitted in Phase 2, placeholders until then)
+        src_weights = self._weights_from_src()
+        if src_weights:
+            return src_weights
+
         # Try data-driven weights if we have sufficient stats
         if item_stats and len(item_stats) >= 20:
             data_weights = self._data_driven_weights(item_stats)
@@ -310,6 +335,21 @@ class ScoreCardCalculator:
         card.breakdown["extraction_resistance"] = round(extraction_resistance, 2) if extraction_resistance is not None else None
         card.breakdown["fingerprint_match"] = round(fingerprint_match, 2)
         card.breakdown["ttft_plausibility"] = round(ttft_plausibility, 2)
+
+        # v13: Populate multi-scale fields from ThetaReport if available
+        if theta_report:
+            try:
+                from app.analysis.stanine import theta_to_stanine, theta_to_percentile
+                card.theta = round(theta_report.global_theta, 4)
+                card.theta_ci95 = (
+                    round(theta_report.global_ci_low, 4),
+                    round(theta_report.global_ci_high, 4),
+                )
+                card.stanine = theta_to_stanine(theta_report.global_theta)
+                card.percentile = theta_to_percentile(theta_report.global_theta)
+            except Exception:
+                # Multi-scale fields remain None; main scoring unaffected.
+                pass
 
         return card
 

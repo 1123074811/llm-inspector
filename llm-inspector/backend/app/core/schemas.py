@@ -325,6 +325,12 @@ class ScoreCard:
     cost_efficiency: float = 0.0
     # Confidence level (0-1)
     confidence_level: float = 0.0
+    # v13: Multi-scale display (Stanine-9 + percentile + raw logit theta)
+    stanine: int | None = None           # 1-9 Stanine scale (Canfield 1951)
+    percentile: float | None = None      # 0-100 percentile vs reference distribution
+    theta: float | None = None           # Raw IRT theta estimate (logit scale)
+    theta_ci95: tuple[float, float] | None = None  # 95% CI for theta
+    judge_kappa: float | None = None     # v13: Cohen's κ inter-judge agreement (Phase 2.3)
 
     def to_dict(self) -> dict:
         return {
@@ -350,6 +356,13 @@ class ScoreCard:
                 "extraction_resistance": round((getattr(self, "breakdown", {}).get("extraction_resistance") or 0) * 100),
                 "fingerprint_match": round((getattr(self, "breakdown", {}).get("fingerprint_match") or 0) * 100),
                 "ttft_plausibility": round((getattr(self, "breakdown", {}).get("ttft_plausibility") or 0) * 100),
+            },
+            "v13": {
+                "stanine": self.stanine,
+                "percentile": self.percentile,
+                "theta": round(self.theta, 4) if self.theta is not None else None,
+                "theta_ci95": list(self.theta_ci95) if self.theta_ci95 else None,
+                "judge_kappa": round(self.judge_kappa, 3) if self.judge_kappa is not None else None,
             },
         }
 

@@ -23,25 +23,29 @@ class VerdictEngine:
     """
     # Configurable thresholds (defaults; overridden by env vars in __init__)
     VERDICT_THRESHOLDS = {"trusted": 80, "suspicious": 60, "high_risk": 40}
-    # v6: Hard rules with source annotations
-    # Sources:
-    # - adv_spoof_cap: Based on GPT-4o/Claude-3.5 baseline data (95th percentile)
-    # - difficulty_ceiling_min: Derived from real model performance on gradient difficulty tests
-    # - behavioral_invariant_*: Empirical threshold from isomorphic test consistency studies
-    # - coding_zero_cap: Top models consistently score >10 on basic coding tasks
-    # - fingerprint_mismatch_*: Token usage patterns from real vs proxy services analysis
-    HARD_RULES = {
-        "adv_spoof_cap": 45.0,  # Source: GPT-4o/Claude-3.5 baseline 95th percentile
-        "difficulty_ceiling_min": 0.4,  # Source: Real model minimum capability ceiling
-        "difficulty_cap": 50.0,  # Source: Penalty for claiming top model with low capability
-        "behavioral_invariant_min": 40,  # Source: Isomorphic test consistency studies
-        "behavioral_invariant_cap": 55.0,  # Source: Empirical threshold from behavioral tests
-        "coding_zero_cap": 45.0,  # Source: Top models score >10 on basic coding
-        "identity_exposed_cap": 30.0,  # Source: Real models rarely expose identity in extraction
-        "extraction_weak_cap": 65.0,  # Source: Weak extraction resistance penalty
-        "extraction_weak_threshold": 15,  # Source: Minimum extraction resistance score
-        "fingerprint_mismatch_cap": 55.0,  # Source: Token usage pattern analysis
-        "fingerprint_mismatch_threshold": 30,  # Source: Fingerprint mismatch detection threshold
+    # v13: Hard-rule thresholds are loaded via `_rule()` → SRC[...] with fallback.
+    # Source-backed rules live in SOURCES.yaml (ids prefixed with `verdict.`).
+    # Derived caps (e.g. the 50.0 penalty applied when a top-claimed model fails
+    # a threshold) are kept as hard-coded fallbacks below pending data fitting.
+    _RULE_FALLBACKS = {
+        "adv_spoof_cap": 45.0,                  # TODO: derived cap; no SRC entry yet
+        "difficulty_ceiling_min": 0.4,          # SRC: verdict.difficulty_ceiling_min
+        "difficulty_cap": 50.0,                 # TODO: derived cap
+        "behavioral_invariant_min": 40,         # SRC: verdict.behavioral_invariant_min
+        "behavioral_invariant_cap": 55.0,       # TODO: derived cap
+        "coding_zero_cap": 45.0,                # TODO: derived cap
+        "identity_exposed_cap": 30.0,           # TODO: derived cap
+        "extraction_weak_cap": 65.0,            # TODO: derived cap
+        "extraction_weak_threshold": 15,        # SRC: verdict.extraction_weak_threshold
+        "fingerprint_mismatch_cap": 55.0,       # TODO: derived cap
+        "fingerprint_mismatch_threshold": 30,   # SRC: verdict.fingerprint_mismatch_threshold
+    }
+    _SRC_KEY_MAP = {
+        "adv_spoof_cap": "verdict.adv_spoof_cap",
+        "difficulty_ceiling_min": "verdict.difficulty_ceiling_min",
+        "behavioral_invariant_min": "verdict.behavioral_invariant_min",
+        "extraction_weak_threshold": "verdict.extraction_weak_threshold",
+        "fingerprint_mismatch_threshold": "verdict.fingerprint_mismatch_threshold",
     }
     # v6: Default TOP_MODELS as fallback (will be overridden by dynamic loading)
     DEFAULT_TOP_MODELS = [
@@ -61,6 +65,49 @@ class VerdictEngine:
         }
         # v6: Load TOP_MODELS dynamically from golden_baselines
         self.TOP_MODELS = self._load_top_models()
+
+    @property
+    def HARD_RULES(self) -> dict:
+        """
+        v13 compat: materialize the rule dict from SRC + fallbacks.
+        Preserved so existing callers / tests that introspect
+        ``engine.HARD_RULES`` continue to work.
+        """
+        return {name: self._rule(name) for name in self._RULE_FALLBACKS}
+
+    def _rule(self, name: str):
+        """
+        v13: Resolve a hard-rule threshold, preferring SRC[...] from SOURCES.yaml
+        with a hard-coded fallback so the engine remains usable if the registry
+        is unavailable or an entry is missing.
+        """
+        fallback = self._RULE_FALLBACKS.get(name)
+        src_key = self._SRC_KEY_MAP.get(name)
+        if src_key is None:
+            return fallback
+        try:
+            from app._data import SRC
+            return SRC[src_key].value
+        except Exception:
+            return fallback
+
+    def _sim_threshold(self, band: str, fallback: float) -> float:
+        """
+        v13: Similarity band thresholds from SRC (0-100 scale).
+        band="match" → SRC.similarity.match_cosine_threshold (fallback 0.90)
+        band="suspicious" → SRC.similarity.suspicious_cosine_threshold (fallback 0.75)
+        """
+        key = {
+            "match": "similarity.match_cosine_threshold",
+            "suspicious": "similarity.suspicious_cosine_threshold",
+        }.get(band)
+        if key is None:
+            return fallback
+        try:
+            from app._data import SRC
+            return float(SRC[key].value) * 100.0
+        except Exception:
+            return fallback
 
     def _load_top_models(self) -> list[str]:
         """
@@ -117,9 +164,13 @@ class VerdictEngine:
             top_sim = similarities[0].similarity_score
             sim_score = min(100.0, top_sim * 100)
             signal_details["behavioral_similarity"] = round(sim_score, 1)
-            if sim_score >= 85:
+            # v13: Similarity bands from SRC (fallbacks preserve v12 behaviour band shape,
+            # but numeric cutoffs follow SOURCES.yaml: match=90, suspicious=75).
+            _match_cut = self._sim_threshold("match", 90.0)
+            _susp_cut = self._sim_threshold("suspicious", 75.0)
+            if sim_score >= _match_cut:
                 reasons.append(f"行为向量与 {similarities[0].benchmark_name} 高度吻合（{sim_score:.1f}分）")
-            elif sim_score >= 65:
+            elif sim_score >= _susp_cut:
                 reasons.append(f"行为向量与 {similarities[0].benchmark_name} 部分吻合（{sim_score:.1f}分）")
             else:
                 reasons.append(f"行为向量与所有基准模型相似度均较低（最高 {sim_score:.1f}分）")
@@ -229,7 +280,7 @@ class VerdictEngine:
 
         adv_spoof = f("adversarial_spoof_signal_rate", 0.0)
         if adv_spoof > 0.5:
-            confidence_real = min(confidence_real, self.HARD_RULES["adv_spoof_cap"])
+            confidence_real = min(confidence_real, float(self._rule("adv_spoof_cap")))
             reasons.append(f"对抗推理检测到模板套用（信号率 {adv_spoof:.0%}），置信度强制下调")
 
         # ── 硬规则：能力-声称不匹配检测 ──
@@ -237,8 +288,8 @@ class VerdictEngine:
         claimed = (predetect.identified_as or "").lower() if predetect else ""
         top_models = self.TOP_MODELS
 
-        if any(m in claimed for m in top_models) and difficulty_ceiling < self.HARD_RULES["difficulty_ceiling_min"]:
-            confidence_real = min(confidence_real, self.HARD_RULES["difficulty_cap"])
+        if any(m in claimed for m in top_models) and difficulty_ceiling < float(self._rule("difficulty_ceiling_min")):
+            confidence_real = min(confidence_real, float(self._rule("difficulty_cap")))
             reasons.append(
                 f"声称为顶级模型但能力天花板仅 {difficulty_ceiling:.2f}，"
                 f"梯度难度测试显示推理能力与声称不符"
@@ -246,8 +297,8 @@ class VerdictEngine:
 
         # ── 硬规则：行为不变性检测 ──
         beh_inv = scorecard.behavioral_invariant_score
-        if beh_inv is not None and beh_inv < self.HARD_RULES["behavioral_invariant_min"]:
-            confidence_real = min(confidence_real, self.HARD_RULES["behavioral_invariant_cap"])
+        if beh_inv is not None and beh_inv < float(self._rule("behavioral_invariant_min")):
+            confidence_real = min(confidence_real, float(self._rule("behavioral_invariant_cap")))
             reasons.append(
                 f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
                 f"疑似模板匹配而非真实推理"
@@ -255,7 +306,7 @@ class VerdictEngine:
 
         # ── 硬规则：编程能力与声称等级不符 ──
         if scorecard.coding_score is not None and scorecard.coding_score < 10 and any(m in claimed for m in top_models):
-            confidence_real = min(confidence_real, self.HARD_RULES["coding_zero_cap"])
+            confidence_real = min(confidence_real, float(self._rule("coding_zero_cap")))
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
         # ── v3 硬规则：提取攻击泄露真实模型名 ──
@@ -274,17 +325,17 @@ class VerdictEngine:
                         break
 
         if _found_identity_mismatch:
-            confidence_real = min(confidence_real, self.HARD_RULES["identity_exposed_cap"])
+            confidence_real = min(confidence_real, float(self._rule("identity_exposed_cap")))
             reasons.append("提取攻击暴露了与声称不同的真实模型身份，置信度强制下调")
-        elif extraction_resistance < self.HARD_RULES["extraction_weak_threshold"]:
+        elif extraction_resistance < float(self._rule("extraction_weak_threshold")):
             # Very weak resistance but no identity mismatch — suspicious but not definitive
-            confidence_real = min(confidence_real, self.HARD_RULES["extraction_weak_cap"])
+            confidence_real = min(confidence_real, float(self._rule("extraction_weak_cap")))
             reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取")
 
         # ── v3 硬规则：tokenizer 指纹不匹配 ──
         fingerprint_match = getattr(scorecard, 'breakdown', {}).get('fingerprint_match', 100)
-        if fingerprint_match < self.HARD_RULES["fingerprint_mismatch_threshold"] and claimed:
-            confidence_real = min(confidence_real, self.HARD_RULES["fingerprint_mismatch_cap"])
+        if fingerprint_match < float(self._rule("fingerprint_mismatch_threshold")) and claimed:
+            confidence_real = min(confidence_real, float(self._rule("fingerprint_mismatch_cap")))
             reasons.append("tokenizer/行为指纹与声称模型不符")
 
         t = self.VERDICT_THRESHOLDS

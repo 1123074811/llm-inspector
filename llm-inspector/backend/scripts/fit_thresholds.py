@@ -1,0 +1,239 @@
+"""
+scripts/fit_thresholds.py — Verdict Threshold Fitting (v13 Phase 2)
+
+Fits verdict hard-rule thresholds from the empirical distribution of feature
+values observed across trusted baselines.
+
+Method:
+    - Load golden_baselines from the local SQLite DB.
+    - For each key feature (e.g. adversarial_spoof_signal_rate,
+      behavioral_invariant_score), compute robust percentiles.
+    - Propose a threshold value with a short justification.
+
+Usage:
+    python scripts/fit_thresholds.py --dry-run     # print, do not write
+    python scripts/fit_thresholds.py               # write YAML fragment
+
+Output:
+    backend/app/_data/weights/verdict_thresholds.yaml
+    backend/app/_data/weights/thresholds_report.md
+
+NOTE: This is a descriptive fit from observed baselines — treat results as a
+data-driven *proposal*. Human review is required before splicing into
+SOURCES.yaml. Intentionally conservative percentile rules are used (see
+DEFAULT_RULES below).
+"""
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+from typing import Iterable
+
+# Ensure `app` package is importable when run as `python scripts/fit_thresholds.py`.
+_BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
+try:
+    import numpy as np
+except Exception:  # pragma: no cover
+    print("ERROR: numpy is required", file=sys.stderr)
+    raise
+
+
+# Each rule: (src_id, feature_key, aggregator, percentile, tail, unit, note)
+#   tail="low"  → propose threshold at the lower percentile (e.g. minimum
+#                 tolerated behavioral_invariant_score for a real model)
+#   tail="high" → propose threshold at the upper percentile (e.g. maximum
+#                 tolerated adversarial_spoof_signal_rate)
+DEFAULT_RULES: list[tuple[str, str, str, float, str, str, str]] = [
+    (
+        "verdict.adv_spoof_cap",
+        "adversarial_spoof_signal_rate",
+        "max",
+        0.95,
+        "high",
+        "probability",
+        "95th pct of trusted baselines — above this, cap confidence.",
+    ),
+    (
+        "verdict.behavioral_invariant_min",
+        "behavioral_invariant_score",
+        "min",
+        0.05,
+        "low",
+        "score_0_100",
+        "5th pct of trusted baselines — below this, behavioral invariance is suspect.",
+    ),
+    (
+        "verdict.extraction_weak_threshold",
+        "extraction_resistance",
+        "min",
+        0.10,
+        "low",
+        "score_0_100",
+        "10th pct of trusted baselines — below this, extraction resistance is weak.",
+    ),
+    (
+        "verdict.fingerprint_mismatch_threshold",
+        "fingerprint_match",
+        "min",
+        0.10,
+        "low",
+        "score_0_100",
+        "10th pct of trusted baselines — below this, fingerprint mismatches claim.",
+    ),
+    (
+        "verdict.difficulty_ceiling_min",
+        "difficulty_ceiling",
+        "min",
+        0.10,
+        "low",
+        "ratio",
+        "10th pct of trusted baselines — below this, difficulty ceiling is low.",
+    ),
+]
+
+
+def _extract_feature(baseline: dict, key: str) -> float | None:
+    """Try several locations to find the feature."""
+    # Direct
+    if key in baseline and baseline[key] is not None:
+        try:
+            return float(baseline[key])
+        except (TypeError, ValueError):
+            pass
+    # Breakdown dict
+    bd = baseline.get("breakdown") or {}
+    if isinstance(bd, dict):
+        if key in bd and bd[key] is not None:
+            try:
+                return float(bd[key])
+            except (TypeError, ValueError):
+                pass
+    # Features dict
+    feats = baseline.get("features") or {}
+    if isinstance(feats, dict) and key in feats and feats[key] is not None:
+        try:
+            return float(feats[key])
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def load_baselines() -> list[dict]:
+    from app.repository import repo as baseline_repo
+    rows = baseline_repo.list_baselines(limit=500) or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def fit_one_rule(
+    baselines: list[dict],
+    src_id: str,
+    feature_key: str,
+    percentile: float,
+    tail: str,
+) -> tuple[float | None, int, list[float]]:
+    samples = []
+    for b in baselines:
+        v = _extract_feature(b, feature_key)
+        if v is not None:
+            samples.append(v)
+    if not samples:
+        return None, 0, []
+    arr = np.array(samples, dtype=float)
+    q = np.quantile(arr, percentile)
+    return float(q), len(samples), samples
+
+
+def write_outputs(
+    proposals: list[dict],
+    out_dir: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    yaml_path = out_dir / "verdict_thresholds.yaml"
+    report_path = out_dir / "thresholds_report.md"
+
+    lines = [
+        "# Auto-generated by scripts/fit_thresholds.py",
+        "# Review before splicing into SOURCES.yaml.",
+        "",
+    ]
+    for p in proposals:
+        if p["value"] is None:
+            lines.append(f"# SKIP {p['id']} — no samples for {p['feature']}")
+            lines.append("")
+            continue
+        lines.append(f"- id: {p['id']}")
+        lines.append(f"  value: {p['value']:.4f}")
+        lines.append(f"  unit: {p['unit']}")
+        lines.append('  source_url: "internal://fit_thresholds.py"')
+        lines.append("  source_type: empirical")
+        lines.append('  retrieved_at: "2026-04-18"')
+        lines.append('  license: "internal"')
+        lines.append(
+            f'  note: "{p["note"]} (n={p["n"]}, p={p["percentile"]:.2f}, tail={p["tail"]})"'
+        )
+        lines.append("")
+    yaml_path.write_text("\n".join(lines), encoding="utf-8")
+
+    report = [
+        "# Verdict Threshold Fitting Report",
+        "",
+        "| Src ID | Feature | n | p | Tail | Proposed |",
+        "| --- | --- | ---: | ---: | --- | ---: |",
+    ]
+    for p in proposals:
+        v = f"{p['value']:.4f}" if p["value"] is not None else "—"
+        report.append(
+            f"| {p['id']} | {p['feature']} | {p['n']} | {p['percentile']:.2f} | {p['tail']} | {v} |"
+        )
+    report_path.write_text("\n".join(report), encoding="utf-8")
+    return yaml_path, report_path
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    parser.add_argument("--dry-run", action="store_true", help="Print results, do not write.")
+    parser.add_argument(
+        "--out-dir", type=pathlib.Path,
+        default=pathlib.Path(__file__).resolve().parents[1] / "app" / "_data" / "weights",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    try:
+        baselines = load_baselines()
+    except Exception as exc:
+        print(f"[fit_thresholds] ERROR loading baselines: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"[fit_thresholds] loaded {len(baselines)} baselines")
+    proposals = []
+    for src_id, feature_key, _agg, pct, tail, unit, note in DEFAULT_RULES:
+        value, n, _samples = fit_one_rule(baselines, src_id, feature_key, pct, tail)
+        proposals.append({
+            "id": src_id,
+            "feature": feature_key,
+            "value": value,
+            "n": n,
+            "percentile": pct,
+            "tail": tail,
+            "unit": unit,
+            "note": note,
+        })
+        display = f"{value:.4f}" if value is not None else "N/A"
+        print(f"  {src_id:<44s} feature={feature_key:<32s} n={n:>4d} → {display}")
+
+    if args.dry_run:
+        print("[fit_thresholds] --dry-run: no files written.")
+        return 0
+
+    yaml_path, report_path = write_outputs(proposals, args.out_dir)
+    print(f"[fit_thresholds] wrote {yaml_path}")
+    print(f"[fit_thresholds] wrote {report_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

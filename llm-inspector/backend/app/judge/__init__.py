@@ -58,6 +58,14 @@ from app.judge.transparent_judge import (
     judge_with_transparency,
 )
 
+# v13 Phase 2.3: Dual-blind judging with Cohen's κ
+from app.judge.dual_judge import (
+    DualJudgeResult,
+    KappaAccumulator,
+    dual_judge,
+    compute_kappa,
+)
+
 __all__ = [
     # 原有组件
     "judge",
@@ -95,4 +103,9 @@ __all__ = [
     "JudgmentLogger",
     "create_transparent_judge",
     "judge_with_transparency",
+    # v13 Phase 2.3: Dual-blind judging
+    "DualJudgeResult",
+    "KappaAccumulator",
+    "dual_judge",
+    "compute_kappa",
 ]
