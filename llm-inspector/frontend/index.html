@@ -11,6 +11,9 @@
 <link rel="stylesheet" href="v8_styles.css">
 <script src="v8_components.js" defer></script>
 
+<!-- ECharts 5 for radar chart rendering -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" crossorigin="anonymous"></script>
+
 </head>
 <body>
 <div class="hero-glow"></div>
@@ -52,9 +55,9 @@
       <div class="form-group">
         <label>测试模式</label>
         <select id="f-mode">
-          <option value="quick">快速扫描 Quick（~15题，基础能力+粗筛真伪）</option>
-          <option value="standard" selected>标准评测 Standard（~35题，完整能力+可靠真伪）</option>
-          <option value="deep">深度审计 Deep（~60题，精确指纹+对抗测试+全维度）</option>
+          <option value="quick">快速扫描 Quick（~18题，基础能力+粗筛真伪）</option>
+          <option value="standard" selected>标准评测 Standard（~44题，完整能力+可靠真伪）</option>
+          <option value="deep">深度审计 Deep（~87题，精确指纹+对抗测试+全维度）</option>
         </select>
       </div>
     </div>
@@ -90,10 +93,10 @@
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px">
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">① 预检测（0-200 token）</div>
-        <div style="font-size:11px;color:var(--ink4)">HTTP头分析 → 自我报告 → 身份探针 → 知识截止 → 格式偏见。约60%情况在此阶段直接识别。</div>
+        <div style="font-size:11px;color:var(--ink4)">16 层渐进探针：HTTP头 → 自我报告 → 身份矩阵 → 知识截止 → 行为偏见 → Tokenizer → 主动提取 → 语义指纹 → 高级提取 → 差分测试 → 工具探针 → 多轮溢出 → 对抗分析 → 多语言攻击 → ASCII艺术 → 间接注入。约60%情况在此阶段直接识别。</div>
       </div>
       <div>
-        <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">② 能力测试（~$0.01-0.05）</div>
+        <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">② 能力测试</div>
         <div style="font-size:11px;color:var(--ink4)">指令遵循、System权重、参数生效、风格采集。置信度达标时提前终止。</div>
       </div>
       <div>

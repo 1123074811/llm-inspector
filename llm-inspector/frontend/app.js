@@ -277,7 +277,16 @@ function setupSSE(runId) {
   _eventSource.onmessage = (e) => {
     try {
       const log = JSON.parse(e.data);
-      if (log.message) {
+      if (log.event_type) {
+        // Classify by event_type from Phase 4 EventKind enum
+        const kind = log.event_type.split('.')[0]; // "probe", "case", "judge", "cb", "retry"
+        const isBad = log.event_type.includes('failed') || log.event_type.includes('open');
+        pushConsole(
+          `[${log.event_type}] ${log.message || JSON.stringify(log.payload || {})}`,
+          isBad ? 'del' : 'meta',
+          kind
+        );
+      } else if (log.message) {
         pushConsole(`[SSE] ${log.message}`, log.level === 'error' ? 'del' : 'normal');
       } else if (log.event === 'judgment') {
         pushConsole(`[SSE 判题] ${log.method}: ${log.result?.passed ? '通过' : '未通过'}`, log.result?.passed ? 'normal' : 'del');
@@ -427,6 +436,95 @@ function downloadRadarSvg(runId) {
   window.open(`/api/v1/runs/${encodeURIComponent(runId)}/radar.svg`, '_blank');
 }
 
+// -- ECharts Radar Chart
+
+const DIM_LABELS = {
+  reasoning_score: '推理',
+  adversarial_score: '对抗',
+  instruction_score: '指令',
+  coding_score: '编码',
+  safety_score: '安全',
+  consistency_score: '一致性',
+  similarity_score: '相似度',
+  performance_score: '性能'
+};
+
+let _radarCurrentData = null;
+
+function renderRadarChart(containerId, data, mode) {
+  _radarCurrentData = data;
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  if (!window.echarts) {
+    // Fallback to SVG iframe when ECharts CDN is unavailable
+    container.innerHTML =
+      `<iframe src="/api/v1/runs/${encodeURIComponent(data.run_id || '')}/radar.svg" style="width:100%;height:400px;border:0"></iframe>`;
+    return;
+  }
+
+  // Dispose existing chart instance if any
+  const existing = echarts.getInstanceByDom(container);
+  if (existing) existing.dispose();
+
+  const chart = echarts.init(container);
+  const dims = [
+    'reasoning_score', 'adversarial_score', 'instruction_score',
+    'coding_score', 'safety_score', 'consistency_score',
+    'similarity_score', 'performance_score'
+  ];
+
+  const maxVal = mode === 'stanine' ? 9 : mode === 'theta' ? 3 : 100;
+
+  const indicators = dims.map(d => ({
+    name: DIM_LABELS[d] || d,
+    max: maxVal
+  }));
+
+  const scorecard = data.scorecard || {};
+  const values = dims.map(d => {
+    const v = scorecard[d] != null ? scorecard[d] : 0;
+    if (mode === 'stanine') {
+      return Math.round(v * 8 + 1);
+    } else if (mode === 'theta') {
+      return Math.max(-3, Math.min(3, (v - 0.5) * 4));
+    }
+    return Math.round(v * 100);
+  });
+
+  chart.setOption({
+    tooltip: { trigger: 'item' },
+    radar: {
+      indicator: indicators,
+      center: ['50%', '50%'],
+      radius: '65%',
+      splitNumber: 4,
+      axisName: { color: '#666', fontSize: 12 }
+    },
+    series: [{
+      type: 'radar',
+      data: [{
+        value: values,
+        name: scorecard.claimed_model || '待测模型',
+        areaStyle: { opacity: 0.2 },
+        lineStyle: { width: 2 },
+        itemStyle: { color: '#4b6cf7' }
+      }]
+    }]
+  });
+}
+
+function switchRadarScale(mode, btn) {
+  // Toggle active class on sibling chips
+  if (btn && btn.parentElement) {
+    btn.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  if (_radarCurrentData) {
+    renderRadarChart('radar-chart-container', _radarCurrentData, mode);
+  }
+}
+
 function exportReportPdfFromList(evt, runId) {
   if (evt) evt.stopPropagation();
   openTask(runId);
@@ -561,6 +659,11 @@ function renderLogPanel(data) {
         <button class="chip ${_logFilter === 'all' ? 'active' : ''}" onclick="setLogFilter('all')">全部</button>
         <button class="chip ${_logFilter === 'prompt' ? 'active' : ''}" onclick="setLogFilter('prompt')">仅看提示词</button>
         <button class="chip ${_logFilter === 'error' ? 'active' : ''}" onclick="setLogFilter('error')">仅看 error</button>
+        <button class="chip ${_logFilter === 'probe' ? 'active' : ''}" onclick="setLogFilter('probe')">PROBE</button>
+        <button class="chip ${_logFilter === 'case' ? 'active' : ''}" onclick="setLogFilter('case')">CASE</button>
+        <button class="chip ${_logFilter === 'judge' ? 'active' : ''}" onclick="setLogFilter('judge')">JUDGE</button>
+        <button class="chip ${_logFilter === 'cb' ? 'active' : ''}" onclick="setLogFilter('cb')">断路器</button>
+        <button class="chip ${_logFilter === 'retry' ? 'active' : ''}" onclick="setLogFilter('retry')">重试</button>
       </div>
       <div class="console-body" id="live-console-body" style="min-height:420px;max-height:80vh">${renderConsoleLines()}</div>
       <div style="padding:8px 10px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink4)">
@@ -609,10 +712,16 @@ function setLogFilter(mode) {
 function matchLogFilter(line) {
   if (_logFilter === 'all') return true;
   const text = String(line?.text || '').toLowerCase();
+  const tag = String(line?.tag || '');
   if (_logFilter === 'prompt') return text.includes('[提示词]');
   if (_logFilter === 'error') {
     return text.includes('[结果] 错误') || text.includes(' error') || text.includes('failed') || line?.type === 'del';
   }
+  if (_logFilter === 'probe') return tag === 'probe' || text.includes('[预检测]') || text.includes('probe.');
+  if (_logFilter === 'case') return tag === 'case' || text.includes('[用例]') || text.includes('case.');
+  if (_logFilter === 'judge') return tag === 'judge' || text.includes('[判题]') || text.includes('judge.');
+  if (_logFilter === 'cb') return tag === 'cb' || text.includes('cb.') || text.includes('断路器');
+  if (_logFilter === 'retry') return tag === 'retry' || text.includes('retry.') || text.includes('重试');
   return true;
 }
 
@@ -836,8 +945,8 @@ function animateProcessConsole(prog, status, pre, responses = []) {
   };
 }
 
-function pushConsole(line, type = 'normal') {
-  _consoleLines.push({ text: line, type });
+function pushConsole(line, type = 'normal', tag = '') {
+  _consoleLines.push({ text: line, type, tag });
   if (_consoleLines.length > 160) _consoleLines.shift();
   updateLogPanel();
 }
@@ -939,7 +1048,15 @@ async function loadReport(runId) {
   const {ok, data} = await api('GET', '/api/v1/runs/' + runId + '/report');
   if (!ok) return;
   const el = document.getElementById('report-section');
-  if (el) el.innerHTML = renderReport(data);
+  if (el) {
+    el.innerHTML = renderReport(data);
+    // Initialize ECharts radar chart after DOM insertion
+    const container = document.getElementById('radar-chart-container');
+    if (container) {
+      const sc = data.scorecard || {};
+      renderRadarChart('radar-chart-container', { run_id: runId, scorecard: sc }, 'percent');
+    }
+  }
 }
 
 function renderNarrative(narrative) {
@@ -1275,9 +1392,14 @@ function renderReport(r) {
     <div class="card">
       <h2>雷达图预览</h2>
       <div style="font-size:12px;color:var(--ink4);margin-bottom:10px">可右上角按钮下载 SVG 原图</div>
-      <div style="border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff">
-        <iframe src="/api/v1/runs/${encodeURIComponent(r.run_id)}/radar.svg?_t=${Date.now()}" style="width:100%;aspect-ratio:760/560;border:0" scrolling="no" loading="lazy"></iframe>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="chip active" onclick="switchRadarScale('percent', this)">百分制</button>
+        <button class="chip" onclick="switchRadarScale('stanine', this)">Stanine-9</button>
+        <button class="chip" onclick="switchRadarScale('theta', this)">θ 逻辑分</button>
       </div>
+      <div id="radar-chart-container" style="width:100%;height:400px"
+           data-run-id="${escHtml(r.run_id)}"
+           data-scorecard="${escHtml(JSON.stringify(r.scorecard || {}))}"></div>
     </div>`;
 
   // Case results
