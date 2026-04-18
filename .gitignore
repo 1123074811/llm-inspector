@@ -70,3 +70,6 @@ llm-inspector/backend/test_results/
 llm-inspector/backend/irt_data/
 llm-inspector/backend/kg_cache.sqlite
 llm-inspector/*.log
+
+# Runtime data (caches, traces, local DB)
+llm-inspector/data/

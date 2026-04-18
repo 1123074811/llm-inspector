@@ -480,28 +480,32 @@ function renderRadarChart(containerId, data, mode) {
   const chart = echarts.init(container);
   const scorecard = data.scorecard || {};
 
-  // Values are already 0-100 integers from the API — no further scaling needed
-  const rawValues = RADAR_DIMS.map(d => _scGet(scorecard, d.path));
+  // API stores scores in 0-10000 scale:
+  //   ScoreCard internally uses 0-100, to_dict() multiplies by 100 → 0-10000
+  //   (SVG radar confirms: rings at 2000/4000/6000/8000/10000, max 10000)
+  // Normalise to 0-100 for human-readable display.
+  const raw10k = RADAR_DIMS.map(d => _scGet(scorecard, d.path));   // 0-10000
+  const raw100 = raw10k.map(v => v / 100);                          // 0-100
 
   let values, maxVal;
   if (mode === 'stanine') {
-    // 0-100 → 1-9 (Stanine)
+    // 0-100 pct → Stanine 1-9
     maxVal = 9;
-    values = rawValues.map(v => Math.max(1, Math.min(9, Math.round(v / 100 * 8 + 1))));
+    values = raw100.map(v => Math.max(1, Math.min(9, Math.round(v / 100 * 8 + 1))));
   } else if (mode === 'theta') {
-    // 0-100 → approx θ ∈ [-3, 3]
+    // 0-100 pct → θ ∈ [-3, 3]
     maxVal = 3;
-    values = rawValues.map(v => {
+    values = raw100.map(v => {
       const t = (v / 100 - 0.5) * 4;
       return Math.max(-3, Math.min(3, Math.round(t * 10) / 10));
     });
   } else {
-    // percent: values are already 0-100
+    // percent: 0-100
     maxVal = 100;
-    values = rawValues;
+    values = raw100.map(v => Math.round(v * 10) / 10);   // 1 decimal place
   }
 
-  const indicators = RADAR_DIMS.map((d, i) => ({
+  const indicators = RADAR_DIMS.map(d => ({
     name: d.label,
     max: maxVal,
     min: mode === 'theta' ? -3 : 0,
@@ -512,7 +516,11 @@ function renderRadarChart(containerId, data, mode) {
       trigger: 'item',
       formatter: params => {
         const vals = params.value || [];
-        return RADAR_DIMS.map((d, i) => `${d.label}: ${vals[i] ?? 0}`).join('<br/>');
+        const unit = mode === 'stanine' ? '' : mode === 'theta' ? '' : '%';
+        return RADAR_DIMS.map((d, i) => {
+          const v = vals[i] ?? 0;
+          return `${d.label}: <b>${v}${unit}</b>`;
+        }).join('<br/>');
       }
     },
     radar: {
