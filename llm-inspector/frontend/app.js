@@ -438,16 +438,26 @@ function downloadRadarSvg(runId) {
 
 // -- ECharts Radar Chart
 
-const DIM_LABELS = {
-  reasoning_score: '推理',
-  adversarial_score: '对抗',
-  instruction_score: '指令',
-  coding_score: '编码',
-  safety_score: '安全',
-  consistency_score: '一致性',
-  similarity_score: '相似度',
-  performance_score: '性能'
-};
+// Radar dimensions: [label, path-in-scorecard]
+// API returns scores already on 0-100 integer scale under scorecard.breakdown.*
+// Top-level keys: capability_score, authenticity_score, performance_score (all 0-100)
+const RADAR_DIMS = [
+  { key: 'reasoning',           label: '推理',   path: ['breakdown', 'reasoning'] },
+  { key: 'adversarial',        label: '对抗',   path: ['breakdown', 'adversarial_reasoning'] },
+  { key: 'instruction',        label: '指令',   path: ['breakdown', 'instruction'] },
+  { key: 'coding',             label: '编码',   path: ['breakdown', 'coding'] },
+  { key: 'safety',             label: '安全',   path: ['breakdown', 'safety'] },
+  { key: 'consistency',        label: '一致性', path: ['breakdown', 'consistency'] },
+  { key: 'authenticity_score', label: '真实性', path: ['authenticity_score'] },
+  { key: 'performance_score',  label: '性能',   path: ['performance_score'] },
+];
+
+// Read a potentially-nested value from scorecard object
+function _scGet(sc, path) {
+  let v = sc;
+  for (const k of path) { v = (v != null) ? v[k] : undefined; }
+  return (v != null && !isNaN(v)) ? Number(v) : 0;
+}
 
 let _radarCurrentData = null;
 
@@ -468,47 +478,63 @@ function renderRadarChart(containerId, data, mode) {
   if (existing) existing.dispose();
 
   const chart = echarts.init(container);
-  const dims = [
-    'reasoning_score', 'adversarial_score', 'instruction_score',
-    'coding_score', 'safety_score', 'consistency_score',
-    'similarity_score', 'performance_score'
-  ];
+  const scorecard = data.scorecard || {};
 
-  const maxVal = mode === 'stanine' ? 9 : mode === 'theta' ? 3 : 100;
+  // Values are already 0-100 integers from the API — no further scaling needed
+  const rawValues = RADAR_DIMS.map(d => _scGet(scorecard, d.path));
 
-  const indicators = dims.map(d => ({
-    name: DIM_LABELS[d] || d,
-    max: maxVal
+  let values, maxVal;
+  if (mode === 'stanine') {
+    // 0-100 → 1-9 (Stanine)
+    maxVal = 9;
+    values = rawValues.map(v => Math.max(1, Math.min(9, Math.round(v / 100 * 8 + 1))));
+  } else if (mode === 'theta') {
+    // 0-100 → approx θ ∈ [-3, 3]
+    maxVal = 3;
+    values = rawValues.map(v => {
+      const t = (v / 100 - 0.5) * 4;
+      return Math.max(-3, Math.min(3, Math.round(t * 10) / 10));
+    });
+  } else {
+    // percent: values are already 0-100
+    maxVal = 100;
+    values = rawValues;
+  }
+
+  const indicators = RADAR_DIMS.map((d, i) => ({
+    name: d.label,
+    max: maxVal,
+    min: mode === 'theta' ? -3 : 0,
   }));
 
-  const scorecard = data.scorecard || {};
-  const values = dims.map(d => {
-    const v = scorecard[d] != null ? scorecard[d] : 0;
-    if (mode === 'stanine') {
-      return Math.round(v * 8 + 1);
-    } else if (mode === 'theta') {
-      return Math.max(-3, Math.min(3, (v - 0.5) * 4));
-    }
-    return Math.round(v * 100);
-  });
-
   chart.setOption({
-    tooltip: { trigger: 'item' },
+    tooltip: {
+      trigger: 'item',
+      formatter: params => {
+        const vals = params.value || [];
+        return RADAR_DIMS.map((d, i) => `${d.label}: ${vals[i] ?? 0}`).join('<br/>');
+      }
+    },
     radar: {
       indicator: indicators,
       center: ['50%', '50%'],
       radius: '65%',
       splitNumber: 4,
-      axisName: { color: '#666', fontSize: 12 }
+      axisName: { color: '#555', fontSize: 12, fontWeight: 'bold' },
+      splitArea: { areaStyle: { color: ['rgba(75,108,247,0.03)', 'rgba(75,108,247,0.06)'] } },
+      axisLine: { lineStyle: { color: 'rgba(0,0,0,0.15)' } },
+      splitLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
     },
     series: [{
       type: 'radar',
       data: [{
         value: values,
         name: scorecard.claimed_model || '待测模型',
-        areaStyle: { opacity: 0.2 },
-        lineStyle: { width: 2 },
-        itemStyle: { color: '#4b6cf7' }
+        areaStyle: { color: 'rgba(75,108,247,0.15)' },
+        lineStyle: { width: 2, color: '#4b6cf7' },
+        itemStyle: { color: '#4b6cf7' },
+        symbol: 'circle',
+        symbolSize: 5,
       }]
     }]
   });
