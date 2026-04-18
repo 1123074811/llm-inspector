@@ -20,7 +20,9 @@ smaller, focused modules:
 """
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 from app.core.schemas import (
     ScoreCard,
@@ -48,9 +50,79 @@ from app.analysis.reporting import (                                            
 
 logger = get_logger(__name__)
 
+
+# ── Reference embedding helpers (v13 Phase 5) ─────────────────────────────────
+
+def _load_reference_embeddings() -> dict:
+    """Load reference embeddings from _data/reference_embeddings.json."""
+    try:
+        path = Path(__file__).parent.parent / "_data" / "reference_embeddings.json"
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("models", {})
+    except Exception:
+        return {}
+
+
 # ── AnalysisPipeline — baseline comparison utility ────────────────────────────
 
 class AnalysisPipeline:
+    @staticmethod
+    def build_similarity_comparisons(
+        current_features: dict[str, float],
+        current_card: ScoreCard,
+        golden_baselines: list[dict],
+    ) -> list[dict]:
+        """
+        Build baseline comparison dicts for all available baselines.
+
+        When ``golden_baselines`` is empty, falls back to reference embeddings
+        from ``_data/reference_embeddings.json`` (v13 Phase 5).
+
+        Each returned dict includes a ``baseline_source`` key:
+          - ``"user"``      — real user-marked golden baseline
+          - ``"reference"`` — embedded reference data (HELM/Arena-derived)
+        """
+        if golden_baselines:
+            results = []
+            for bl in golden_baselines:
+                fv = bl.get("feature_vector") or {}
+                bl_scores = {
+                    "total_score":        bl.get("total_score", 0.0),
+                    "capability_score":   bl.get("capability_score", 0.0),
+                    "authenticity_score": bl.get("authenticity_score", 0.0),
+                    "performance_score":  bl.get("performance_score", 0.0),
+                }
+                comp = AnalysisPipeline.compare_with_baseline(
+                    current_features, fv, current_card, bl_scores
+                )
+                comp["model_name"] = bl.get("model_name", "unknown")
+                comp["baseline_source"] = "user"
+                results.append(comp)
+            return results
+
+        # Fallback: reference embeddings
+        ref_embeddings = _load_reference_embeddings()
+        if ref_embeddings:
+            similarities = []
+            for model_name, ref_data in ref_embeddings.items():
+                comp = AnalysisPipeline.compare_with_baseline(
+                    current_features,
+                    ref_data.get("features", {}),
+                    current_card,
+                    ref_data.get("scores", {}),
+                )
+                comp["model_name"] = model_name
+                comp["baseline_source"] = "reference"
+                similarities.append(comp)
+            return sorted(
+                similarities,
+                key=lambda x: x.get("cosine_similarity", 0.0),
+                reverse=True,
+            )
+        return []
+
     @staticmethod
     def compare_with_baseline(
         current_features: dict[str, float],

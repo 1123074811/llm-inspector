@@ -527,3 +527,24 @@
   retrieved_at: "2026-04-01"
   license: "MIT"
   note: "Chao et al. NeurIPS 2024 — MIT licence."
+
+# ---------------------------------------------------------------------------
+# Knowledge Graph (v13 Phase 5)
+# ---------------------------------------------------------------------------
+- id: kg.dbpedia_endpoint
+  value: "https://dbpedia.org/sparql"
+  unit: url
+  source_url: "https://dbpedia.org/sparql"
+  source_type: official_doc
+  retrieved_at: "2026-04-18T00:00:00Z"
+  license: "CC BY-SA 3.0"
+  note: "DBpedia public SPARQL endpoint; rate-limit 10 req/s"
+
+- id: kg.cache_ttl_days
+  value: 30
+  unit: days
+  source_url: "https://dbpedia.org/sparql"
+  source_type: empirical
+  retrieved_at: "2026-04-18T00:00:00Z"
+  license: "internal"
+  note: "KG query cache TTL — DBpedia facts stable over 30d window"

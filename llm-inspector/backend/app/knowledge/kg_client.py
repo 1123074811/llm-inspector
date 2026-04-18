@@ -1,16 +1,19 @@
 """Knowledge Graph Client - Multi-source fact verification.
 
 Aggregates multiple knowledge sources with fallback:
-1. Wikidata (primary)
-2. Local cache
+1. DBpedia SPARQL (dedicated DBpediaClient) + Wikidata — concurrent fan-out
+2. Local in-memory + SQLite cache
 3. Heuristic fallback
 """
+from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
 from app.knowledge.wikidata_client import WikidataClient, VerificationResult
+from app.knowledge.dbpedia_client import DBpediaClient
 from app.core.logging import get_logger
 import time
 
@@ -106,6 +109,9 @@ class KnowledgeGraphClient:
             except Exception as e:
                 logger.warning(f"Failed to initialize Wikidata: {e}")
                 self._wikidata = None
+
+        # Initialize dedicated DBpedia client (v13 Phase 5)
+        self._dbpedia_client: DBpediaClient = DBpediaClient()
     
     def is_available(self) -> bool:
         """Check if any knowledge source is available."""
@@ -128,56 +134,20 @@ class KnowledgeGraphClient:
     
     def _dbpedia_verify(self, entity_name: str) -> Optional[VerificationResult]:
         """
-        Verify entity using DBpedia SPARQL API.
-        Returns VerificationResult if found, None if failed or not found.
+        Delegate to the dedicated DBpediaClient (v13 Phase 5).
+        Kept for backward compatibility — internal callers use _dbpedia_client directly.
         """
         if not self.use_dbpedia:
             return None
-
         self._stats["dbpedia"].queries_total += 1
         start_time = time.time()
-        
         try:
-            sparql = SPARQLWrapper("http://dbpedia.org/sparql")
-            query = f"""
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX dbo: <http://dbpedia.org/ontology/>
-            SELECT ?label ?abstract WHERE {{
-                ?s rdfs:label "{entity_name}"@en ;
-                   dbo:abstract ?abstract .
-                FILTER (lang(?abstract) = 'en')
-            }} LIMIT 1
-            """
-            sparql.setQuery(query)
-            sparql.setReturnFormat(JSON)
-            sparql.setTimeout(5)
-            results = sparql.query().convert()
-            
-            bindings = results.get("results", {}).get("bindings", [])
+            result = self._dbpedia_client.verify_entity(entity_name)
             query_time_ms = int((time.time() - start_time) * 1000)
-            
-            if bindings:
+            if result.is_verified:
                 self._stats["dbpedia"].queries_success += 1
-                self._update_avg_time("dbpedia", query_time_ms)
-                
-                abstract = bindings[0].get("abstract", {}).get("value", "")
-                evidence = ["Found in DBpedia."]
-                if abstract:
-                    # Provide a short snippet of abstract as evidence
-                    evidence.append(f"Abstract snippet: {abstract[:100]}...")
-                
-                return VerificationResult(
-                    is_verified=True,
-                    confidence=1.0,
-                    source="dbpedia",
-                    evidence=evidence,
-                    entity={"label": entity_name},
-                    query_time_ms=query_time_ms
-                )
-            
             self._update_avg_time("dbpedia", query_time_ms)
-            return None
-            
+            return result if result.is_verified else None
         except Exception as e:
             logger.error(f"DBpedia verification failed for '{entity_name}': {e}")
             query_time_ms = int((time.time() - start_time) * 1000)
@@ -241,11 +211,15 @@ class KnowledgeGraphClient:
     
     def verify_entity(self, entity_name: str) -> VerificationResult:
         """
-        Verify entity existence through available sources.
-        
+        Verify entity existence through available sources (concurrent fan-out).
+
+        v13 Phase 5: DBpedia and Wikidata are queried concurrently; results are
+        cross-checked for consistency. Conflicts are surfaced with a low
+        confidence score so callers can escalate to hallucination_v2.
+
         Args:
             entity_name: Entity name to verify
-            
+
         Returns:
             VerificationResult with confidence score
         """
@@ -255,56 +229,120 @@ class KnowledgeGraphClient:
                 confidence=0.0,
                 source="none",
                 evidence=["Invalid input"],
-                query_time_ms=0
+                query_time_ms=0,
             )
-        
+
         cache_key = self._get_cache_key(entity_name, "entity")
-        
-        # Check cache first
+
+        # 1. Check in-memory cache first
         if cache_key in self._cache:
             self._stats["cache"].queries_total += 1
             self._stats["cache"].queries_cached += 1
             cached = self._cache[cache_key]
-            # Update source to indicate cache hit
             return VerificationResult(
                 is_verified=cached.is_verified,
                 confidence=cached.confidence,
                 source=f"{cached.source}_cache",
                 evidence=cached.evidence + ["(from cache)"],
                 entity=cached.entity,
-                query_time_ms=0
+                query_time_ms=0,
             )
-        
-        # Try DBpedia (v10 Primary)
-        dbpedia_res = self._dbpedia_verify(entity_name)
-        if dbpedia_res:
-            self._add_to_cache(cache_key, dbpedia_res)
-            return dbpedia_res
 
-        # Try Wikidata
-        if self._wikidata:
-            try:
-                self._stats["wikidata"].queries_total += 1
-                result = self._wikidata.verify_entity_exists(entity_name)
-                self._stats["wikidata"].queries_success += 1
-                self._stats["wikidata"].avg_response_time_ms = (
-                    (self._stats["wikidata"].avg_response_time_ms * 
-                     (self._stats["wikidata"].queries_total - 1) + 
-                     result.query_time_ms) / 
-                    self._stats["wikidata"].queries_total
+        # 2. Fan-out: query both sources concurrently
+        futures_map: Dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            if self.use_dbpedia:
+                futures_map["dbpedia"] = ex.submit(
+                    self._dbpedia_client.verify_entity, entity_name
                 )
-                
-                # Cache successful results
-                self._add_to_cache(cache_key, result)
-                return result
-                
-            except Exception as e:
-                logger.error(f"Wikidata verification failed: {e}")
-        
-        # Fallback to heuristic
-        result = self._heuristic_verify(entity_name)
+            if self._wikidata:
+                futures_map["wikidata"] = ex.submit(
+                    self._wikidata.verify_entity_exists, entity_name
+                )
+
+            raw_results: Dict[str, VerificationResult] = {}
+            for src, fut in futures_map.items():
+                try:
+                    raw_results[src] = fut.result(timeout=5.0)
+                    if src == "dbpedia":
+                        self._stats["dbpedia"].queries_total += 1
+                        if raw_results[src].is_verified:
+                            self._stats["dbpedia"].queries_success += 1
+                    elif src == "wikidata":
+                        self._stats["wikidata"].queries_total += 1
+                        self._stats["wikidata"].queries_success += 1
+                except Exception as e:
+                    logger.warning(f"KG source {src} failed", error=str(e))
+
+        # 3. Cross-check consistency
+        if raw_results:
+            result = self._cross_check(entity_name, raw_results)
+        else:
+            # Both sources offline/failed — fall through to heuristic
+            result = self._heuristic_verify(entity_name)
+
         self._add_to_cache(cache_key, result)
         return result
+
+    def _cross_check(
+        self,
+        entity_name: str,
+        results: Dict[str, VerificationResult],
+    ) -> VerificationResult:
+        """
+        Cross-check results from multiple KG sources.
+
+        Rules:
+        - Both agree (both verified or both not) → higher-confidence result,
+          source set to "<src1>+<src2>", verified_by_consensus=True
+        - Conflict (one verified, one not) → is_verified=False, confidence=0.3,
+          source="conflicting", "conflicting_sources" added to evidence
+        - Single source → return as-is
+        """
+        if not results:
+            return VerificationResult(
+                is_verified=False,
+                confidence=0.0,
+                source="none",
+                evidence=["No KG sources returned results"],
+                query_time_ms=0,
+            )
+
+        if len(results) == 1:
+            return next(iter(results.values()))
+
+        sources = list(results.keys())
+        r0 = results[sources[0]]
+        r1 = results[sources[1]]
+
+        agree = r0.is_verified == r1.is_verified
+        if agree:
+            # Return the higher-confidence result with consensus metadata
+            winner = r0 if r0.confidence >= r1.confidence else r1
+            combined_source = f"{sources[0]}+{sources[1]}"
+            return VerificationResult(
+                is_verified=winner.is_verified,
+                confidence=winner.confidence,
+                source=combined_source,
+                evidence=winner.evidence + [f"Consensus: {combined_source}"],
+                entity=winner.entity,
+                query_time_ms=max(r0.query_time_ms, r1.query_time_ms),
+                verified_by_consensus=True,
+            )
+        else:
+            # Conflict — surface with low confidence for hallucination_v2 escalation
+            return VerificationResult(
+                is_verified=False,
+                confidence=0.3,
+                source="conflicting",
+                evidence=[
+                    f"conflicting_sources: {sources[0]} says {r0.is_verified}, "
+                    f"{sources[1]} says {r1.is_verified}",
+                    "Escalate to hallucination_v2 for manual review",
+                ],
+                query_time_ms=max(r0.query_time_ms, r1.query_time_ms),
+                verified_by_consensus=False,
+            )
     
     def verify_fact(
         self, 

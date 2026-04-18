@@ -6,8 +6,10 @@ Extracted from pipeline.py to keep individual files under ~320 lines.
 """
 from __future__ import annotations
 
+import json
 import math
 import random
+from pathlib import Path
 
 import numpy as np
 
@@ -135,7 +137,12 @@ class SimilarityEngine:
         # 过滤掉 estimated 类型的基准
         benchmark_profiles = [bp for bp in benchmark_profiles if bp.get("data_source") != "estimated"]
         if not benchmark_profiles:
-            return []  # 无真实基准时返回空，前端显示"暂无基准数据"
+            # v13 Phase 5: Try reference embeddings as fallback when no user baselines exist
+            ref_profiles = _load_reference_profiles()
+            if ref_profiles:
+                benchmark_profiles = ref_profiles
+            else:
+                return []  # 无真实基准时返回空，前端显示"暂无基准数据"
 
         target_vec, target_mask = self._to_vector_with_mask(target_features)
         results: list[SimilarityResult] = []
@@ -317,3 +324,49 @@ class SimilarityEngine:
         lo = sims[int(n_bootstrap * 0.025)]
         hi = sims[int(n_bootstrap * 0.975)]
         return lo, hi, valid_count
+
+
+# ── Reference embedding helpers (v13 Phase 5) ─────────────────────────────────
+
+def _load_reference_embeddings() -> dict:
+    """
+    Load reference embeddings from app/_data/reference_embeddings.json.
+
+    Returns the raw ``models`` dict keyed by model name, or {} if the file
+    cannot be found or parsed.
+    """
+    try:
+        path = Path(__file__).parent.parent / "_data" / "reference_embeddings.json"
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("models", {})
+    except Exception:
+        return {}
+
+
+def _load_reference_profiles() -> list[dict]:
+    """
+    Convert reference_embeddings.json into benchmark_profile dicts compatible
+    with ``SimilarityEngine.compare()``.
+
+    Each profile has:
+      benchmark_name, name, feature_vector, data_source="reference",
+      baseline_source="reference", scores (for AnalysisPipeline.compare_with_baseline)
+    """
+    raw = _load_reference_embeddings()
+    if not raw:
+        return []
+    profiles = []
+    for model_name, data in raw.items():
+        profiles.append({
+            "benchmark_name": model_name,
+            "name": model_name,
+            "feature_vector": data.get("features", {}),
+            "data_source": "reference",
+            "baseline_source": "reference",
+            "scores": data.get("scores", {}),
+            "family": data.get("family", ""),
+            "sample_count": 1,
+        })
+    return profiles

@@ -35,7 +35,7 @@ class WikidataEntity:
         }
 
 
-@dataclass 
+@dataclass
 class VerificationResult:
     """Fact verification result."""
     is_verified: bool
@@ -44,7 +44,8 @@ class VerificationResult:
     evidence: List[str] = field(default_factory=list)
     entity: Optional[WikidataEntity] = None
     query_time_ms: int = 0
-    
+    verified_by_consensus: bool = False  # v13 Phase 5: set True when DBpedia+Wikidata agree
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "is_verified": self.is_verified,
@@ -53,6 +54,7 @@ class VerificationResult:
             "evidence": self.evidence,
             "entity": self.entity.to_dict() if self.entity else None,
             "query_time_ms": self.query_time_ms,
+            "verified_by_consensus": self.verified_by_consensus,
         }
 
 
