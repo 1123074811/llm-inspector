@@ -1,0 +1,63 @@
+version: "v13"
+datasets:
+  - id: gpqa_diamond
+    name: "GPQA Diamond"
+    paper: "Rein et al. (2023), arXiv:2311.12022"
+    hf_repo: "Idavidrein/gpqa"
+    hf_split: "gpqa_diamond"
+    license: "MIT"
+    url: "https://huggingface.co/datasets/Idavidrein/gpqa"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "Graduate-level science Q&A, diamond=198 hardest questions"
+
+  - id: aime_2024
+    name: "AIME 2024 (American Invitational Mathematics Examination)"
+    paper: "Mathematical Association of America"
+    url: "https://artofproblemsolving.com/wiki/index.php/2024_AIME_I"
+    license: "Public domain (competition problems)"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "30 competition problems from AIME I+II 2024"
+
+  - id: math_500
+    name: "MATH-500 (Hendrycks MATH level 4-5 subset)"
+    paper: "Hendrycks et al. (2021), arXiv:2103.03874"
+    hf_repo: "lighteval/MATH"
+    license: "MIT"
+    url: "https://github.com/hendrycks/math"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "500 competition-level math problems, difficulty 4-5"
+
+  - id: swebench_lite
+    name: "SWE-bench Lite"
+    paper: "Jimenez et al. (2024), arXiv:2310.06770"
+    hf_repo: "princeton-nlp/SWE-bench_Lite"
+    license: "MIT"
+    url: "https://www.swebench.com"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "300 GitHub issue-fix tasks; we use 30 representative cases"
+
+  - id: mmlu_pro
+    name: "MMLU-Pro"
+    paper: "Wang et al. (2024), arXiv:2406.01574"
+    hf_repo: "TIGER-Lab/MMLU-Pro"
+    license: "MIT"
+    url: "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "Hard multi-choice questions, 14 categories"
+
+  - id: cmmlu
+    name: "CMMLU (Chinese Massive Multitask Language Understanding)"
+    paper: "Li et al. (2023), arXiv:2306.09212"
+    hf_repo: "haonan-li/cmmlu"
+    license: "CC BY-NC-SA 4.0"
+    url: "https://github.com/haonan-li/CMMLU"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "Chinese-specific multitask QA; commercial use requires permission"
+
+  - id: jailbreakbench
+    name: "JailbreakBench"
+    paper: "Chao et al. (NeurIPS 2024)"
+    url: "https://jailbreakbench.github.io"
+    license: "MIT"
+    retrieved_at: "2026-04-01T00:00:00Z"
+    note: "100 adversarial prompts for evaluating alignment robustness"

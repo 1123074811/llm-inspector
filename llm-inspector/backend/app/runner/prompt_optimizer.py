@@ -22,6 +22,7 @@ Design decisions:
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import threading
@@ -92,6 +93,27 @@ class CompiledPrompt:
 
 
 @dataclass
+class CacheStats:
+    """Statistics for prompt caching within a run."""
+    cache_hits: int = 0
+    cache_misses: int = 0
+    estimated_savings_tokens: int = 0
+
+    @property
+    def hit_rate(self) -> float:
+        total = self.cache_hits + self.cache_misses
+        return self.cache_hits / total if total > 0 else 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "estimated_savings_tokens": self.estimated_savings_tokens,
+            "hit_rate": round(self.hit_rate, 3),
+        }
+
+
+@dataclass
 class PromptOptimizationReport:
     """Summary of prompt optimization for a run."""
     total_candidates: int
@@ -99,6 +121,8 @@ class PromptOptimizationReport:
     avg_examples_selected: float
     avg_tokens_saved: float
     methods_used: dict[str, int]
+    cached_tokens: int = 0
+    cache_hit_rate: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -107,6 +131,8 @@ class PromptOptimizationReport:
             "avg_examples_selected": round(self.avg_examples_selected, 2),
             "avg_tokens_saved": round(self.avg_tokens_saved, 1),
             "methods_used": self.methods_used,
+            "cached_tokens": self.cached_tokens,
+            "cache_hit_rate": round(self.cache_hit_rate, 3),
         }
 
 
@@ -422,10 +448,15 @@ class PromptOptimizer:
         self._total_examples_selected = 0
         self._total_tokens_saved = 0
         self._methods_used: dict[str, int] = {
-            "tfidf": 0, "ngram": 0, "random": 0, 
+            "tfidf": 0, "ngram": 0, "random": 0,
             "semantic": 0, "hybrid": 0
         }
         self._lock = threading.Lock()
+
+        # v13 Phase 3: Prompt caching support
+        # Track system prompts seen within a run (via hash fingerprint)
+        self._seen_prompt_hashes: set[str] = set()
+        self._cache_stats = CacheStats()
 
         # Load default examples
         for ex in DEFAULT_EXAMPLES:
@@ -871,6 +902,61 @@ class PromptOptimizer:
                 used_tokens += est
         return selected
 
+    # -- Prompt Caching Support (v13 Phase 3) -----------------------------------
+
+    def get_cache_control_headers(self, prompt: str) -> dict:
+        """
+        Return HTTP headers that signal prompt caching intent to the provider.
+
+        Tracks repeated system prompts within a session via SHA-256 fingerprint.
+        On the first occurrence a "miss" is recorded; subsequent identical
+        prompts are counted as "hits" and their token cost is added to
+        estimated_savings_tokens.
+
+        Provider-specific headers returned:
+          - OpenAI:    {"x-prompt-caching": "1"}  (unofficial signal)
+          - Anthropic: {"anthropic-beta": "prompt-caching-2024-07-31"}
+          Both headers are included; callers can pick the relevant one.
+
+        Args:
+            prompt: the system or repeated prompt text
+
+        Returns:
+            dict with caching-related request headers
+        """
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        estimated_tokens = max(1, len(prompt.split()))
+
+        with self._lock:
+            if prompt_hash in self._seen_prompt_hashes:
+                self._cache_stats.cache_hits += 1
+                self._cache_stats.estimated_savings_tokens += estimated_tokens
+            else:
+                self._seen_prompt_hashes.add(prompt_hash)
+                self._cache_stats.cache_misses += 1
+
+        return {
+            # OpenAI — unofficial caching hint
+            "x-prompt-caching": "1",
+            # Anthropic prompt caching beta header
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        }
+
+    def reset_cache_stats(self) -> None:
+        """Reset the per-run cache statistics and seen-prompt set."""
+        with self._lock:
+            self._seen_prompt_hashes.clear()
+            self._cache_stats = CacheStats()
+
+    def get_cache_stats(self) -> CacheStats:
+        """Return the current prompt caching statistics."""
+        with self._lock:
+            return CacheStats(
+                cache_hits=self._cache_stats.cache_hits,
+                cache_misses=self._cache_stats.cache_misses,
+                estimated_savings_tokens=self._cache_stats.estimated_savings_tokens,
+            )
+
     def get_report(self) -> PromptOptimizationReport:
         """Get optimization statistics."""
         with self._lock:
@@ -890,6 +976,8 @@ class PromptOptimizer:
                 avg_examples_selected=avg_ex,
                 avg_tokens_saved=avg_saved,
                 methods_used=dict(self._methods_used),
+                cached_tokens=self._cache_stats.estimated_savings_tokens,
+                cache_hit_rate=self._cache_stats.hit_rate,
             )
 
 

@@ -1,5 +1,5 @@
 """
-predetect/pipeline.py — PreDetectionPipeline orchestrator (14 layers)
+predetect/pipeline.py — PreDetectionPipeline orchestrator (16 layers)
 
 This file is intentionally thin: it only contains PreDetectionPipeline,
 which assembles and runs the layer sequence. All layer implementations and
@@ -15,6 +15,8 @@ shared data live in dedicated files:
   tool_capability.py       — Layer9ToolCapability (Layer 11 slot)
   adversarial_analysis.py  — Layer11AdversarialAnalysis (Layer 13 slot)
   multilingual_attack.py   — Layer14MultilingualAttack (Layer 14 slot)
+  ascii_art_attack.py      — Layer15ASCIIArt (Layer 15 slot)  [v13 Phase 3]
+  indirect_injection.py    — Layer16IndirectInject (Layer 16 slot) [v13 Phase 3]
 """
 from __future__ import annotations
 
@@ -41,6 +43,10 @@ from app.predetect.adversarial_analysis import Layer11AdversarialAnalysis # Laye
 
 # v11 Phase 3: Multilingual translation attack
 from app.predetect.multilingual_attack import Layer14MultilingualAttack  # Layer 14 slot
+
+# v13 Phase 3: New adversarial layers
+from app.predetect.ascii_art_attack import Layer15ASCIIArt            # Layer 15 slot
+from app.predetect.indirect_injection import Layer16IndirectInject     # Layer 16 slot
 
 logger = get_logger(__name__)
 
@@ -329,6 +335,26 @@ class PreDetectionPipeline:
                 self._log_layer_result("Layer14/Multilingual", r14)
                 if r14.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r14, layer_results, total_tokens)
+
+                # v13 Phase 3: Layer 15 — ASCII Art attack (deep/extraction mode)
+                _report_progress("Layer15/ASCIIArt")
+                logger.info("PreDetect Layer15: ASCII Art attack", model=model_name)
+                r15 = Layer15ASCIIArt().run(adapter, model_name)
+                layer_results.append(r15)
+                total_tokens += r15.tokens_used
+                self._log_layer_result("Layer15/ASCIIArt", r15)
+                if r15.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r15, layer_results, total_tokens)
+
+                # v13 Phase 3: Layer 16 — Indirect injection (deep/extraction mode)
+                _report_progress("Layer16/IndirectInject")
+                logger.info("PreDetect Layer16: Indirect injection", model=model_name)
+                r16 = Layer16IndirectInject().run(adapter, model_name)
+                layer_results.append(r16)
+                total_tokens += r16.tokens_used
+                self._log_layer_result("Layer16/IndirectInject", r16)
+                if r16.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r16, layer_results, total_tokens)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)
