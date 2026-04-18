@@ -66,6 +66,8 @@ from app.handlers.v11_handlers import (
     handle_prompt_optimizer_report,
     handle_gpqa_questions,
     handle_multilingual_attacks,
+    # Phase 4
+    handle_run_timeline_svg,
 )
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
@@ -146,6 +148,8 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/prompt-optimizer/report$",    handle_prompt_optimizer_report),
     ("GET",    r"^/api/v1/gpqa/questions$",             handle_gpqa_questions),
     ("GET",    r"^/api/v1/attacks/multilingual$",       handle_multilingual_attacks),
+    # Phase 4: Timeline SVG
+    ("GET",    r"^/api/v1/runs/[^/]+/timeline\.svg$",  handle_run_timeline_svg),
 ]
 
 

@@ -16,12 +16,17 @@ import os
 from app.core.logging import get_logger
 from app.core.config import settings
 from app.tasks.queue import get_queue, submit_task
+from app.tasks.watchdog import start_background_watchdog
 
 logger = get_logger(__name__)
 
 # Fallback lock for local task tracking when not using the unified queue abstraction
 _local_lock = threading.Lock()
 _local_running: dict[str, bool] = {}
+
+# v13 Phase 4: Start watchdog at module load time so stale runs are cleaned up
+# even after a server restart.
+start_background_watchdog(interval_sec=300)
 
 
 def submit_run(run_id: str) -> None:

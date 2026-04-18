@@ -31,12 +31,23 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.core.sse import publisher as sse_publisher
 
 logger = get_logger(__name__)
+
+
+# ── JSONL trace path helper ───────────────────────────────────────────────────
+
+def _get_trace_path(run_id: str) -> Path:
+    """Return the JSONL trace file path for a given run_id."""
+    from app.core.config import settings
+    d = Path(settings.DATA_DIR) / "traces"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{run_id}.jsonl"
 
 
 @dataclass
@@ -145,6 +156,16 @@ class PipelineTracer:
         self._lock = threading.Lock()
         self._active_spans: dict[str, Span] = {}
 
+        # JSONL persistence — open in append mode so that partial traces survive
+        self._jsonl_path: Path | None = None
+        self._jsonl_file = None
+        self._jsonl_lock = threading.Lock()
+        try:
+            self._jsonl_path = _get_trace_path(run_id)
+            self._jsonl_file = open(self._jsonl_path, "a", encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Could not open JSONL trace file", run_id=run_id, error=str(exc))
+
     @property
     def run_id(self) -> str:
         return self._run_id
@@ -216,10 +237,21 @@ class PipelineTracer:
         self._trace.start_time = time.monotonic()
         self._push_sse("trace_start", {"run_id": self._run_id})
 
+    def flush_to_jsonl(self, event_dict: dict) -> None:
+        """Append one event dict as a JSONL line to the trace file. Thread-safe."""
+        if self._jsonl_file is None:
+            return
+        with self._jsonl_lock:
+            try:
+                self._jsonl_file.write(json.dumps(event_dict) + "\n")
+                self._jsonl_file.flush()
+            except Exception:
+                pass  # JSONL writes are best-effort
+
     def finish(self) -> PipelineTrace:
         """Mark the trace as finished and return the complete trace."""
         self._trace.end_time = time.monotonic()
-        self._push_sse("trace_end", {
+        summary = {
             "run_id": self._run_id,
             "duration_ms": self._trace.duration_ms,
             "total_tokens": self._trace.total_tokens,
@@ -227,7 +259,22 @@ class PipelineTracer:
                 s.name: {"duration_ms": s.duration_ms, "status": s.status}
                 for s in self._trace.spans
             },
-        })
+        }
+        self._push_sse("trace_end", summary)
+
+        # Close JSONL file handle
+        with self._jsonl_lock:
+            if self._jsonl_file is not None:
+                try:
+                    self._jsonl_file.flush()
+                    self._jsonl_file.close()
+                except Exception:
+                    pass
+                finally:
+                    self._jsonl_file = None
+        if self._jsonl_path:
+            self._trace.spans  # no-op; path available in _jsonl_path
+
         return self._trace
 
     def get_progress(self) -> dict:
@@ -251,7 +298,7 @@ class PipelineTracer:
         }
 
     def _push_sse(self, event_type: str, data: dict) -> None:
-        """Push a trace event to SSE subscribers."""
+        """Push a trace event to SSE subscribers and persist to JSONL."""
         payload = {
             "type": "trace",
             "trace_event": event_type,
@@ -263,6 +310,8 @@ class PipelineTracer:
             sse_publisher.publish(self._run_id, payload)
         except Exception:
             pass  # SSE is best-effort; don't fail the pipeline
+        # Persist to JSONL trace file
+        self.flush_to_jsonl(payload)
 
 
 # ── Tracer registry ─────────────────────────────────────────────────────────

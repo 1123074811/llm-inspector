@@ -121,6 +121,15 @@ class Settings:
     USE_EXTERNAL_LLM: bool = os.getenv("USE_EXTERNAL_LLM", "false").lower() == "true"
     USE_KNOWLEDGE_GRAPH: bool = os.getenv("USE_KNOWLEDGE_GRAPH", "false").lower() == "true"
 
+    # v13 Phase 4: Data directory for traces and other persisted artifacts
+    DATA_DIR: str = os.getenv(
+        "DATA_DIR",
+        str(pathlib.Path(__file__).parent.parent.parent.parent / "data"),
+    )
+
+    # v13 Phase 4: Watchdog — maximum run duration before marking as partial_failed
+    RUN_MAX_DURATION_SEC: int = int(os.getenv("RUN_MAX_DURATION_SEC", "1800"))
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV.lower() in ("production", "prod")

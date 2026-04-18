@@ -29,60 +29,90 @@ class RunLifecycleManager:
 
     def execute_full(self) -> None:
         """Executes the full pipeline starting from pre-detection."""
+        from app.core.events import emit, EventKind
         logger.info("Lifecycle: Starting full pipeline", run_id=self.run_id)
         self.tracer.start()
-        
-        if not self._initialize():
-            return
+        emit(self.run_id, EventKind.RUN_STARTED)
 
-        # 1. Pre-detection
-        pre_result = self._step_predetect()
-        if not pre_result: # Error in pre-detect flow itself
-            return
+        try:
+            if not self._initialize():
+                return
 
-        # 2. Check if we should pause after pre-detect
-        if not pre_result.should_proceed_to_testing and self.run_metadata.get("test_mode") != "deep":
-            logger.info("Lifecycle: Pausing after pre-detection", run_id=self.run_id)
-            repo.update_run_status(self.run_id, "pre_detected")
+            # 1. Pre-detection
+            pre_result = self._step_predetect()
+            if not pre_result: # Error in pre-detect flow itself
+                return
+
+            # 2. Check if we should pause after pre-detect
+            if not pre_result.should_proceed_to_testing and self.run_metadata.get("test_mode") != "deep":
+                logger.info("Lifecycle: Pausing after pre-detection", run_id=self.run_id)
+                repo.update_run_status(self.run_id, "pre_detected")
+                remove_tracer(self.run_id)
+                return
+
+            # 3. Connectivity
+            if not self._step_connectivity():
+                return
+
+            # 4. Testing & Reporting
+            self._step_testing_and_reporting(pre_result)
+
+            self.tracer.finish()
+        except Exception as exc:
+            logger.error("Unhandled exception in execute_full", run_id=self.run_id, error=str(exc))
+            try:
+                current = repo.get_run(self.run_id)
+                if current and current.get("status") not in ("completed", "failed", "partial_failed", "cancelled"):
+                    repo.update_run_status(self.run_id, "failed",
+                        error_message=f"Unhandled error: {exc}",
+                        error_code="E_UNHANDLED")
+            except Exception:
+                pass
+            emit(self.run_id, EventKind.RUN_FAILED, error=str(exc))
+        finally:
             remove_tracer(self.run_id)
-            return
-
-        # 3. Connectivity
-        if not self._step_connectivity():
-            return
-
-        # 4. Testing & Reporting
-        self._step_testing_and_reporting(pre_result)
-        
-        self.tracer.finish()
-        remove_tracer(self.run_id)
 
     def execute_continue(self) -> None:
         """Resumes a pre-detected run."""
+        from app.core.events import emit, EventKind
         logger.info("Lifecycle: Continuing pipeline", run_id=self.run_id)
         self.tracer.start()
-        
-        if not self._initialize():
-            return
+        emit(self.run_id, EventKind.RUN_STARTED)
 
-        pre_dict = self.run_metadata.get("predetect_result") or {}
-        pre_result = PreDetectionResult(
-            success=pre_dict.get("success", False),
-            identified_as=pre_dict.get("identified_as"),
-            confidence=pre_dict.get("confidence", 0.0),
-            layer_stopped=pre_dict.get("layer_stopped"),
-            total_tokens_used=pre_dict.get("total_tokens_used", 0),
-            should_proceed_to_testing=True,
-            routing_info=pre_dict.get("routing_info", {}),
-        )
+        try:
+            if not self._initialize():
+                return
 
-        if not self._step_connectivity():
-            return
+            pre_dict = self.run_metadata.get("predetect_result") or {}
+            pre_result = PreDetectionResult(
+                success=pre_dict.get("success", False),
+                identified_as=pre_dict.get("identified_as"),
+                confidence=pre_dict.get("confidence", 0.0),
+                layer_stopped=pre_dict.get("layer_stopped"),
+                total_tokens_used=pre_dict.get("total_tokens_used", 0),
+                should_proceed_to_testing=True,
+                routing_info=pre_dict.get("routing_info", {}),
+            )
 
-        self._step_testing_and_reporting(pre_result)
-        
-        self.tracer.finish()
-        remove_tracer(self.run_id)
+            if not self._step_connectivity():
+                return
+
+            self._step_testing_and_reporting(pre_result)
+
+            self.tracer.finish()
+        except Exception as exc:
+            logger.error("Unhandled exception in execute_continue", run_id=self.run_id, error=str(exc))
+            try:
+                current = repo.get_run(self.run_id)
+                if current and current.get("status") not in ("completed", "failed", "partial_failed", "cancelled"):
+                    repo.update_run_status(self.run_id, "failed",
+                        error_message=f"Unhandled error: {exc}",
+                        error_code="E_UNHANDLED")
+            except Exception:
+                pass
+            emit(self.run_id, EventKind.RUN_FAILED, error=str(exc))
+        finally:
+            remove_tracer(self.run_id)
 
     def _initialize(self) -> bool:
         """Loads metadata and initializes adapter."""
