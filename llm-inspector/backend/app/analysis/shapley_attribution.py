@@ -118,11 +118,11 @@ FEATURE_SCORE_MAP: dict[str, str] = {
 }
 
 
-def _get_score_value(scorecard: ScoreCard, feature: str) -> float:
+def _get_score_value(scorecard: ScoreCard, feature: str) -> float | None:
     """Extract a sub-score value from a ScoreCard by feature name."""
     attr_path = FEATURE_SCORE_MAP.get(feature)
     if not attr_path:
-        return 50.0  # Neutral baseline for unknown features
+        return None  # Neutral baseline for unknown features
 
     if "." in attr_path:
         # Navigate nested: e.g. "breakdown.extraction_resistance"
@@ -130,13 +130,13 @@ def _get_score_value(scorecard: ScoreCard, feature: str) -> float:
         breakdown = getattr(scorecard, "breakdown", {})
         if isinstance(breakdown, dict):
             val = breakdown.get(parts[1])
-            return float(val) if val is not None else 50.0
+            return float(val) if val is not None else None
     else:
         val = getattr(scorecard, attr_path, None)
         if val is not None:
             return float(val)
 
-    return 50.0  # Neutral
+    return None  # Neutral
 
 
 def _compute_total_score(
@@ -232,10 +232,11 @@ class ShapleyAttributor:
         Returns:
             AttributionReport with per-feature Shapley values
         """
-        # 1. Get actual feature values
+        # 1. Get actual feature values (substitute 50.0 for None — Shapley needs numeric values)
         actual_values: dict[str, float] = {}
         for feat in ATTRIBUTABLE_FEATURES:
-            actual_values[feat] = _get_score_value(scorecard, feat)
+            val = _get_score_value(scorecard, feat)
+            actual_values[feat] = val if val is not None else 50.0
 
         # 2. Define baseline (neutral/average model)
         baseline_values = {feat: 50.0 for feat in ATTRIBUTABLE_FEATURES}

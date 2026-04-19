@@ -286,9 +286,9 @@ class PercentileMapper:
         return theta_report
 
     @staticmethod
-    def _pct(v: float, arr: list[float]) -> float:
+    def _pct(v: float, arr: list[float]) -> float | None:
         if not arr:
-            return 50.0
+            return None
         rank = sum(1 for x in arr if x <= v)
         return round(rank * 100.0 / len(arr), 2)
 

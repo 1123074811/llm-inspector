@@ -71,6 +71,7 @@ from app.handlers.v11_handlers import (
 )
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
+from app.handlers.v14_handlers import handle_bt_leaderboard
 
 logger = get_logger(__name__)
 
@@ -159,6 +160,7 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/runs/[^/]+/timeline\.svg$",  handle_run_timeline_svg),
     # -- v14 namespace (Phase 1 placeholder; extended in Phase 3+) ----
     ("GET",    r"^/api/v14/health$",                   _handle_v14_health),
+    ("GET",    r"^/api/v14/bt-leaderboard$",            handle_bt_leaderboard),
 ]
 
 

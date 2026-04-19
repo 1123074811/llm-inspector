@@ -2,6 +2,32 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase2] — 2026-04-19
+
+### Added
+- `ScoreCard.completeness` — v14 字段：当轮测试中非 None 能力维度数 / 总维度数（0-1），`to_dict()` 写入 `v13.completeness`
+- `GET /api/v14/bt-leaderboard` — Bradley-Terry 强度排行榜（MM 算法，Bradley & Terry 1952 Biometrika 39:324），从 compare_runs 数据拟合，无数据时 fallback 到 ELO 分
+- `handlers/v14_handlers.py` — v14 专属处理器模块（`_compute_bradley_terry` + `handle_bt_leaderboard`）
+- `scripts/fit_weights_v14.py` — NNLS 能力维度权重拟合脚本（内嵌 HELM v1.10 top-8 参考数据，R²=0.9576）
+- `SOURCES.yaml` 新增 6 条 verdict cap 溯源记录：`verdict.difficulty_cap` / `behavioral_invariant_cap` / `coding_zero_cap` / `identity_exposed_cap` / `extraction_weak_cap` / `fingerprint_mismatch_cap`
+- `tests/test_v14_phase2.py` — 26 条验收测试（全部通过）
+
+### Changed
+- **消除 19 处 `return 50.0` 假数据兜底**（scoring.py ×6、score_calculator.py ×4、shapley_attribution.py ×2、attribution.py ×1、adaptive_scoring.py ×2、estimation.py ×1、_speed_score fallback ×1、_extraction_resistance zero-weight ×1）；空输入时统一返回 `None`，调用方重新归一化权重
+- `ScoreCard` 字段类型修正为 `float | None`：`reasoning_score`、`adversarial_reasoning_score`、`coding_score`、`similarity_to_claimed`、`speed_score`、`stability_score`（默认 `None` 而非 `0.0`）
+- `ScoreCard.to_dict()` 现对 `None` 维度输出 `null`（而非 `0`），前端可显示 "N/A"
+- `total_score` 计算改为归一化加权（仅对非 None 的顶层维度归一化），消除零填充偏差
+- `authenticity_score` 计算同步改为字典式归一化（处理 `similarity_to_claimed=None`）
+- `SOURCES.yaml` 8 条 `capability.weight.*.default` 更新为 NNLS 拟合值（reasoning: 0.0000, adversarial: 0.0968, instruction: 0.2492, coding: 0.2571, safety: 0.0190, protocol: 0.0690, knowledge: 0.0781, tool_use: 0.2307）；`phase2_replace: false`
+- `SOURCES.yaml` 3 条 `scorecard.weight.*` 更新 `phase2_replace: false`（值 0.45/0.30/0.25 经 NNLS 确认）
+- `verdicts.py` `_SRC_KEY_MAP` 补全 6 条 cap 映射，移除所有 `# TODO: derived cap` 注释
+- `verdicts.py` `_RULE_FALLBACKS` 注释更新为 `# SRC: verdict.<key>`（溯源完整）
+
+### Test Coverage
+- **294 passed, 4 skipped**（+26 vs Phase 1 的 268）
+
+---
+
 ## [v14.0.0-phase1] — 2026-04-19
 
 ### Added

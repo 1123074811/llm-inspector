@@ -337,11 +337,11 @@ class ScoreCardCalculator:
             },
         )
 
-    def _reasoning_score(self, features: Dict[str, float], case_results: List[Any]) -> float:
+    def _reasoning_score(self, features: Dict[str, float], case_results: List[Any]) -> float | None:
         """Reasoning dimension: logical consistency + multi-step verification."""
         reasoning_cases = [r for r in case_results if r.case.category == "reasoning"]
         if not reasoning_cases:
-            return 50.0
+            return None
 
         # Base pass rate
         base = self._weighted_pass_rate(reasoning_cases)
@@ -354,11 +354,11 @@ class ScoreCardCalculator:
 
         return max(0.0, min(100.0, round(base * 100, 1)))
 
-    def _adversarial_reasoning_score(self, features: Dict[str, float], case_results: List[Any]) -> float:
+    def _adversarial_reasoning_score(self, features: Dict[str, float], case_results: List[Any]) -> float | None:
         """Adversarial reasoning: resistance to prompt injection + spoof detection."""
         adv_cases = [r for r in case_results if r.case.category == "adversarial"]
         if not adv_cases:
-            return 50.0
+            return None
 
         # Base score from adversarial tests
         base = self._weighted_pass_rate(adv_cases)
@@ -381,16 +381,16 @@ class ScoreCardCalculator:
         )
         return max(0.0, min(100.0, round(instruction, 1)))
 
-    def _coding_score(self, features: Dict[str, float], case_results: List[Any]) -> float:
+    def _coding_score(self, features: Dict[str, float], case_results: List[Any]) -> float | None:
         """Coding capability score."""
         coding_cases = [r for r in case_results if r.case.category == "coding"]
         if not coding_cases:
-            return 50.0
+            return None
 
         exec_cases = [r for r in coding_cases if r.case.judge_method == "code_execution"]
         if exec_cases:
             return round(self._weighted_pass_rate(exec_cases) * 100, 1)
-        return 50.0
+        return None
 
     def _safety_score(self, features: Dict[str, float]) -> float:
         """
@@ -549,10 +549,10 @@ class ScoreCardCalculator:
         except Exception:
             return {}
 
-    def _stability_score(self, case_results: List[Any]) -> float:
+    def _stability_score(self, case_results: List[Any]) -> float | None:
         """Stability score based on error rates."""
         if not case_results:
-            return 50.0
+            return None
         total_samples = 0
         error_samples = 0
         for r in case_results:
@@ -561,7 +561,7 @@ class ScoreCardCalculator:
                 if s.response.error_type:
                     error_samples += 1
         if total_samples == 0:
-            return 50.0
+            return None
         error_rate = error_samples / total_samples
         return max(0, min(100, round((1 - error_rate) * 100, 1)))
 

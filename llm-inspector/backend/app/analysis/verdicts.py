@@ -28,24 +28,30 @@ class VerdictEngine:
     # Derived caps (e.g. the 50.0 penalty applied when a top-claimed model fails
     # a threshold) are kept as hard-coded fallbacks below pending data fitting.
     _RULE_FALLBACKS = {
-        "adv_spoof_cap": 45.0,                  # TODO: derived cap; no SRC entry yet
+        "adv_spoof_cap": 45.0,                  # SRC: verdict.adv_spoof_cap
         "difficulty_ceiling_min": 0.4,          # SRC: verdict.difficulty_ceiling_min
-        "difficulty_cap": 50.0,                 # TODO: derived cap
+        "difficulty_cap": 50.0,                 # SRC: verdict.difficulty_cap
         "behavioral_invariant_min": 40,         # SRC: verdict.behavioral_invariant_min
-        "behavioral_invariant_cap": 55.0,       # TODO: derived cap
-        "coding_zero_cap": 45.0,                # TODO: derived cap
-        "identity_exposed_cap": 30.0,           # TODO: derived cap
-        "extraction_weak_cap": 65.0,            # TODO: derived cap
+        "behavioral_invariant_cap": 55.0,       # SRC: verdict.behavioral_invariant_cap
+        "coding_zero_cap": 45.0,                # SRC: verdict.coding_zero_cap
+        "identity_exposed_cap": 30.0,           # SRC: verdict.identity_exposed_cap
+        "extraction_weak_cap": 65.0,            # SRC: verdict.extraction_weak_cap
         "extraction_weak_threshold": 15,        # SRC: verdict.extraction_weak_threshold
-        "fingerprint_mismatch_cap": 55.0,       # TODO: derived cap
+        "fingerprint_mismatch_cap": 55.0,       # SRC: verdict.fingerprint_mismatch_cap
         "fingerprint_mismatch_threshold": 30,   # SRC: verdict.fingerprint_mismatch_threshold
     }
     _SRC_KEY_MAP = {
         "adv_spoof_cap": "verdict.adv_spoof_cap",
         "difficulty_ceiling_min": "verdict.difficulty_ceiling_min",
+        "difficulty_cap": "verdict.difficulty_cap",
         "behavioral_invariant_min": "verdict.behavioral_invariant_min",
+        "behavioral_invariant_cap": "verdict.behavioral_invariant_cap",
+        "coding_zero_cap": "verdict.coding_zero_cap",
+        "identity_exposed_cap": "verdict.identity_exposed_cap",
         "extraction_weak_threshold": "verdict.extraction_weak_threshold",
+        "extraction_weak_cap": "verdict.extraction_weak_cap",
         "fingerprint_mismatch_threshold": "verdict.fingerprint_mismatch_threshold",
+        "fingerprint_mismatch_cap": "verdict.fingerprint_mismatch_cap",
     }
     # v6: Default TOP_MODELS as fallback (will be overridden by dynamic loading)
     DEFAULT_TOP_MODELS = [

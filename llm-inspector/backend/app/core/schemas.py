@@ -306,22 +306,22 @@ class ScoreCard:
     authenticity_score: float = 0.0
     performance_score: float = 0.0
     # Capability sub-scores
-    reasoning_score: float = 0.0
-    adversarial_reasoning_score: float = 0.0
+    reasoning_score: float | None = None
+    adversarial_reasoning_score: float | None = None
     instruction_score: float = 0.0
-    coding_score: float = 0.0
+    coding_score: float | None = None
     safety_score: float = 0.0
     protocol_score: float = 0.0
     # Authenticity sub-scores
-    similarity_to_claimed: float = 0.0
+    similarity_to_claimed: float | None = None
     predetect_confidence: float = 0.0
     consistency_score: float = 0.0
     temperature_effectiveness: float = 0.0
     usage_fingerprint_match: float = 0.0
     behavioral_invariant_score: float = 0.0
     # Performance sub-scores
-    speed_score: float = 0.0
-    stability_score: float = 0.0
+    speed_score: float | None = None
+    stability_score: float | None = None
     cost_efficiency: float = 0.0
     # Confidence level (0-1)
     confidence_level: float = 0.0
@@ -331,23 +331,24 @@ class ScoreCard:
     theta: float | None = None           # Raw IRT theta estimate (logit scale)
     theta_ci95: tuple[float, float] | None = None  # 95% CI for theta
     judge_kappa: float | None = None     # v13: Cohen's κ inter-judge agreement (Phase 2.3)
+    completeness: float | None = None    # v14: fraction of non-None capability dims
 
     def to_dict(self) -> dict:
         return {
-            "total_score": round((self.total_score or 0) * 100),
+            "total_score": round(self.total_score * 100) if self.total_score is not None else None,
             "capability_score": round((self.capability_score or 0) * 100),
             "authenticity_score": round((self.authenticity_score or 0) * 100),
             "performance_score": round((self.performance_score or 0) * 100),
             "breakdown": {
-                "reasoning": round((self.reasoning_score or 0) * 100),
-                "adversarial_reasoning": round((self.adversarial_reasoning_score or 0) * 100),
+                "reasoning": round(self.reasoning_score * 100) if self.reasoning_score is not None else None,
+                "adversarial_reasoning": round(self.adversarial_reasoning_score * 100) if self.adversarial_reasoning_score is not None else None,
                 "instruction": round((self.instruction_score or 0) * 100),
-                "coding": round((self.coding_score or 0) * 100),
+                "coding": round(self.coding_score * 100) if self.coding_score is not None else None,
                 "safety": round((self.safety_score or 0) * 100),
                 "protocol": round((self.protocol_score or 0) * 100),
                 "consistency": round((self.consistency_score or 0) * 100),
-                "speed": round((self.speed_score or 0) * 100),
-                "stability": round((self.stability_score or 0) * 100),
+                "speed": round(self.speed_score * 100) if self.speed_score is not None else None,
+                "stability": round(self.stability_score * 100) if self.stability_score is not None else None,
                 "cost_efficiency": round((self.cost_efficiency or 0) * 100),
                 "behavioral_invariant": round((self.behavioral_invariant_score or 0) * 100),
                 **{k: round((v or 0) * 100) for k, v in getattr(self, "breakdown", {}).items() if k not in ["knowledge_score", "tool_use_score", "extraction_resistance", "fingerprint_match", "ttft_plausibility"]},
@@ -363,6 +364,7 @@ class ScoreCard:
                 "theta": round(self.theta, 4) if self.theta is not None else None,
                 "theta_ci95": list(self.theta_ci95) if self.theta_ci95 else None,
                 "judge_kappa": round(self.judge_kappa, 3) if self.judge_kappa is not None else None,
+                "completeness": self.completeness,
             },
         }
 

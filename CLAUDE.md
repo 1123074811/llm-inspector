@@ -438,7 +438,8 @@ GET    /api/v10/runs/{id}/logs/stream
   - `test_v13_phase3.py` — v13 Phase 3 测试（Layer 15/16+多语言，+34）
   - `test_v13_phase4.py` — v13 Phase 4 测试（进度完整性+事件总线，+16）
   - `test_v13_phase5.py` — v13 Phase 5 测试（KG一致性+参考嵌入，+10）
-- **总计: 268 passed, 4 skipped**（v14 Phase1 后，archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
+  - `test_v14_phase2.py` — v14 Phase 2 测试（评分重构+BT排行榜，+26）
+- **总计: 294 passed, 4 skipped**（v14 Phase2 后；archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
 - 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http
 
 ## Task Queue Architecture

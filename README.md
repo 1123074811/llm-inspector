@@ -140,7 +140,7 @@ GET  /api/v1/leaderboard                 # ELO 排行榜
 | 主题 | 状态 | 说明 |
 |------|------|------|
 | 代码清理 & 数据链 | ✅ Phase 1 完成 | 删除死代码，suite_v13 补齐 source_url，v8 路由标 deprecated |
-| 评分重构 | 🔜 Phase 2 | NNLS 拟合权重，消除假数据 50 分兜底，Bradley-Terry 排行榜 |
+| 评分重构 | ✅ Phase 2 完成 | 消除 19 处 return 50.0 假数据，NNLS 权重落盘，ScoreCard.completeness，Bradley-Terry 排行榜 |
 | 真实模型暴露引擎 | 🔜 Phase 3 | 旗舰功能：model_taxonomy.yaml + 系统提示词抽取 + "疑似实际模型"卡片 |
 | 判题加固 | 🔜 Phase 4 | numeric_tolerance / multi_choice / NLI 本地判题 / DBpedia 幻觉验证 |
 | 预检测扩展 | 🔜 Phase 5 | L17-L20 + 20 层日志全量落盘 |
@@ -153,7 +153,7 @@ GET  /api/v1/leaderboard                 # ELO 排行榜
 ## 开发
 
 ```bash
-# 运行测试（268 passed, 4 skipped）
+# 运行测试（294 passed, 4 skipped）
 pytest backend/tests/ -q
 
 # 验证 SOURCES.yaml 完整性

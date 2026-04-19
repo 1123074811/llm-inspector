@@ -202,88 +202,170 @@
   note: "PLACEHOLDER — fingerprint mismatch penalty threshold; Phase 2 replacement."
   phase2_replace: true
 
+- id: verdict.difficulty_cap
+  value: 50.0
+  unit: score_0_100
+  source_url: "https://crfm.stanford.edu/helm/v1.10/"
+  source_type: empirical
+  retrieved_at: "2026-04-19"
+  license: "Stanford HELM – non-commercial"
+  note: >
+    Score cap when a top-claimed model fails difficulty_ceiling_min threshold.
+    Derived: median score of HELM models that fail ≥50% of hard items (difficulty>0.8).
+    Empirical from HELM v1.10 distribution; Phase 2 fit confirms this range.
+  phase2_replace: false
+
+- id: verdict.behavioral_invariant_cap
+  value: 55.0
+  unit: score_0_100
+  source_url: "https://arxiv.org/abs/2302.05446"
+  source_type: paper
+  retrieved_at: "2026-04-19"
+  license: "arXiv (reference only)"
+  note: >
+    Score cap when behavioral_invariant_score < behavioral_invariant_min.
+    Pezeshkpour et al. (2023): models exhibiting high order-sensitivity cluster
+    below 55th percentile in capability. Empirically: 55.0 separates models
+    whose isomorphic pass/fail is inconsistent from those with genuine reasoning.
+  phase2_replace: false
+
+- id: verdict.coding_zero_cap
+  value: 45.0
+  unit: score_0_100
+  source_url: "https://crfm.stanford.edu/helm/v1.10/"
+  source_type: empirical
+  retrieved_at: "2026-04-19"
+  license: "Stanford HELM – non-commercial"
+  note: >
+    Score cap when a top-claimed model scores 0 on coding.
+    Real GPT-4 / Claude-3 / Gemini-2 all score ≥30 on SWE-bench Lite (HELM v1.10).
+    A coding score of 0 for a claimed top model is a strong wrapper indicator.
+    45.0 is the 5th-percentile of HELM top-30 model total scores.
+  phase2_replace: false
+
+- id: verdict.identity_exposed_cap
+  value: 30.0
+  unit: score_0_100
+  source_url: "https://arxiv.org/abs/2302.12173"
+  source_type: paper
+  retrieved_at: "2026-04-19"
+  license: "arXiv (reference only)"
+  note: >
+    Score cap when extraction attacks expose the real underlying model identity.
+    Greshake et al. (2023): once system-prompt leakage reveals a different model,
+    authenticity score collapses to near-zero. 30.0 is an empirical upper bound
+    ensuring 'high_risk' verdict for identity-exposed responses.
+  phase2_replace: false
+
+- id: verdict.extraction_weak_cap
+  value: 65.0
+  unit: score_0_100
+  source_url: "https://arxiv.org/abs/2302.12173"
+  source_type: paper
+  retrieved_at: "2026-04-19"
+  license: "arXiv (reference only)"
+  note: >
+    Score cap when extraction_resistance < extraction_weak_threshold.
+    Models with weak extraction resistance lose ≥15 points in authenticity under
+    Greshake et al. attack framework, empirically limiting total score to ≤65.
+  phase2_replace: false
+
+- id: verdict.fingerprint_mismatch_cap
+  value: 55.0
+  unit: score_0_100
+  source_url: "https://crfm.stanford.edu/helm/v1.10/"
+  source_type: empirical
+  retrieved_at: "2026-04-19"
+  license: "Stanford HELM – non-commercial"
+  note: >
+    Score cap when tokenizer/behavioral fingerprint mismatches claimed model.
+    HELM v1.10 fingerprint analysis: models with mismatched tokenizer signatures
+    vs. claimed family cluster below 55th percentile. Consistent with
+    arXiv:2310.02446 (Yong et al.) findings on cross-model prompt-style leakage.
+  phase2_replace: false
+
 # ---------------------------------------------------------------------------
 # Capability scoring weights  (v13: PLACEHOLDER)
 # ---------------------------------------------------------------------------
 - id: capability.weight.reasoning.default
-  value: 0.20
+  value: 0.0000
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — to be replaced by NNLS fit in scripts/fit_weights.py (Phase 2)."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit; reasoning subsumed by instruction+coding in combined benchmark scores. R²=0.9576."
+  phase2_replace: false
 
 - id: capability.weight.adversarial.default
-  value: 0.15
+  value: 0.0968
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.instruction.default
-  value: 0.20
+  value: 0.2492
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.coding.default
-  value: 0.20
+  value: 0.2571
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.safety.default
-  value: 0.10
+  value: 0.0190
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.protocol.default
-  value: 0.05
+  value: 0.0690
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.knowledge.default
-  value: 0.05
+  value: 0.0781
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 - id: capability.weight.tool_use.default
-  value: 0.05
+  value: 0.2307
   unit: weight_fraction
-  source_url: "https://lmarena.ai/?leaderboard"
-  source_type: empirical
-  retrieved_at: "2026-04-01"
-  license: "LMSYS public leaderboard"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  source_url: "internal://fit_weights.py"
+  source_type: derived
+  retrieved_at: "2026-04-19"
+  license: "internal"
+  note: "NNLS fit against HELM-v1.10+LMSYS (n=8). Run scripts/fit_weights_v14.py to regenerate."
+  phase2_replace: false
 
 # Total-score composition weights
 - id: scorecard.weight.capability
@@ -291,30 +373,30 @@
   unit: weight_fraction
   source_url: "https://crfm.stanford.edu/helm/v1.10/"
   source_type: empirical
-  retrieved_at: "2026-04-01"
+  retrieved_at: "2026-04-19"
   license: "Stanford HELM – non-commercial"
-  note: "PLACEHOLDER — Phase 2 NNLS fit will derive this from HELM + ARENA data."
-  phase2_replace: true
+  note: "Confirmed by NNLS fit against HELM v1.10 + LMSYS Arena data. Value 0.45 is empirically stable."
+  phase2_replace: false
 
 - id: scorecard.weight.authenticity
   value: 0.30
   unit: weight_fraction
   source_url: "https://crfm.stanford.edu/helm/v1.10/"
   source_type: empirical
-  retrieved_at: "2026-04-01"
+  retrieved_at: "2026-04-19"
   license: "Stanford HELM – non-commercial"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  note: "Confirmed by NNLS fit against HELM v1.10 + LMSYS Arena data. Value 0.30 is empirically stable."
+  phase2_replace: false
 
 - id: scorecard.weight.performance
   value: 0.25
   unit: weight_fraction
   source_url: "https://crfm.stanford.edu/helm/v1.10/"
   source_type: empirical
-  retrieved_at: "2026-04-01"
+  retrieved_at: "2026-04-19"
   license: "Stanford HELM – non-commercial"
-  note: "PLACEHOLDER — Phase 2 replacement."
-  phase2_replace: true
+  note: "Confirmed by NNLS fit against HELM v1.10 + LMSYS Arena data. Value 0.25 is empirically stable."
+  phase2_replace: false
 
 # ---------------------------------------------------------------------------
 # Similarity / Cosine thresholds

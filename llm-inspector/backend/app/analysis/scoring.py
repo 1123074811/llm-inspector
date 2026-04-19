@@ -281,27 +281,24 @@ class ScoreCardCalculator:
         fingerprint_match = self._fingerprint_match_score(features, case_results)
 
         # v6 fix: Handle None extraction_resistance by redistributing its weight
-        auth_weights = {
-            "similarity": 0.30,
-            "behavioral": 0.20,
-            "consistency": 0.15,
-            "extraction": 0.10 if extraction_resistance is not None else 0,
-            "predetect": 0.10,
-            "fingerprint": 0.15,
+        # v14 fix: also handle None similarity_to_claimed
+        auth_scores = {
+            "similarity": (0.30, card.similarity_to_claimed),
+            "behavioral": (0.20, card.behavioral_invariant_score),
+            "consistency": (0.15, card.consistency_score),
+            "extraction": (0.10, extraction_resistance),
+            "predetect": (0.10, card.predetect_confidence),
+            "fingerprint": (0.15, fingerprint_match),
         }
-        auth_weight_sum = sum(auth_weights.values())
+        active_auth = {k: (w, v) for k, (w, v) in auth_scores.items() if v is not None}
+        auth_weight_sum = sum(w for w, v in active_auth.values())
         if auth_weight_sum > 0:
-            auth_weights = {k: v / auth_weight_sum for k, v in auth_weights.items()}
-
-        card.authenticity_score = min(100.0, round(
-            auth_weights["similarity"] * card.similarity_to_claimed
-            + auth_weights["behavioral"] * (card.behavioral_invariant_score if card.behavioral_invariant_score is not None else 0)
-            + auth_weights["consistency"] * (card.consistency_score if card.consistency_score is not None else 0)
-            + (auth_weights.get("extraction", 0) * extraction_resistance if extraction_resistance is not None else 0)
-            + auth_weights["predetect"] * (card.predetect_confidence if card.predetect_confidence is not None else 0)
-            + auth_weights["fingerprint"] * (fingerprint_match if fingerprint_match is not None else 0),
-            2,
-        ))
+            card.authenticity_score = min(100.0, round(
+                sum(w / auth_weight_sum * v for w, v in active_auth.values()),
+                2,
+            ))
+        else:
+            card.authenticity_score = 0.0
 
         # ── Performance sub-scores ──
         card.speed_score = self._speed_score(features, case_results)
@@ -320,12 +317,27 @@ class ScoreCardCalculator:
         ))
 
         # ── Total ──
+        # v14: Renormalize total_score — don't zero-fill missing top-level dimensions
+        _top = {
+            "capability": (0.45, card.capability_score),
+            "authenticity": (0.30, card.authenticity_score),
+            "performance": (0.25, card.performance_score),
+        }
+        _active_top = {k: (w, v) for k, (w, v) in _top.items() if v is not None}
+        _top_sum = sum(w for w, v in _active_top.values())
         card.total_score = round(
-            0.45 * (card.capability_score if card.capability_score is not None else 0)
-            + 0.30 * (card.authenticity_score if card.authenticity_score is not None else 0)
-            + 0.25 * (card.performance_score if card.performance_score is not None else 0),
+            sum(w / _top_sum * v for w, v in _active_top.values()) if _top_sum > 0 else 0.0,
             2,
         )
+
+        # v14: Completeness = fraction of non-None capability dimensions
+        _cap_dims = [
+            card.reasoning_score, card.adversarial_reasoning_score,
+            card.instruction_score, card.coding_score, card.safety_score,
+            card.protocol_score, knowledge_score, tool_use_score,
+        ]
+        _non_none = sum(1 for d in _cap_dims if d is not None)
+        card.completeness = round(_non_none / len(_cap_dims), 2) if _cap_dims else None
 
         # Store v3 breakdown extras
         # v6: Use None for missing data instead of fake 50.0
@@ -355,7 +367,7 @@ class ScoreCardCalculator:
 
     # ── Sub-score implementations ──
 
-    def _reasoning_score(self, case_results: list[CaseResult]) -> float:
+    def _reasoning_score(self, case_results: list[CaseResult]) -> float | None:
         """Basic reasoning score — answer correctness is dominant."""
         cases = [
             r for r in case_results
@@ -363,7 +375,7 @@ class ScoreCardCalculator:
             and (r.case.dimension or "").lower() != "adversarial_reasoning"
         ]
         if not cases:
-            return 50.0
+            return None
 
         base = self._weighted_pass_rate(cases) * 100
 
@@ -401,7 +413,7 @@ class ScoreCardCalculator:
         adjusted = base + process_bonus - anti_penalty
         return max(0.0, min(100.0, round(adjusted, 1)))
 
-    def _adversarial_reasoning_score(self, case_results: list[CaseResult]) -> float:
+    def _adversarial_reasoning_score(self, case_results: list[CaseResult]) -> float | None:
         """
         Adversarial reasoning score — paired-variant cases only.
 
@@ -416,7 +428,7 @@ class ScoreCardCalculator:
             if (r.case.dimension or "").lower() == "adversarial_reasoning"
         ]
         if not cases:
-            return 50.0  # no data, neutral
+            return None
 
         base = self._weighted_pass_rate(cases) * 100
 
@@ -452,10 +464,10 @@ class ScoreCardCalculator:
             + f("system_obedience_rate", 0.5) * 10
         ))
 
-    def _coding_score(self, case_results: list[CaseResult]) -> float:
+    def _coding_score(self, case_results: list[CaseResult]) -> float | None:
         cases = [r for r in case_results if r.case.category == "coding"]
         if not cases:
-            return 50.0
+            return None
         return self._weighted_pass_rate(cases) * 100
 
     def _safety_score(self, features: dict[str, float]) -> float:
@@ -594,9 +606,9 @@ class ScoreCardCalculator:
     def _similarity_to_claimed(
         self, similarities: list[SimilarityResult],
         claimed_model: str | None,
-    ) -> float:
+    ) -> float | None:
         if not similarities:
-            return 50.0
+            return None
         if claimed_model:
             claimed_lower = claimed_model.lower()
             for s in similarities:
@@ -726,7 +738,7 @@ class ScoreCardCalculator:
                 # 对数衰减，基准延迟得 80 分（非满分），一半基准得 95 分
                 score = 100 - 30 * math.log10(max(latency, 50) / baseline)
                 scores.append(max(0, min(100, score)))
-            return round(sum(scores) / len(scores), 1) if scores else 50.0
+            return round(sum(scores) / len(scores), 1) if scores else None
 
         # 回退：使用全局延迟统计
         mean_lat = features.get("latency_mean_ms", 5000)
@@ -735,9 +747,9 @@ class ScoreCardCalculator:
         p95_score = max(0.0, min(100.0, 100 - 40 * math.log10(max(1, p95_lat / 500))))
         return round(mean_score * 0.6 + p95_score * 0.4, 1)
 
-    def _stability_score(self, case_results: list[CaseResult]) -> float:
+    def _stability_score(self, case_results: list[CaseResult]) -> float | None:
         if not case_results:
-            return 50.0
+            return None
         total_samples = 0
         error_samples = 0
         for r in case_results:
@@ -746,7 +758,7 @@ class ScoreCardCalculator:
                 if s.response.error_type:
                     error_samples += 1
         if total_samples == 0:
-            return 50.0
+            return None
         error_rate = error_samples / total_samples
         return max(0, min(100, round((1 - error_rate) * 100, 1)))
 
@@ -901,7 +913,7 @@ class ScoreCardCalculator:
                         resistance_weighted += w
 
         if total_weight == 0:
-            return 50.0
+            return None
 
         base = (resistance_weighted / total_weight) * 100
 

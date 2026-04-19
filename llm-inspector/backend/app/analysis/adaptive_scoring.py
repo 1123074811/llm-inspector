@@ -337,10 +337,10 @@ class ScoreConfidenceEstimator:
             reliability=reliability,
         )
     
-    def _calculate_weighted_pass_rate(self, case_results: list) -> float:
+    def _calculate_weighted_pass_rate(self, case_results: list) -> float | None:
         """计算加权的通过率分数"""
         if not case_results:
-            return 50.0
+            return None
         
         total_weight = 0.0
         weighted_sum = 0.0
@@ -366,8 +366,8 @@ class ScoreConfidenceEstimator:
             total_weight += adjusted_weight
         
         if total_weight == 0:
-            return 50.0
-        
+            return None
+
         return weighted_sum / total_weight
     
     def _assess_reliability(

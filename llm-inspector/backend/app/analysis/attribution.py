@@ -73,7 +73,8 @@ class ScoreAttributionAnalyzer:
         
         for dimension in self.DIMENSIONS:
             # 获取维度分数
-            dim_score = self._get_dimension_score(scorecard, dimension)
+            dim_score_raw = self._get_dimension_score(scorecard, dimension)
+            dim_score = dim_score_raw if dim_score_raw is not None else 50.0
             
             # 获取该维度的用例
             dim_cases = [
@@ -118,7 +119,7 @@ class ScoreAttributionAnalyzer:
             key_findings=key_findings,
         )
     
-    def _get_dimension_score(self, scorecard, dimension: str) -> float:
+    def _get_dimension_score(self, scorecard, dimension: str) -> float | None:
         """从评分卡获取维度分数"""
         # 尝试各种可能的属性名
         attr_names = [
@@ -133,8 +134,8 @@ class ScoreAttributionAnalyzer:
                 if isinstance(val, (int, float)):
                     return float(val)
         
-        # 默认返回50
-        return 50.0
+        # 默认返回None
+        return None
     
     def _get_total_score(self, scorecard) -> float:
         """获取总分"""
@@ -146,7 +147,7 @@ class ScoreAttributionAnalyzer:
         count = 0
         for dim in self.DIMENSIONS:
             score = self._get_dimension_score(scorecard, dim)
-            if score > 0:
+            if score is not None and score > 0:
                 total += score
                 count += 1
         
