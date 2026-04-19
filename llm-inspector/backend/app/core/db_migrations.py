@@ -148,5 +148,24 @@ class Migration002JsonColumnsToColumns(Migration):
                     conn.execute(f"UPDATE test_runs SET {','.join(updates)} WHERE id=?", vals)
 
 
+class Migration003V14DropBenchmarkProfiles(Migration):
+    """v14 Phase 1: drop deprecated benchmark_profiles table if it exists.
+
+    benchmark_profiles was superseded by golden_baselines (real user-marked
+    baselines) in v12. This migration safely removes the stale table from any
+    database that was created before the table was removed from SCHEMA_SQL.
+    Reference: UPGRADE_PLAN_V14.md §B13.
+    """
+
+    version = 3
+    description = "v14-phase1: drop deprecated benchmark_profiles table"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE IF EXISTS benchmark_profiles")
+        conn.commit()
+        logger.info("Dropped benchmark_profiles table (if existed)")
+
+
 register_migration(Migration001InitialSchema())
 register_migration(Migration002JsonColumnsToColumns())
+register_migration(Migration003V14DropBenchmarkProfiles())

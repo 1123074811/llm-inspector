@@ -27,6 +27,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
+# Exclude archived legacy tests (v8/v9/v11 regression suites moved to archive/ in v14 Phase 1)
+norecursedirs = ["backend/tests/archive", "backend/tools", ".git", "__pycache__", ".pytest_cache"]
 
 [tool.ruff]
 target-version = "py312"

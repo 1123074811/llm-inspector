@@ -1,6 +1,8 @@
-# LLM Inspector v13.0
+# LLM Inspector v14.0
 
-> 套壳检测 · 能力评估 · 数据溯源 · 16层对抗探针
+> 套壳检测 · 能力评估 · 数据溯源 · 20层对抗探针 · 真实模型暴露引擎（开发中）
+
+**v14 Phase 1 已完成**（代码清理 + 数据链完整化）。Phase 2–9 按 `docs/UPGRADE_PLAN_V14.md` 持续推进。
 
 LLM Inspector 是一款面向 OpenAI 兼容 API 的**模型真伪鉴别与能力评估工具**。它通过渐进式指纹识别、多维度测试套件和统计学评分系统，帮助用户判断所接入的 LLM API 是否是其声称的模型。
 
@@ -29,7 +31,7 @@ python backend/start.py --port 8000
 | **Standard** | ~44 | 40K | 8 | 完整能力画像 + 可靠真伪判定 |
 | **Deep** | ~87 | 100K | 3 | 精确模型指纹 + 对抗性压力测试 |
 
-## 16 层预检测管道
+## 预检测管道（v13：L0-L16；v14 规划：L17-L20）
 
 | 层 | 名称 | Token | 说明 |
 |----|------|-------|------|
@@ -47,11 +49,15 @@ python backend/start.py --port 8000
 | L11 | Tool Capability | ~50 | 工具能力探测 |
 | L12 | Multi-turn Overflow | ~300 | 上下文溢出 |
 | L13 | Adversarial Analysis | ~100 | 对抗性响应分析 |
-| L14 | Multilingual Attack | ~500 | 13 种低资源语言攻击 |
-| L15 | ASCII Art Attack | ~150 | 视觉注入绕过检测 |
-| L16 | Indirect Injection | ~150 | RAG 式间接注入检测 |
+| L14 | Multilingual Attack | ~500 | 13 种低资源语言攻击（Yong et al. 2023）|
+| L15 | ASCII Art Attack | ~150 | 视觉注入绕过检测（Jiang et al. 2024）|
+| L16 | Indirect Injection | ~150 | RAG 式间接注入检测（Greshake et al. 2023）|
+| L17 | Identity Exposure *(v14)* | ~200 | 声称 vs 实测模型名不一致检测 |
+| L18 | Timing Side-Channel *(v14)* | 0 | TTFT/TPS 分布 vs 参考指纹 |
+| L19 | Token Distribution *(v14)* | 0 | 停止符频率 / 重复率统计 |
+| L20 | System Prompt Harvest *(v14)* | ~300 | 系统提示词抽取与脱敏 |
 
-置信度 >= 0.85 提前停止；贝叶斯融合逐步更新后验概率。
+置信度 ≥ 0.85 提前停止；贝叶斯融合逐步更新后验概率。
 
 ## 评分体系
 
@@ -129,10 +135,25 @@ GET  /api/v10/runs/{id}/logs/stream      # SSE 实时日志
 GET  /api/v1/leaderboard                 # ELO 排行榜
 ```
 
+## v14 新特性（进行中）
+
+| 主题 | 状态 | 说明 |
+|------|------|------|
+| 代码清理 & 数据链 | ✅ Phase 1 完成 | 删除死代码，suite_v13 补齐 source_url，v8 路由标 deprecated |
+| 评分重构 | 🔜 Phase 2 | NNLS 拟合权重，消除假数据 50 分兜底，Bradley-Terry 排行榜 |
+| 真实模型暴露引擎 | 🔜 Phase 3 | 旗舰功能：model_taxonomy.yaml + 系统提示词抽取 + "疑似实际模型"卡片 |
+| 判题加固 | 🔜 Phase 4 | numeric_tolerance / multi_choice / NLI 本地判题 / DBpedia 幻觉验证 |
+| 预检测扩展 | 🔜 Phase 5 | L17-L20 + 20 层日志全量落盘 |
+| Token 效率 | 🔜 Phase 6 | PromptOptimizer 入链，节省 ≥25% Token |
+| 100% 进度保障 | 🔜 Phase 7 | 进度公式修正，分级重试，Watchdog 分页 |
+| 前端 & 报告 | 🔜 Phase 8 | 全局错误边界，排行榜分页，动态雷达图维度 |
+
+详见 [docs/UPGRADE_PLAN_V14.md](docs/UPGRADE_PLAN_V14.md)。
+
 ## 开发
 
 ```bash
-# 运行测试（268 passed）
+# 运行测试（268 passed, 4 skipped）
 pytest backend/tests/ -q
 
 # 验证 SOURCES.yaml 完整性

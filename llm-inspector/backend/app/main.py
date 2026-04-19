@@ -85,6 +85,13 @@ def handle_sse_logs(path: str, qs: dict, body: dict):
     """
     pass
 
+
+def _handle_v14_health(path: str, qs: dict, body: dict):
+    """v14 namespace health check — placeholder, extended in Phase 3+."""
+    return _json({"status": "ok", "api_version": "v14",
+                  "note": "v14 endpoints will be added in Phase 3+"})
+
+
 ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/health$",                  handle_health),
     ("GET",    r"^/api/v1/runs$",                    handle_list_runs),
@@ -150,6 +157,8 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/attacks/multilingual$",       handle_multilingual_attacks),
     # Phase 4: Timeline SVG
     ("GET",    r"^/api/v1/runs/[^/]+/timeline\.svg$",  handle_run_timeline_svg),
+    # -- v14 namespace (Phase 1 placeholder; extended in Phase 3+) ----
+    ("GET",    r"^/api/v14/health$",                   _handle_v14_health),
 ]
 
 
@@ -157,7 +166,8 @@ class InspectorHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         logger.info("HTTP " + fmt % args)
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str,
+              extra_headers: dict | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -169,6 +179,9 @@ class InspectorHandler(BaseHTTPRequestHandler):
                              settings.CORS_ORIGINS[0] if settings.CORS_ORIGINS else "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -226,11 +239,18 @@ class InspectorHandler(BaseHTTPRequestHandler):
                     self._send(*_error("Invalid JSON body"))
                     return
 
+        # v8 routes are deprecated — inject warning header
+        _deprecated = path.startswith("/api/v8/")
+
         for route_method, pattern, handler in ROUTES:
             if route_method == method and re.match(pattern, path):
                 try:
                     result = handler(path, qs, body)
-                    self._send(*result)
+                    extra = {"X-API-Deprecated": "true",
+                             "X-API-Successor": "/api/v1/"} if _deprecated else None
+                    self._send(*result, extra_headers=extra)
+                    if _deprecated:
+                        logger.warning("Deprecated v8 API called", path=path)
                 except Exception as e:
                     logger.error("Handler error", path=path, error=str(e))
                     self._send(*_error(f"Internal error: {e}", 500))

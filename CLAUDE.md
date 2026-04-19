@@ -1,4 +1,4 @@
-# LLM Inspector v13.0 — LLM 套壳检测与能力评估工具
+# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14 Phase 1 完成）
 
 ## Quick Start
 - `cd llm-inspector && python -m backend.app.main` — 启动服务（默认 :8000）
@@ -18,7 +18,7 @@
 ## Architecture
 ```
 HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
-  → Orchestrator: PreDetect(16层) → CaseExecutor → Judge(28+种) → Analysis Pipeline
+  → Orchestrator: PreDetect(16层；v14 Phase5 扩展至20层) → CaseExecutor → Judge(28+种) → Analysis Pipeline
 ```
 
 ### 模块结构
@@ -26,7 +26,7 @@ HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
 backend/app/
 ├── adapters/         # OpenAI 兼容 API 同步/异步适配器
 ├── analysis/         # 分析管线（特征提取、MDIRT评分、相似度、Theta、归因）
-│   ├── pipeline.py   # ⚠️ 141KB 巨文件 — 分析主管线入口
+│   ├── pipeline.py   # 分析主管线入口（已拆分为 shim 层，原 141KB 巨文件已模块化）
 │   ├── irt_engine.py # IRT 参数估计引擎
 │   ├── irt_calibration.py # IRT 校准
 │   ├── theta_scoring.py   # Theta 标准分(均值500, SD100)
@@ -71,8 +71,8 @@ backend/app/
 │   └── builtin_plugins.py   # 内置插件
 ├── knowledge/        # 知识图谱客户端（DBpedia/Wikidata SPARQL，已实现双源交叉验证）
 │   └── dbpedia_client.py    # v13 DBpedia SPARQL 客户端（并发fan-out，冲突标记）
-├── predetect/        # 预检测管道（16层渐进式指纹识别）
-│   ├── pipeline.py   # ⚠️ 75KB — 预检测主管线
+├── predetect/        # 预检测管道（v13：16层；v14 Phase5 规划至20层）
+│   ├── pipeline.py   # 预检测主管线（452行）
 │   ├── bayesian_fusion.py   # 贝叶斯置信度融合
 │   ├── adversarial_analysis.py # 对抗性分析
 │   ├── semantic_fingerprint.py # 语义指纹
@@ -86,7 +86,7 @@ backend/app/
 ├── repository/       # 数据持久层
 │   └── repo.py       # 41KB — 主要数据访问层
 ├── runner/           # 测试运行与编排
-│   ├── orchestrator.py # ⚠️ 79.8KB — 编排器（CAT自适应选题+Token预算控制）
+│   ├── orchestrator.py # 编排器（CAT自适应选题+Token预算控制）
 │   ├── case_executor.py # 用例执行器
 │   ├── compression.py   # 提示词压缩
 │   ├── prompt_optimizer.py # v11 Phase 3 动态 Few-Shot 提示词优化（TF-IDF检索）
@@ -438,7 +438,7 @@ GET    /api/v10/runs/{id}/logs/stream
   - `test_v13_phase3.py` — v13 Phase 3 测试（Layer 15/16+多语言，+34）
   - `test_v13_phase4.py` — v13 Phase 4 测试（进度完整性+事件总线，+16）
   - `test_v13_phase5.py` — v13 Phase 5 测试（KG一致性+参考嵌入，+10）
-- **总计: 268 passed, 4 skipped**
+- **总计: 268 passed, 4 skipped**（v14 Phase1 后，archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
 - 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http
 
 ## Task Queue Architecture
@@ -449,14 +449,14 @@ GET    /api/v10/runs/{id}/logs/stream
 
 ## Gotchas
 - dev 模式下 ENCRYPTION_KEY 自动生成确定性密钥，生产环境必须手动设置
-- 前端文件: index.html + styles.css + app.js + v8_components.js + v8_demo.html + v8_styles.css
+- 前端文件: index.html + styles.css + app.js（v14 Phase1 已将 v8_components.js / v8_styles.css 归档至 frontend/archive/）
 - 数据库 schema 提供迁移函数 `migrate_json_columns_to_columns()` 和 `db_migrations.migrate()`
 - `test_runs` 表的 `evaluation_mode`, `calibration_case_id`, `scoring_profile_version`, `calibration_tag` 已迁移为独立列
 - 相似度比对优先使用 golden_baselines 中用户标记的基准模型；无用户基准时自动 fallback 到参考嵌入（标记 `baseline_source="reference"`）
 - 模式向后兼容：`full`→`deep`、`extraction`→`deep` 自动映射
 - SemanticJudge 需要配置 `JUDGE_API_URL` 才会调用外部 LLM，否则降级为本地规则评判
 - 根目录下的 `analysis_pipeline.py`、`methods.py`、`schemas.py`、`suite.json` 是 v3 时代的历史残留，正式代码在 `backend/app/` 下
-- 三个巨文件需要注意：`analysis/pipeline.py`(141KB)、`runner/orchestrator.py`(79.8KB)、`predetect/pipeline.py`(75KB)
+- v13 曾有三个巨文件，v14 后已模块化：`analysis/pipeline.py` shim 层、`runner/orchestrator.py` 薄协调层、`predetect/pipeline.py`(452行)
 - `suite_v13.json` 所有用例含 `source_ref` + `license`，`calibrated=false` 等待实测数据拟合 IRT 参数
 - 双判定 κ < 0.60 时自动升级 transparent_judge 仲裁（dual_judge.py）
 - Run 进度保障：B-03 已修复，`run_watchdog` 守护线程每 5 分钟扫描超时 running 任务并标记 `partial_failed`

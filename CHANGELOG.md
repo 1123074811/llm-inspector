@@ -2,6 +2,36 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase1] — 2026-04-19
+
+### Added
+- `/api/v14/health` — v14 命名空间健康检查占位端点（Phase 3+ 扩展完整 v14 路由）
+- `core/db_migrations.py Migration003` — 安全删除历史遗留 `benchmark_profiles` 表（`DROP TABLE IF EXISTS`）
+- `suite_v13.json` 补齐数据链：90 道题全部新增 `source_ref.url`（指向 HuggingFace/AoPS 原始数据集）+ `answer_provenance.verified_at`
+- `backend/tools/debug/` — 调试脚本统一目录
+- `backend/tests/archive/` — legacy 回归测试归档目录
+- `pyproject.toml [tool.pytest.ini_options] norecursedirs` — 排除 archive/ 和 tools/ 防止 pytest 误采集
+
+### Changed
+- v8 API 路由响应头新增 `X-API-Deprecated: true` + `X-API-Successor: /api/v1/`，并写 warning 日志
+- `InspectorHandler._send()` 新增 `extra_headers` 可选参数
+- `frontend/index.html` 预检测说明更新为「20 层渐进探针」（含 v14 Phase 3/5 的 L17-L20）
+- `frontend/app.js` — 移除 `toggleAdvancedSettings()` / `previewIsomorphicCases()` / `applyIsomorphicCases()` 废弃函数
+
+### Removed
+- **高级设置面板**（`index.html` 原 L72-89 / v2 时代题库维护工具，已无对应后端功能）
+- `frontend/v8_components.js` / `frontend/v8_styles.css` → 移至 `frontend/archive/`（index.html 不再引用）
+- 根目录 v3 残留：`E:/code/llm-inspector/test_inspector.db` / `v8_phase4_demo.py` / `examples/` / `frontend/v7_visualization.js`
+- `backend/tests/legacy/` → 整体归档至 `backend/tests/archive/`（10 个 v8/v9/v11 回归测试文件）
+- `backend/debug_e2e.py` / `debug_features.py` / `debug_params.py` → 移至 `backend/tools/debug/`
+- `backend/scripts/archive/*.json` → 移至 `docs/archive/`
+
+### Test Coverage
+- **268 passed, 4 skipped**（archive/ 已从 pytest 采集中排除）
+- v14 Phase 1 验收：6/6 项目通过 grep 检查
+
+---
+
 ## [v13.0.0] — 2026-04-18
 
 ### Breaking Changes

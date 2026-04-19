@@ -37,8 +37,7 @@ document.addEventListener('click', (e) => {
   else if (action === 'deleteBaseline') deleteBaseline(baselineId);
   else if (action === 'continueFullTest') continueFullTest(runId);
   else if (action === 'skipTesting') skipTesting(runId);
-  else if (action === 'previewIsomorphic') previewIsomorphicCases();
-  else if (action === 'applyIsomorphic') applyIsomorphicCases();
+
   else if (action === 'copyDiagnostic') {
     const msgEl = document.getElementById('error-msg-' + runId);
     if (msgEl) {
@@ -46,21 +45,6 @@ document.addEventListener('click', (e) => {
     }
   }
 });
-
-// v6: Toggle advanced settings panel
-function toggleAdvancedSettings() {
-  const content = document.getElementById('advanced-settings-content');
-  const icon = document.getElementById('advanced-toggle-icon');
-  if (!content || !icon) return;
-  
-  if (content.style.display === 'none') {
-    content.style.display = 'block';
-    icon.textContent = '▼';
-  } else {
-    content.style.display = 'none';
-    icon.textContent = '▶';
-  }
-}
 
 // v6 fix: Attribute escape helper (prevents XSS in data-* attributes)
 function escAttr(s) {
@@ -571,47 +555,6 @@ function exportReportPdfFromList(evt, runId) {
 function quickExportRadar(evt, runId) {
   if (evt) evt.stopPropagation();
   downloadRadarSvg(runId);
-}
-
-async function previewIsomorphicCases() {
-  const hint = document.getElementById('iso-hint');
-  if (hint) {
-    hint.style.color = 'var(--ink4)';
-    hint.textContent = '预览中...';
-  }
-  const {ok, data} = await api('POST', '/api/v1/tools/generate-isomorphic?apply=false');
-  if (!ok) {
-    if (hint) {
-      hint.style.color = 'var(--red)';
-      hint.textContent = '预览失败: ' + (data.error || 'unknown error');
-    }
-    return;
-  }
-  const ids = (data.to_add_ids || []).slice(0, 5).join(', ');
-  if (hint) {
-    hint.style.color = 'var(--blue)';
-    hint.textContent = `可新增 ${data.preview_count || 0} 题${ids ? `（${ids}${(data.to_add_ids || []).length > 5 ? ' ...' : ''}）` : ''}`;
-  }
-}
-
-async function applyIsomorphicCases() {
-  const hint = document.getElementById('iso-hint');
-  if (hint) {
-    hint.style.color = 'var(--ink4)';
-    hint.textContent = '写入中...';
-  }
-  const {ok, data} = await api('POST', '/api/v1/tools/generate-isomorphic?apply=true');
-  if (!ok) {
-    if (hint) {
-      hint.style.color = 'var(--red)';
-      hint.textContent = '写入失败: ' + (data.error || 'unknown error');
-    }
-    return;
-  }
-  if (hint) {
-    hint.style.color = 'var(--green)';
-    hint.textContent = `已写入 ${data.added_count || 0} 题`;
-  }
 }
 
 function renderTaskProgress(data, responses = []) {

@@ -7,9 +7,7 @@
 
 <link rel="stylesheet" href="styles.css">
 
-<!-- V12 Pipeline Components -->
-<link rel="stylesheet" href="v8_styles.css">
-<script src="v8_components.js" defer></script>
+<!-- v8_components.js / v8_styles.css archived in frontend/archive/ (v14 cleanup) -->
 
 <!-- ECharts 5 for radar chart rendering -->
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" crossorigin="anonymous"></script>
@@ -69,31 +67,12 @@
     </div>
   </div>
 
-  <!-- v6: 高级设置折叠面板 -->
-  <div class="card" style="background:var(--bg2)">
-    <div class="card-label" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="toggleAdvancedSettings()">
-      <span id="advanced-toggle-icon">▶</span>
-      <span>高级设置</span>
-      <span style="font-size:11px;font-weight:normal;color:var(--ink4);margin-left:auto">题库维护、实验性功能</span>
-    </div>
-    <div id="advanced-settings-content" style="display:none;margin-top:12px">
-      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">
-        <strong>题库维护工具</strong> — 基于逻辑同构原理扩展约束推理/文本约束测试项
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <button class="btn" data-action="previewIsomorphic">预览增强测试项</button>
-        <button class="btn" data-action="applyIsomorphic">更新实验室评测集</button>
-        <span id="iso-hint" style="font-size:12px;color:var(--ink4)">谨慎操作：会影响后续所有检测任务的用例集</span>
-      </div>
-    </div>
-  </div>
-
   <div class="card" style="background:var(--bg2);border-style:dashed">
     <div class="card-label">检测流程说明</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px">
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">① 预检测（0-200 token）</div>
-        <div style="font-size:11px;color:var(--ink4)">16 层渐进探针：HTTP头 → 自我报告 → 身份矩阵 → 知识截止 → 行为偏见 → Tokenizer → 主动提取 → 语义指纹 → 高级提取 → 差分测试 → 工具探针 → 多轮溢出 → 对抗分析 → 多语言攻击 → ASCII艺术 → 间接注入。约60%情况在此阶段直接识别。</div>
+        <div style="font-size:11px;color:var(--ink4)">20 层渐进探针：HTTP头 → 自我报告 → 身份矩阵 → 知识截止 → 行为偏见 → Tokenizer → 主动提取 → 语义指纹 → 高级提取 → 差分测试 → 工具探针 → 多轮溢出 → 对抗分析 → 多语言攻击 → ASCII艺术 → 间接注入 → 身份碰撞 → 时序侧信道 → Token分布侧信道 → 系统提示词抽取。约60%情况在此阶段直接识别。</div>
       </div>
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px">② 能力测试</div>
