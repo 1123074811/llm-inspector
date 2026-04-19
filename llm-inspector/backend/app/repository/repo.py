@@ -72,6 +72,27 @@ def update_run_status(run_id: str, status: str, **kwargs) -> None:
     conn.commit()
 
 
+def save_identity_exposure(run_id: str, report_dict: dict) -> None:
+    """v14 Phase 3: persist IdentityExposureReport for a run."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE test_runs SET identity_exposure_result=? WHERE id=?",
+        (json_col(report_dict), run_id),
+    )
+    conn.commit()
+
+
+def get_identity_exposure(run_id: str) -> dict | None:
+    """v14 Phase 3: retrieve IdentityExposureReport for a run."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT identity_exposure_result FROM test_runs WHERE id=?", (run_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return from_json_col(row["identity_exposure_result"])
+
+
 def save_predetect_result(run_id: str, result_dict: dict) -> None:
     confidence = result_dict.get("confidence", 0.0)
     identified = result_dict.get("success", False)

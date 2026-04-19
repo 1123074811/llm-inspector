@@ -1,0 +1,384 @@
+# =============================================================================
+# LLM Inspector v14 — Model Taxonomy
+# =============================================================================
+# Each family entry:
+#   official_names    : names the model uses to identify itself (case-insensitive)
+#   internal_codenames: internal/version names that may appear in responses
+#   refusal_signatures: partial phrases used in refusal responses (distinctive)
+#   style_signatures  : behavioral/format patterns (for future scoring)
+#   source_url        : authoritative documentation URL
+#   source_type       : paper | official_doc | empirical
+#   retrieved_at      : ISO-8601 date
+#   license           : data license
+# =============================================================================
+# Signal weights: official_names=3.0, internal_codenames=2.0,
+#                 refusal_signatures=2.5, style_keywords=1.0
+# =============================================================================
+
+claude:
+  official_names:
+    - "Claude"
+    - "Anthropic"
+  internal_codenames:
+    - "Claude Opus"
+    - "Claude Sonnet"
+    - "Claude Haiku"
+    - "Claude 3"
+    - "Claude 3.5"
+    - "Claude 3.7"
+    - "Claude 4"
+  refusal_signatures:
+    - "I'm Claude, an AI assistant made by Anthropic"
+    - "As Claude, an AI"
+    - "I was created by Anthropic"
+    - "Anthropic trained me"
+    - "I cannot and will not"
+  style_keywords:
+    - "Here's what I can help with"
+    - "I'd be happy to help"
+  source_url: "https://www.anthropic.com/news/claude-3-family"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+gpt:
+  official_names:
+    - "GPT"
+    - "ChatGPT"
+    - "OpenAI"
+  internal_codenames:
+    - "GPT-4"
+    - "GPT-4o"
+    - "GPT-4 Turbo"
+    - "GPT-3.5"
+    - "o1"
+    - "o3"
+    - "gpt-4o-mini"
+  refusal_signatures:
+    - "I'm ChatGPT"
+    - "I'm an AI assistant created by OpenAI"
+    - "As an AI language model developed by OpenAI"
+    - "OpenAI developed me"
+  style_keywords:
+    - "Certainly!"
+    - "Of course!"
+  source_url: "https://platform.openai.com/docs/models"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+gemini:
+  official_names:
+    - "Gemini"
+    - "Bard"
+    - "Google"
+  internal_codenames:
+    - "Gemini Ultra"
+    - "Gemini Pro"
+    - "Gemini Flash"
+    - "Gemini 1.5"
+    - "Gemini 2"
+    - "PaLM"
+    - "Gemma"
+  refusal_signatures:
+    - "I'm Gemini, a large language model made by Google"
+    - "As Gemini, Google's AI"
+    - "I was built by the Google DeepMind team"
+    - "Google created me"
+  style_keywords:
+    - "Great question!"
+    - "I'm here to help"
+  source_url: "https://deepmind.google/technologies/gemini/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+qwen:
+  official_names:
+    - "Qwen"
+    - "通义千问"
+    - "千问"
+    - "Tongyi"
+  internal_codenames:
+    - "Qwen2"
+    - "Qwen2.5"
+    - "Qwen-Max"
+    - "Qwen-Plus"
+    - "Qwen-Long"
+    - "Qwen-VL"
+    - "阿里云"
+    - "Alibaba Cloud"
+  refusal_signatures:
+    - "我是通义千问"
+    - "作为通义千问"
+    - "I am Qwen"
+    - "I'm Qwen, a large language model by Alibaba Cloud"
+    - "I was developed by Alibaba Cloud"
+  style_keywords:
+    - "作为AI助手"
+    - "很高兴为您服务"
+  source_url: "https://qwenlm.github.io/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+deepseek:
+  official_names:
+    - "DeepSeek"
+    - "深度求索"
+  internal_codenames:
+    - "DeepSeek-V3"
+    - "DeepSeek-R1"
+    - "DeepSeek-Coder"
+    - "DeepSeek-Chat"
+    - "DeepSeek-V2"
+  refusal_signatures:
+    - "I am DeepSeek"
+    - "I'm DeepSeek"
+    - "created by DeepSeek"
+    - "我是DeepSeek"
+    - "I was developed by DeepSeek"
+  style_keywords:
+    - "DeepSeek-R1"
+    - "思考过程"
+  source_url: "https://www.deepseek.com/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+glm:
+  official_names:
+    - "GLM"
+    - "ChatGLM"
+    - "智谱"
+    - "Zhipu"
+  internal_codenames:
+    - "GLM-4"
+    - "GLM-3"
+    - "ChatGLM3"
+    - "GLM-4-Plus"
+    - "CogView"
+    - "智谱AI"
+  refusal_signatures:
+    - "我是智谱AI的ChatGLM"
+    - "I am ChatGLM"
+    - "由智谱AI开发"
+    - "GLM模型"
+    - "developed by Zhipu AI"
+  source_url: "https://zhipuai.cn/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+doubao:
+  official_names:
+    - "Doubao"
+    - "豆包"
+    - "ByteDance"
+    - "字节跳动"
+  internal_codenames:
+    - "doubao-pro"
+    - "doubao-lite"
+    - "MiniMax"
+    - "火山引擎"
+    - "Volcengine"
+  refusal_signatures:
+    - "我是豆包"
+    - "我是字节跳动开发的"
+    - "I am Doubao"
+    - "由字节跳动研发"
+  source_url: "https://www.volcengine.com/product/doubao"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+ernie:
+  official_names:
+    - "ERNIE"
+    - "文心"
+    - "Baidu"
+    - "百度"
+  internal_codenames:
+    - "ERNIE Bot"
+    - "文心一言"
+    - "ERNIE 4.0"
+    - "ERNIE Speed"
+    - "ERNIE Tiny"
+    - "千帆"
+  refusal_signatures:
+    - "我是文心一言"
+    - "我是百度开发的AI助手"
+    - "I am ERNIE Bot"
+    - "由百度研发"
+    - "Baidu's ERNIE"
+  source_url: "https://yiyan.baidu.com/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+kimi:
+  official_names:
+    - "Kimi"
+    - "Moonshot"
+    - "月之暗面"
+  internal_codenames:
+    - "kimi-k1.5"
+    - "moonshot-v1"
+    - "Moonshot AI"
+    - "kimi-latest"
+  refusal_signatures:
+    - "我是Kimi"
+    - "I am Kimi"
+    - "由月之暗面开发"
+    - "Moonshot AI创造"
+    - "I was made by Moonshot"
+  source_url: "https://www.moonshot.cn/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+kiro:
+  official_names:
+    - "Kiro"
+    - "Amazon Q"
+    - "Q Developer"
+    - "Amazon"
+  internal_codenames:
+    - "Nova"
+    - "Titan"
+    - "Bedrock"
+    - "Claude on Bedrock"
+    - "Amazon Nova"
+  refusal_signatures:
+    - "I'm Kiro, an AI coding assistant"
+    - "I'm Kiro"
+    - "Amazon Q Developer"
+    - "AWS Bedrock"
+    - "I was created by Amazon"
+  source_url: "https://docs.aws.amazon.com/amazonq/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+minimax:
+  official_names:
+    - "MiniMax"
+    - "ABAB"
+    - "海螺"
+  internal_codenames:
+    - "MiniMax-Text"
+    - "abab6.5"
+    - "abab5.5"
+    - "MiniMax-01"
+    - "Hailuo"
+  refusal_signatures:
+    - "I am MiniMax"
+    - "我是MiniMax"
+    - "由MiniMax训练"
+    - "MiniMax developed me"
+  source_url: "https://www.minimax.chat/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+baichuan:
+  official_names:
+    - "Baichuan"
+    - "百川"
+  internal_codenames:
+    - "Baichuan2"
+    - "Baichuan3"
+    - "Baichuan-53B"
+    - "百川智能"
+  refusal_signatures:
+    - "我是百川大模型"
+    - "由百川智能训练"
+    - "I am Baichuan"
+    - "Baichuan AI"
+  source_url: "https://www.baichuan-ai.com/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+yi:
+  official_names:
+    - "Yi"
+    - "零一万物"
+    - "01.AI"
+  internal_codenames:
+    - "Yi-34B"
+    - "Yi-6B"
+    - "Yi-Lightning"
+    - "Yi-Large"
+  refusal_signatures:
+    - "I'm Yi"
+    - "我是Yi模型"
+    - "零一万物开发"
+    - "01.AI created me"
+  source_url: "https://www.01.ai/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+iflytek:
+  official_names:
+    - "讯飞"
+    - "iFlytek"
+    - "星火"
+    - "Spark"
+  internal_codenames:
+    - "Spark V3"
+    - "SparkDesk"
+    - "星火大模型"
+    - "iFlytek Spark"
+  refusal_signatures:
+    - "我是讯飞星火"
+    - "科大讯飞开发"
+    - "I am iFlytek Spark"
+    - "讯飞AI"
+  source_url: "https://xinghuo.xfyun.cn/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+mistral:
+  official_names:
+    - "Mistral"
+    - "Mixtral"
+  internal_codenames:
+    - "Mistral-7B"
+    - "Mistral-Large"
+    - "Mixtral-8x7B"
+    - "Mistral-Nemo"
+    - "Codestral"
+  refusal_signatures:
+    - "I am Mistral"
+    - "I'm Mistral AI's"
+    - "developed by Mistral AI"
+    - "made by Mistral"
+  source_url: "https://mistral.ai/technology/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"
+
+llama:
+  official_names:
+    - "Llama"
+    - "Meta"
+    - "LLaMA"
+  internal_codenames:
+    - "Llama 3"
+    - "Llama 2"
+    - "Llama 3.1"
+    - "Llama 3.2"
+    - "CodeLlama"
+    - "Meta AI"
+  refusal_signatures:
+    - "I am Meta's Llama"
+    - "I'm a Meta AI assistant"
+    - "built by Meta"
+    - "Meta developed me"
+  source_url: "https://llama.meta.com/"
+  source_type: official_doc
+  retrieved_at: "2026-04-19"
+  license: "public information"

@@ -9,6 +9,20 @@
 
 <!-- v8_components.js / v8_styles.css archived in frontend/archive/ (v14 cleanup) -->
 
+<!-- v14 Phase 3: 疑似实际模型 卡片 (hidden until identity_collision=true or system prompt found) -->
+<template id="identity-exposure-tpl">
+<div id="identity-exposure-card" class="card" style="display:none; border-left: 3px solid #e74c3c; margin-top: 1rem;">
+  <div class="card-header" style="background: #fdf2f2; padding: 0.75rem 1rem; cursor: pointer;" onclick="toggleIdentityCard()">
+    <span style="color: #e74c3c; font-weight: bold;">⚠️ 疑似实际模型</span>
+    <span id="identity-collision-badge" style="margin-left: 0.5rem; font-size: 0.85em;"></span>
+    <span style="float: right; font-size: 0.8em; color: #999;">点击展开 ▼</span>
+  </div>
+  <div id="identity-exposure-body" class="card-body" style="padding: 1rem;">
+    <div id="identity-exposure-content">加载中…</div>
+  </div>
+</div>
+</template>
+
 <!-- ECharts 5 for radar chart rendering -->
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" crossorigin="anonymous"></script>
 

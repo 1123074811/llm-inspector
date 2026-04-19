@@ -185,3 +185,119 @@ def handle_bt_leaderboard(path: str, qs: dict, body: dict):
     except Exception as e:
         logger.error("BT leaderboard error", error=str(e))
         return _error(f"Bradley-Terry leaderboard error: {e}", 500)
+
+
+# ── Phase 3: Identity Exposure Engine ────────────────────────────────────────
+
+def handle_model_taxonomy(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/model-taxonomy
+
+    Returns the full model_taxonomy.yaml content as JSON, plus metadata.
+    """
+    try:
+        from app.predetect.identity_exposure import _load_taxonomy, _TAXONOMY_PATH
+        taxonomy = _load_taxonomy()
+        return _json({
+            "taxonomy": taxonomy,
+            "family_count": len(taxonomy),
+            "source_path": str(_TAXONOMY_PATH),
+            "reference": "LLM Inspector v14 model_taxonomy.yaml — see source_url per family",
+        })
+    except Exception as e:
+        logger.error("Model taxonomy error", error=str(e))
+        return _error(f"Taxonomy error: {e}", 500)
+
+
+def handle_identity_exposure(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/runs/{id}/identity-exposure
+
+    Returns the IdentityExposureReport for a run.
+    If the run hasn't been analysed yet (pre-v14 run), triggers a lazy analysis.
+    """
+    import re
+    m = re.search(r"/runs/([^/]+)/identity-exposure", path)
+    if not m:
+        return _error("Run ID not found in path", 400)
+    run_id = m.group(1)
+
+    try:
+        from app.repository.repo import get_identity_exposure, get_run, save_identity_exposure
+        report = get_identity_exposure(run_id)
+
+        if report is None:
+            # Lazy backfill: load case results and analyse
+            run = get_run(run_id)
+            if not run:
+                return _error("Run not found", 404)
+            if run.get("status") not in ("completed", "partial_failed"):
+                return _json({
+                    "identity_collision": False,
+                    "note": f"Run is {run.get('status')} — analysis available after completion",
+                    "claimed_model": run.get("model_name"),
+                })
+
+            # Load case results from DB for lazy analysis
+            try:
+                from app.repository.repo import list_case_results
+                case_results = list_case_results(run_id)
+            except Exception:
+                case_results = []
+
+            from app.predetect.identity_exposure import analyze_case_results
+            from app.predetect.system_prompt_harvester import harvest
+
+            all_texts = [
+                (s.response.content, cr.case.name)
+                for cr in case_results
+                for s in cr.samples
+                if hasattr(s.response, "content") and s.response.content
+            ] if case_results else []
+
+            harvest_result = harvest(all_texts)
+            extracted_sp = harvest_result.sanitized_text if harvest_result.found else None
+
+            ie = analyze_case_results(
+                case_results=case_results,
+                claimed_model=run.get("model_name"),
+                extracted_system_prompt=extracted_sp,
+            )
+            report = ie.to_dict()
+            save_identity_exposure(run_id, report)
+
+        return _json(report)
+
+    except Exception as e:
+        logger.error("Identity exposure handler error", run_id=run_id, error=str(e))
+        return _error(f"Identity exposure error: {e}", 500)
+
+
+def handle_system_prompt(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/runs/{id}/system-prompt
+
+    Returns extracted system prompt for a run (from IdentityExposureReport).
+    """
+    import re
+    m = re.search(r"/runs/([^/]+)/system-prompt", path)
+    if not m:
+        return _error("Run ID not found in path", 400)
+    run_id = m.group(1)
+
+    try:
+        from app.repository.repo import get_identity_exposure
+        report = get_identity_exposure(run_id)
+        if not report:
+            return _json({"found": False, "sanitized_text": None, "run_id": run_id})
+
+        sp = report.get("extracted_system_prompt")
+        return _json({
+            "found": sp is not None,
+            "sanitized_text": sp,
+            "run_id": run_id,
+            "identity_collision": report.get("identity_collision", False),
+        })
+    except Exception as e:
+        logger.error("System prompt handler error", run_id=run_id, error=str(e))
+        return _error(f"System prompt error: {e}", 500)

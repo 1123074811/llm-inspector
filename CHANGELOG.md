@@ -2,6 +2,33 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase3] — 2026-04-19
+
+### Added
+- `backend/app/_data/model_taxonomy.yaml` — 16 家族模型分类表（claude/gpt/gemini/qwen/deepseek/glm/doubao/ernie/kimi/kiro/minimax/baichuan/yi/iflytek/mistral/llama），每条含 `official_names`/`internal_codenames`/`refusal_signatures`/`style_keywords`/`source_url`/`license`
+- `backend/app/predetect/identity_exposure.py` — 真实模型暴露引擎：`analyze_responses()` 贝叶斯后验推断（softmax over raw signal scores），`Layer17IdentityExposure` 零 Token 预检测层，碰撞阈值 0.80，信号权重 official_names:3.0 / internal_codenames:2.0 / refusal_signatures:2.5 / style_keywords:1.0
+- `backend/app/predetect/system_prompt_harvester.py` — 系统提示词抽取：Tier1（强单模式匹配）+ Tier2（≥2 结构模式匹配）双级检测，`harvest()` 返回 `HarvestResult`，自动脱敏 URL/Base64/API Key/UUID
+- `core/db_migrations.py Migration004V14IdentityExposureColumn` — 安全添加 `identity_exposure_result TEXT` 列（`ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS`）
+- `repository/repo.py` — 新增 `save_identity_exposure(run_id, report_dict)` + `get_identity_exposure(run_id)`
+- `GET /api/v14/model-taxonomy` — 返回完整 model_taxonomy.yaml 内容（JSON）
+- `GET /api/v14/runs/{id}/identity-exposure` — 返回指定 run 的 `IdentityExposureReport`，支持 lazy backfill（对 Phase 3 前的历史 run 自动补分析）
+- `GET /api/v14/runs/{id}/system-prompt` — 返回从 run 中提取的系统提示词（已脱敏）
+- `IdentityExposureReport` dataclass — 新增至 `core/schemas.py`：`claimed_model`/`claimed_family`/`identity_collision`/`collision_confidence`/`top_families`/`extracted_system_prompt`/`total_responses_scanned`
+- `frontend/index.html` — 新增"疑似实际模型"卡片 `<div id="identity-exposure-card">`
+- `frontend/app.js` — 新增 `renderIdentityExposure()` / `toggleIdentityCard()` / `escapeHtml()`，挂载至 `loadReport()`
+- `tests/test_v14_phase3.py` — 24 条验收测试（全部通过）
+
+### Changed
+- `predetect/pipeline.py` — 新增 L17 Identity Exposure 层（Deep 模式，零 Token，复用前层证据）
+- `runner/report_assembly.py` — 测试完成后自动运行身份暴露分析 + 系统提示词抽取，结果持久化至 DB（非致命，失败仅 warning）
+- `handlers/v14_handlers.py` — 新增 `handle_model_taxonomy` / `handle_identity_exposure` / `handle_system_prompt`
+- `main.py` — 注册 3 条新路由，`_handle_v14_health` 更新提及 Phase 3
+
+### Test Coverage
+- **318 passed, 4 skipped**（+24 vs Phase 2 的 294）
+
+---
+
 ## [v14.0.0-phase2] — 2026-04-19
 
 ### Added

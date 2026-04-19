@@ -99,6 +99,33 @@ def _build_and_save_report(
         case_results=case_results,
     )
 
+    # v14 Phase 3: Identity Exposure Engine
+    identity_exposure_report = None
+    try:
+        from app.predetect.identity_exposure import analyze_case_results
+        from app.predetect.system_prompt_harvester import harvest
+
+        # Collect all response texts for system prompt harvesting
+        all_texts = [
+            (s.response.content, cr.case.name)
+            for cr in case_results
+            for s in cr.samples
+            if s.response.content
+        ]
+        harvest_result = harvest(all_texts)
+        extracted_sp = harvest_result.sanitized_text if harvest_result.found else None
+
+        # Run identity exposure analysis
+        ie_report = analyze_case_results(
+            case_results=case_results,
+            claimed_model=run.get("model_name"),
+            extracted_system_prompt=extracted_sp,
+        )
+        identity_exposure_report = ie_report.to_dict()
+        repo.save_identity_exposure(run_id, identity_exposure_report)
+    except Exception as e:
+        logger.warning("Identity exposure analysis failed (non-fatal)", error=str(e))
+
     breakdowns = {
         "total": scorecard.total_score,
         "capability": scorecard.capability_score,

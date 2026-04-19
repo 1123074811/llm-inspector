@@ -287,6 +287,35 @@ class PreDetectionResult:
         }
 
 
+# ── Identity Exposure (v14 Phase 3) ──────────────────────────────────────────
+
+@dataclass
+class IdentityExposureReport:
+    """v14 Phase 3: Result of identity collision analysis.
+
+    Populated by predetect.identity_exposure.analyze_case_results().
+    Stored as JSON in test_runs.identity_exposure_result.
+    """
+    claimed_model: str | None = None
+    claimed_family: str | None = None
+    identity_collision: bool = False
+    collision_confidence: float = 0.0
+    top_families: list[dict] = field(default_factory=list)  # serialised FamilyHit dicts
+    extracted_system_prompt: str | None = None
+    total_responses_scanned: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "claimed_model": self.claimed_model,
+            "claimed_family": self.claimed_family,
+            "identity_collision": self.identity_collision,
+            "collision_confidence": round(self.collision_confidence, 3),
+            "top_families": self.top_families,
+            "extracted_system_prompt": self.extracted_system_prompt,
+            "total_responses_scanned": self.total_responses_scanned,
+        }
+
+
 # ── Report ────────────────────────────────────────────────────────────────────
 
 @dataclass

@@ -166,6 +166,25 @@ class Migration003V14DropBenchmarkProfiles(Migration):
         logger.info("Dropped benchmark_profiles table (if existed)")
 
 
+class Migration004V14IdentityExposureColumn(Migration):
+    """v14 Phase 3: add identity_exposure_result column to test_runs.
+
+    Stores the serialised IdentityExposureReport JSON for each run.
+    Column is nullable TEXT (JSON); absent in runs completed before v14 Phase 3.
+    """
+    version = 4
+    description = "v14-phase3: add identity_exposure_result column"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(test_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "identity_exposure_result" not in columns:
+            conn.execute("ALTER TABLE test_runs ADD COLUMN identity_exposure_result TEXT")
+            conn.commit()
+        logger.info("Added identity_exposure_result column (if not existed)")
+
+
 register_migration(Migration001InitialSchema())
 register_migration(Migration002JsonColumnsToColumns())
 register_migration(Migration003V14DropBenchmarkProfiles())
+register_migration(Migration004V14IdentityExposureColumn())

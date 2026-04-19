@@ -1034,6 +1034,11 @@ async function loadReport(runId) {
       renderRadarChart('radar-chart-container', { run_id: runId, scorecard: sc }, 'percent');
     }
   }
+  // v14 Phase 3: fetch and render identity exposure
+  fetch('/api/v14/runs/' + runId + '/identity-exposure')
+    .then(r => r.json())
+    .then(ieData => renderIdentityExposure(ieData))
+    .catch(() => {});
 }
 
 function renderNarrative(narrative) {
@@ -2089,6 +2094,91 @@ function renderDimensionScore(label, value) {
     </div>`;
   }
   return `<div style="font-size:12px;color:var(--ink3)">${escHtml(label)}: ${fmtScore(value)}</div>`;
+}
+
+// v14 Phase 3: Identity Exposure Card
+function toggleIdentityCard() {
+  const body = document.getElementById('identity-exposure-body');
+  if (body) {
+    body.style.display = body.style.display === 'none' ? '' : 'none';
+  }
+}
+
+function renderIdentityExposure(data) {
+  // Insert card from template if not already in DOM
+  if (!document.getElementById('identity-exposure-card')) {
+    const tpl = document.getElementById('identity-exposure-tpl');
+    if (tpl) {
+      const clone = tpl.content.cloneNode(true);
+      const reportSection = document.getElementById('report-section');
+      if (reportSection) reportSection.appendChild(clone);
+    }
+  }
+
+  const card = document.getElementById('identity-exposure-card');
+  const content = document.getElementById('identity-exposure-content');
+  const badge = document.getElementById('identity-collision-badge');
+  if (!card || !content) return;
+
+  if (!data || (!data.identity_collision && !data.extracted_system_prompt)) {
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = '';
+
+  // Badge
+  if (badge) {
+    badge.textContent = data.identity_collision
+      ? '置信度 ' + (data.collision_confidence * 100).toFixed(0) + '%'
+      : '系统提示词已抽取';
+    badge.style.color = data.identity_collision ? '#e74c3c' : '#f39c12';
+  }
+
+  // Collapse body by default if not collision
+  const body = document.getElementById('identity-exposure-body');
+  if (body && !data.identity_collision) {
+    body.style.display = 'none';
+  }
+
+  let html = '';
+
+  if (data.identity_collision && data.top_families && data.top_families.length > 0) {
+    html += '<p><strong>声称模型:</strong> ' + escapeHtml(data.claimed_model || '未知') + '</p>';
+    html += '<table style="width:100%; border-collapse: collapse; margin: 0.5rem 0;">';
+    html += '<tr style="background:#f8f8f8;"><th style="padding:4px 8px; text-align:left;">排名</th><th style="text-align:left; padding:4px 8px;">疑似模型家族</th><th style="text-align:left; padding:4px 8px;">置信度</th><th style="text-align:left; padding:4px 8px;">命中信号</th></tr>';
+    data.top_families.forEach(function(f, i) {
+      if (f.raw_score > 0) {
+        const pct = (f.posterior * 100).toFixed(1);
+        const ev = f.evidence ? f.evidence.slice(0, 2).map(function(e) { return '<em>' + escapeHtml(e.matched_text) + '</em>'; }).join(', ') : '';
+        html += '<tr style="border-top:1px solid #eee;"><td style="padding:4px 8px;">' + (i+1) + '</td><td style="padding:4px 8px; font-weight:bold;">' + escapeHtml(f.family) + '</td><td style="padding:4px 8px;">' + pct + '%</td><td style="padding:4px 8px; font-size:0.85em; color:#666;">' + ev + '</td></tr>';
+      }
+    });
+    html += '</table>';
+
+    // Show evidence snippets for top family
+    const top = data.top_families[0];
+    if (top && top.evidence && top.evidence.length > 0) {
+      html += '<details style="margin-top:0.5rem;"><summary style="cursor:pointer; color:#666;">查看响应证据</summary><ul style="margin:0.5rem 0; padding-left:1.5rem;">';
+      top.evidence.slice(0, 3).forEach(function(e) {
+        html += '<li style="margin:0.25rem 0; font-size:0.85em;"><code>' + escapeHtml(e.matched_text) + '</code> — <span style="color:#666;">' + escapeHtml(e.snippet || '') + '</span> <small style="color:#999;">[' + escapeHtml(e.case_id || '') + ']</small></li>';
+      });
+      html += '</ul></details>';
+    }
+  }
+
+  if (data.extracted_system_prompt) {
+    html += '<hr style="margin:0.75rem 0; border:none; border-top:1px solid #eee;">';
+    html += '<p><strong>抽取到的系统提示词</strong> <button onclick="navigator.clipboard.writeText(document.getElementById(\'sp-text\').textContent)" style="font-size:0.75em; padding:2px 6px; margin-left:8px;">复制</button></p>';
+    html += '<pre id="sp-text" style="background:#f8f8f8; padding:0.75rem; border-radius:4px; font-size:0.8em; max-height:200px; overflow-y:auto; white-space:pre-wrap;">' + escapeHtml(data.extracted_system_prompt) + '</pre>';
+  }
+
+  content.innerHTML = html || '<p style="color:#666; font-style:italic;">无法提取足够证据</p>';
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function fmtTime(iso) {

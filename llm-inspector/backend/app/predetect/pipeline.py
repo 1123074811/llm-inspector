@@ -48,6 +48,9 @@ from app.predetect.multilingual_attack import Layer14MultilingualAttack  # Layer
 from app.predetect.ascii_art_attack import Layer15ASCIIArt            # Layer 15 slot
 from app.predetect.indirect_injection import Layer16IndirectInject     # Layer 16 slot
 
+# v14 Phase 3: Identity Exposure
+from app.predetect.identity_exposure import Layer17IdentityExposure   # Layer 17 slot
+
 logger = get_logger(__name__)
 
 
@@ -355,6 +358,18 @@ class PreDetectionPipeline:
                 self._log_layer_result("Layer16/IndirectInject", r16)
                 if r16.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r16, layer_results, total_tokens)
+
+                # v14 Phase 3: Layer 17 — Identity Exposure (zero API tokens)
+                _report_progress("Layer17/IdentityExposure")
+                logger.info("PreDetect Layer17: Identity exposure analysis", model=model_name)
+                r17 = Layer17IdentityExposure().run(
+                    adapter, model_name, layer_results_so_far=layer_results
+                )
+                layer_results.append(r17)
+                total_tokens += r17.tokens_used
+                self._log_layer_result("Layer17/IdentityExposure", r17)
+                if r17.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, r17, layer_results, total_tokens)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

@@ -71,7 +71,12 @@ from app.handlers.v11_handlers import (
 )
 
 from app.handlers.helpers import _json, _error, _extract_id, _load_report_or_error
-from app.handlers.v14_handlers import handle_bt_leaderboard
+from app.handlers.v14_handlers import (
+    handle_bt_leaderboard,
+    handle_model_taxonomy,
+    handle_identity_exposure,
+    handle_system_prompt,
+)
 
 logger = get_logger(__name__)
 
@@ -88,9 +93,10 @@ def handle_sse_logs(path: str, qs: dict, body: dict):
 
 
 def _handle_v14_health(path: str, qs: dict, body: dict):
-    """v14 namespace health check — placeholder, extended in Phase 3+."""
+    """v14 namespace health check — Phase 2 complete, Phase 3 active."""
     return _json({"status": "ok", "api_version": "v14",
-                  "note": "v14 endpoints will be added in Phase 3+"})
+                  "phases_complete": ["phase1", "phase2", "phase3"],
+                  "note": "v14 Phase 3: Identity Exposure Engine active"})
 
 
 ROUTES: list[tuple[str, str, callable]] = [
@@ -158,9 +164,12 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/attacks/multilingual$",       handle_multilingual_attacks),
     # Phase 4: Timeline SVG
     ("GET",    r"^/api/v1/runs/[^/]+/timeline\.svg$",  handle_run_timeline_svg),
-    # -- v14 namespace (Phase 1 placeholder; extended in Phase 3+) ----
-    ("GET",    r"^/api/v14/health$",                   _handle_v14_health),
-    ("GET",    r"^/api/v14/bt-leaderboard$",            handle_bt_leaderboard),
+    # -- v14 namespace ----
+    ("GET",    r"^/api/v14/health$",                            _handle_v14_health),
+    ("GET",    r"^/api/v14/bt-leaderboard$",                    handle_bt_leaderboard),
+    ("GET",    r"^/api/v14/model-taxonomy$",                    handle_model_taxonomy),
+    ("GET",    r"^/api/v14/runs/[^/]+/identity-exposure$",      handle_identity_exposure),
+    ("GET",    r"^/api/v14/runs/[^/]+/system-prompt$",          handle_system_prompt),
 ]
 
 
