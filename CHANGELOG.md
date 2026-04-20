@@ -2,6 +2,29 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase4] — 2026-04-20
+
+### Added
+- `backend/app/judge/numeric_tolerance.py` — 数值容差判题器：支持科学记数法、百分比、单位剥离；相对误差 ≤ 5%（NIST SP 330-2019）；绝对值 < 1e-9 时切换为绝对误差 ≤ 1e-6
+- `backend/app/judge/multi_choice_verified.py` — 严格选择题判题器：7 种提取模式（单字母/英文声明/中文/CMMLU 格式）；双答案歧义检测；引用 Hendrycks et al. 2021 MMLU "strict letter match" 协议
+- `backend/app/judge/semantic_entailment.py` — 本地 NLI 语义蕴含判题器：3 级降级链（sentence-transformers cross-encoder/nli-deberta-v3-base → word-overlap Jaccard → semantic_v2 规则）；引用 Reimers & Gurevych 2019
+- `judge/transparent_judge.py` `JudgeChainRunner` — 4 级判题降级链（外部 LLM → 本地 NLI → semantic_v2 规则 → hallucination_v2 规则），含完整 `judge_chain` 日志
+- `judge/transparent_judge.py` `run_judge_chain()` — 模块级便捷函数
+- `judge/consensus.py` `fleiss_kappa()` — Fleiss's κ（Fleiss 1971，Psychological Bulletin 76:378）支持 ≥3 判题器同意度评估
+- `GET /api/v14/runs/{id}/judge-chain` — 返回指定 run 中所有用例的判题路径日志
+- `handlers/v14_handlers.py` `handle_judge_chain` — 对应 handler
+- `tests/test_v14_phase4.py` — 28 条验收测试（全部通过）
+
+### Changed
+- `judge/hallucination_v2.py` `_check_against_knowledge_graph()` — **B3 修复**：从占位符改为真实 DBpediaClient 调用（entity 提取 → DBpedia 验证 → 冲突标记 `conflict=true`），支持离线回退；`_calibrate_hallucination_verdict` 新增 `fake_entity_confirmed` / `conflict` 信号权重
+- `judge/methods.py` — 注册 3 个新判题方法：`numeric_tolerance` / `multi_choice_verified` / `semantic_entailment`
+- `main.py` — 注册 `GET /api/v14/runs/{id}/judge-chain` 路由
+
+### Test Coverage
+- **346 passed, 4 skipped**（+28 vs Phase 3 的 318）
+
+---
+
 ## [v14.0.0-phase3] — 2026-04-19
 
 ### Added

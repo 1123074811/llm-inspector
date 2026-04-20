@@ -2,7 +2,7 @@
 
 > 套壳检测 · 能力评估 · 数据溯源 · 20层对抗探针 · 真实模型暴露引擎（开发中）
 
-**v14 Phase 3 已完成**（真实模型暴露引擎）。Phase 4–9 按 `docs/UPGRADE_PLAN_V14.md` 持续推进。
+**v14 Phase 4 已完成**（判题体系加固）。Phase 5–9 按 `docs/UPGRADE_PLAN_V14.md` 持续推进。
 
 LLM Inspector 是一款面向 OpenAI 兼容 API 的**模型真伪鉴别与能力评估工具**。它通过渐进式指纹识别、多维度测试套件和统计学评分系统，帮助用户判断所接入的 LLM API 是否是其声称的模型。
 
@@ -146,7 +146,7 @@ GET  /api/v14/runs/{id}/system-prompt    # 提取的系统提示词（Phase 3）
 | 代码清理 & 数据链 | ✅ Phase 1 完成 | 删除死代码，suite_v13 补齐 source_url，v8 路由标 deprecated |
 | 评分重构 | ✅ Phase 2 完成 | 消除 19 处 return 50.0 假数据，NNLS 权重落盘，ScoreCard.completeness，Bradley-Terry 排行榜 |
 | 真实模型暴露引擎 | ✅ Phase 3 完成 | 16 家族 model_taxonomy.yaml + 系统提示词抽取 + Layer17 + "疑似实际模型"卡片 |
-| 判题加固 | 🔜 Phase 4 | numeric_tolerance / multi_choice / NLI 本地判题 / DBpedia 幻觉验证 |
+| 判题加固 | ✅ Phase 4 完成 | numeric_tolerance / multi_choice / NLI 本地判题 / DBpedia 幻觉验证 / Fleiss κ / 4 级降级链 |
 | 预检测扩展 | 🔜 Phase 5 | L17-L20 + 20 层日志全量落盘 |
 | Token 效率 | 🔜 Phase 6 | PromptOptimizer 入链，节省 ≥25% Token |
 | 100% 进度保障 | 🔜 Phase 7 | 进度公式修正，分级重试，Watchdog 分页 |
@@ -157,7 +157,7 @@ GET  /api/v14/runs/{id}/system-prompt    # 提取的系统提示词（Phase 3）
 ## 开发
 
 ```bash
-# 运行测试（318 passed, 4 skipped）
+# 运行测试（346 passed, 4 skipped）
 pytest backend/tests/ -q
 
 # 验证 SOURCES.yaml 完整性

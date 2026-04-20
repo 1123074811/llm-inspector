@@ -12,6 +12,10 @@ import re
 # v5.0: 导入新的判题方法
 from app.judge.semantic_v2 import semantic_judge_v2
 from app.judge.hallucination_v2 import hallucination_detect_v2
+# v14 Phase 4: new judge methods
+from app.judge.numeric_tolerance import numeric_tolerance_judge
+from app.judge.multi_choice_verified import multi_choice_judge
+from app.judge.semantic_entailment import semantic_entailment_judge
 
 
 def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | None, dict]:
@@ -158,6 +162,15 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
         passed, detail = _multi_step_verify(text, params)
     elif method == "context_overflow_detect":
         passed, detail = _context_overflow_detect(text, params)
+    elif method == "numeric_tolerance":
+        # v14 Phase 4: Numeric tolerance judge (NIST SP 330-2019)
+        passed, detail = numeric_tolerance_judge(text, params)
+    elif method == "multi_choice_verified":
+        # v14 Phase 4: Strict MCQ verification (MMLU protocol; Hendrycks et al. 2021)
+        passed, detail = multi_choice_judge(text, params)
+    elif method == "semantic_entailment":
+        # v14 Phase 4: NLI-based semantic entailment (Reimers & Gurevych 2019)
+        passed, detail = semantic_entailment_judge(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 

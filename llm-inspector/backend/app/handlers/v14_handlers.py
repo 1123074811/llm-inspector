@@ -301,3 +301,74 @@ def handle_system_prompt(path: str, qs: dict, body: dict):
     except Exception as e:
         logger.error("System prompt handler error", run_id=run_id, error=str(e))
         return _error(f"System prompt error: {e}", 500)
+
+
+# ── Phase 4: Judge Chain endpoint ─────────────────────────────────────────────
+
+def handle_judge_chain(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/runs/{id}/judge-chain
+
+    Returns judge chain traces for all cases in a run.
+    Each case shows: case_id, method, chain_log, final_level, passed.
+
+    Reads judge_consensus or judge_chain data stored in case result detail JSON.
+    """
+    import re as _re
+    m = _re.search(r"/runs/([^/]+)/judge-chain", path)
+    if not m:
+        return _error("Run ID not found in path", 400)
+    run_id = m.group(1)
+
+    try:
+        from app.repository.repo import list_case_results, get_run
+        run = get_run(run_id)
+        if not run:
+            return _error("Run not found", 404)
+
+        case_results = list_case_results(run_id)
+        chain_entries = []
+
+        for cr in case_results:
+            # Each CaseResult may have samples with judge detail
+            for sample in cr.samples:
+                judge_res = sample.judge_result
+                if not judge_res:
+                    continue
+                detail = judge_res.detail if hasattr(judge_res, "detail") else {}
+                detail = detail or {}
+
+                # Look for judge_chain or judge_consensus key
+                chain_log = detail.get("judge_chain")
+                final_level = detail.get("final_level")
+                judge_consensus = detail.get("judge_consensus")
+
+                entry = {
+                    "case_id": cr.case.name if hasattr(cr, "case") else "unknown",
+                    "method": cr.case.judge_method if hasattr(cr, "case") else "unknown",
+                    "passed": judge_res.passed if hasattr(judge_res, "passed") else None,
+                }
+
+                if chain_log is not None:
+                    entry["judge_chain"] = chain_log
+                    entry["final_level"] = final_level
+                elif judge_consensus is not None:
+                    # Wrap consensus data in chain format for compatibility
+                    entry["judge_chain"] = [{"level": "consensus", "data": judge_consensus}]
+                    entry["final_level"] = "consensus"
+                else:
+                    entry["judge_chain"] = []
+                    entry["final_level"] = "direct"
+
+                chain_entries.append(entry)
+
+        return _json({
+            "run_id": run_id,
+            "total_cases": len(chain_entries),
+            "cases": chain_entries,
+            "note": "judge_chain populated when JudgeChainRunner is used (v14 Phase 4)",
+        })
+
+    except Exception as e:
+        logger.error("Judge chain handler error", run_id=run_id, error=str(e))
+        return _error(f"Judge chain error: {e}", 500)

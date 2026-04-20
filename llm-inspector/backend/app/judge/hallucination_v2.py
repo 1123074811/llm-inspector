@@ -267,26 +267,98 @@ class HallucinationDetectorV2:
             calibration=calibration,
         )
     
+    # Simple regex to extract real-entity-like tokens: capitalized words or quoted phrases
+    _ENTITY_RE = re.compile(
+        r'"([^"]{2,60})"|\'([^\']{2,60})\'|(?<!\w)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})(?!\w)'
+    )
+
     def _check_against_knowledge_graph(
         self,
         text: str,
         fake_entities: list[str],
     ) -> dict | None:
         """
-        [NOT IMPLEMENTED] 知识图谱事实核查（预留接口）
+        Knowledge graph fact check via DBpedia (v14 Phase 4 — B3 fix).
 
-        v6 fix: 此方法始终返回 enabled=False，因为 verified_count 始终为 0
-        下游检查 `fact_check.get("verified_count", 0) > 0` 永远为 False，这是误导性的死代码
+        Uses DBpediaClient (dbpedia_client.py) with SQLite cache (TTL 30 days).
+        Dual-source: DBpedia + Wikidata conflict detection.
 
-        如需实现，需要连接到外部知识图谱API (Wikidata、百度百科等)
+        Steps:
+        1. Extract real entity-like tokens from *text* via simple regex (no spacy).
+        2. Check whether any *fake_entities* appear in *text*.
+        3. Verify real entities via DBpediaClient.verify_entity().
+        4. Return summary dict.
         """
-        # v6: 明确标记为未实现，返回 enabled=False
-        return {
-            "enabled": False,
-            "checked_entities": fake_entities,
-            "verified_count": 0,
-            "note": "Knowledge graph check not implemented - requires external KG service",
-        }
+        try:
+            from app.knowledge.dbpedia_client import DBpediaClient
+        except ImportError:
+            return {"enabled": False, "note": "DBpedia client not available"}
+
+        try:
+            client = DBpediaClient()
+
+            # -- Detect fake-entity mentions in text ----------------------------
+            text_lower = text.lower()
+            fake_entity_confirmed = any(
+                fe.lower() in text_lower for fe in fake_entities if fe
+            )
+
+            # -- Extract candidate real entities from text ----------------------
+            candidate_entities: list[str] = []
+            for m in self._ENTITY_RE.finditer(text):
+                token = m.group(1) or m.group(2) or m.group(3)
+                if token and token not in fake_entities:
+                    candidate_entities.append(token)
+
+            # Deduplicate and cap at 5 to avoid excessive SPARQL calls
+            seen: set[str] = set()
+            unique_entities: list[str] = []
+            for e in candidate_entities:
+                if e not in seen:
+                    seen.add(e)
+                    unique_entities.append(e)
+                if len(unique_entities) >= 5:
+                    break
+
+            # -- Verify real entities via DBpedia --------------------------------
+            entity_results: list[dict] = []
+            verified_count = 0
+            conflict = False
+
+            for entity in unique_entities:
+                try:
+                    result = client.verify_entity(entity)
+                    r_dict = {
+                        "entity": entity,
+                        "is_verified": result.is_verified,
+                        "confidence": result.confidence,
+                        "source": result.source,
+                    }
+                    if result.is_verified:
+                        verified_count += 1
+                    # Conflict heuristic: confidence < 0.4 from a live source
+                    if result.is_verified and result.confidence < 0.4:
+                        conflict = True
+                    entity_results.append(r_dict)
+                except Exception as exc:
+                    entity_results.append({"entity": entity, "error": str(exc)})
+
+            return {
+                "enabled": True,
+                "verified_count": verified_count,
+                "conflict": conflict,
+                "fake_entity_confirmed": fake_entity_confirmed,
+                "entity_results": entity_results,
+                "source": "dbpedia+wikidata",
+            }
+
+        except Exception as exc:
+            logger.warning("_check_against_knowledge_graph failed", error=str(exc))
+            return {
+                "enabled": False,
+                "error": str(exc),
+                "note": "KG check failed — network or service error",
+            }
     
     def _calibrate_hallucination_verdict(
         self,
@@ -327,11 +399,22 @@ class HallucinationDetectorV2:
             # 差的不确定性管理增加幻觉评分
             hallucination_score += 0.2
         
-        # 5. 知识图谱事实核查（如果启用）
-        if fact_check and fact_check.get("verified_count", 0) > 0:
-            # 知识图谱确认了某些信息，降低幻觉可能
-            hallucination_score -= 0.1
-        
+        # 5. 知识图谱事实核查（v14 Phase 4 — B3 fix）
+        if fact_check and fact_check.get("enabled"):
+            # Fake entity was confirmed present in response → penalise
+            if fact_check.get("fake_entity_confirmed"):
+                hallucination_score += 0.4
+            # Conflicting KG sources → slight penalty (uncertainty)
+            if fact_check.get("conflict"):
+                hallucination_score += 0.1
+            # KG verified real entities → reward good grounding
+            if fact_check.get("verified_count", 0) > 0:
+                hallucination_score -= 0.1
+        elif fact_check and not fact_check.get("enabled"):
+            # Legacy path: old check returned verified_count > 0
+            if fact_check.get("verified_count", 0) > 0:
+                hallucination_score -= 0.1
+
         # 最终判决：幻觉评分超过阈值
         return hallucination_score >= 0.5
 

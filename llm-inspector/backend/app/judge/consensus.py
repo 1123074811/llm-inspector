@@ -104,3 +104,74 @@ def arbitrate_with_semantic(
     merged_detail["judge_consensus"] = arbitration
 
     return final_passed, merged_detail
+
+
+def fleiss_kappa(ratings: list[list[int]], n_categories: int = 2) -> float:
+    """
+    Compute Fleiss's kappa for ≥3 raters applied to N items.
+
+    Reference:
+        Fleiss, J.L. (1971). "Measuring nominal scale agreement among many raters."
+        Psychological Bulletin, 76(5), 378-382.
+        DOI: https://doi.org/10.1037/h0031619
+
+    Args:
+        ratings:      List of N items; each element is a list of R binary ratings
+                      (0 or 1) from each rater for that item.
+        n_categories: Number of rating categories (default 2: pass/fail).
+
+    Returns:
+        kappa: float in [-1, 1].
+               1  = perfect agreement
+               0  = chance-level agreement
+              <0  = worse than chance
+
+    Note:
+        Requires at least 2 items and 2 raters. Returns 0.0 for degenerate inputs.
+    """
+    if not ratings or len(ratings) < 2:
+        return 0.0
+
+    n_items = len(ratings)
+    n_raters = len(ratings[0])
+
+    if n_raters < 2:
+        return 0.0
+
+    # Build n_ij matrix: [item i][category j] = count of raters assigning category j to item i
+    n_ij: list[list[float]] = []
+    for item_ratings in ratings:
+        counts = [0.0] * n_categories
+        for r in item_ratings:
+            idx = int(r)
+            if 0 <= idx < n_categories:
+                counts[idx] += 1
+        n_ij.append(counts)
+
+    # P_bar_j: proportion of all assignments to category j
+    p_j: list[float] = [0.0] * n_categories
+    for j in range(n_categories):
+        p_j[j] = sum(n_ij[i][j] for i in range(n_items)) / (n_items * n_raters)
+
+    # P_i: extent of agreement for item i
+    p_i_list: list[float] = []
+    for i in range(n_items):
+        if n_raters <= 1:
+            p_i_list.append(0.0)
+            continue
+        s = sum(n_ij[i][j] * (n_ij[i][j] - 1) for j in range(n_categories))
+        p_i = s / (n_raters * (n_raters - 1))
+        p_i_list.append(p_i)
+
+    # P_bar: mean observed agreement
+    p_bar = sum(p_i_list) / n_items if n_items > 0 else 0.0
+
+    # P_e_bar: expected agreement by chance
+    p_e_bar = sum(p_j[j] ** 2 for j in range(n_categories))
+
+    if abs(1.0 - p_e_bar) < 1e-12:
+        # All raters agree with chance — kappa undefined, return 1.0 if p_bar == 1
+        return 1.0 if abs(p_bar - 1.0) < 1e-12 else 0.0
+
+    kappa = (p_bar - p_e_bar) / (1.0 - p_e_bar)
+    return float(kappa)

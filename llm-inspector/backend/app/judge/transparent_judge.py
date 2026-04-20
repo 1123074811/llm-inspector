@@ -398,6 +398,116 @@ class JudgmentLogger:
         return record
 
 
+class JudgeChainRunner:
+    """
+    Multi-level judge downgrade chain (v14 Phase 4).
+
+    Chain: External LLM → Local NLI → semantic_v2 rules → hallucination_v2 rules
+
+    Each level is attempted in order; if a level raises an exception or returns
+    None (no signal), the next level is tried.  All attempts are logged to
+    judge_chain so callers can audit which level produced the final verdict.
+
+    Reference:
+        Inspired by the "cascade evaluation" approach in:
+        Zheng et al. (2023) "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena"
+        arXiv: https://arxiv.org/abs/2306.05685
+    """
+
+    def run(self, response: str, params: dict) -> tuple[bool | None, dict]:
+        """
+        Execute the downgrade chain and return the first definitive verdict.
+
+        Returns:
+            (passed, detail_dict) where detail_dict includes the full chain log.
+        """
+        chain_log: List[Dict[str, Any]] = []
+        final_passed: bool | None = None
+        final_level: str = "none"
+
+        # -- Level 1: External LLM judge (semantic_v2 with JUDGE_API_URL) -----
+        try:
+            from app.judge.semantic_v2 import semantic_judge_v2
+            from app.core.config import settings as _settings
+
+            has_external = bool(getattr(_settings, "JUDGE_API_URL", None))
+            lvl1_params = dict(params)
+            if has_external:
+                passed1, detail1 = semantic_judge_v2(response, lvl1_params)
+            else:
+                passed1, detail1 = None, {"skipped": True, "reason": "JUDGE_API_URL not configured"}
+
+            chain_log.append({"level": 1, "name": "external_llm", "passed": passed1, "detail": detail1})
+
+            if passed1 is not None:
+                final_passed = passed1
+                final_level = "external_llm"
+        except Exception as e:
+            chain_log.append({"level": 1, "name": "external_llm", "error": str(e)})
+
+        if final_level != "none":
+            return final_passed, {"judge_chain": chain_log, "final_level": final_level, "passed": final_passed}
+
+        # -- Level 2: Local NLI (semantic_entailment_judge) --------------------
+        try:
+            from app.judge.semantic_entailment import semantic_entailment_judge
+            passed2, detail2 = semantic_entailment_judge(response, params)
+            chain_log.append({"level": 2, "name": "local_nli", "passed": passed2, "detail": detail2})
+
+            if passed2 is not None and detail2.get("backend") not in ("error",):
+                final_passed = passed2
+                final_level = "local_nli"
+        except Exception as e:
+            chain_log.append({"level": 2, "name": "local_nli", "error": str(e)})
+
+        if final_level != "none":
+            return final_passed, {"judge_chain": chain_log, "final_level": final_level, "passed": final_passed}
+
+        # -- Level 3: semantic_v2 rule mode (local, no external API) ----------
+        try:
+            from app.judge.semantic_v2 import semantic_judge_v2
+            rule_params = dict(params)
+            # Disable external LLM for this level
+            rule_params["disable_llm_judge"] = True
+            passed3, detail3 = semantic_judge_v2(response, rule_params)
+            chain_log.append({"level": 3, "name": "semantic_v2_rules", "passed": passed3, "detail": detail3})
+
+            if passed3 is not None:
+                final_passed = passed3
+                final_level = "semantic_v2_rules"
+        except Exception as e:
+            chain_log.append({"level": 3, "name": "semantic_v2_rules", "error": str(e)})
+
+        if final_level != "none":
+            return final_passed, {"judge_chain": chain_log, "final_level": final_level, "passed": final_passed}
+
+        # -- Level 4: hallucination_v2 rules (last resort) --------------------
+        try:
+            from app.judge.hallucination_v2 import hallucination_detect_v2
+            passed4, detail4 = hallucination_detect_v2(response, params)
+            chain_log.append({"level": 4, "name": "hallucination_v2_rules", "passed": passed4, "detail": detail4})
+            final_passed = passed4
+            final_level = "hallucination_v2_rules"
+        except Exception as e:
+            chain_log.append({"level": 4, "name": "hallucination_v2_rules", "error": str(e)})
+
+        return final_passed, {"judge_chain": chain_log, "final_level": final_level, "passed": final_passed}
+
+
+def run_judge_chain(response: str, params: dict) -> tuple[bool | None, dict]:
+    """
+    Module-level convenience wrapper for JudgeChainRunner.
+
+    Args:
+        response: Model response text.
+        params:   Judge params dict (same as other judge functions).
+
+    Returns:
+        (passed, detail_dict)
+    """
+    return JudgeChainRunner().run(response, params)
+
+
 def create_transparent_judge(method_name: str) -> Optional[TransparentJudgeWrapper]:
     """
     Factory function to create a transparent wrapper for a judge method.
