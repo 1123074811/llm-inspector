@@ -706,7 +706,7 @@ class PromptOptimizer:
             scored.append((ex, bonus))
 
         scored.sort(key=lambda x: x[1], reverse=True)
-        return [ex for ex, _ in scored[:k]]
+        return scored[:k]  # return list[tuple[ShotExample, float]] as documented
 
     def _retrieve_by_category(
         self,

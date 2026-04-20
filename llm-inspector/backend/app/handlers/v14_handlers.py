@@ -336,6 +336,89 @@ def handle_predetect_trace(path: str, qs: dict, body: dict):
         return _error(f"Predetect trace error: {e}", 500)
 
 
+# ── Phase 6: Token Analysis endpoint ─────────────────────────────────────────
+
+def handle_token_analysis(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/runs/{id}/token-analysis
+
+    Returns token usage analysis for a run including:
+    - total tokens used (estimated)
+    - optimizer savings (if any)
+    - counting method
+    - budget vs actual breakdown
+    """
+    import re
+    m = re.search(r"/runs/([^/]+)/token-analysis", path)
+    if not m:
+        return _error("Run ID not found in path", 400)
+    run_id = m.group(1)
+
+    try:
+        import app.repository.repo as repo_module
+
+        run = repo_module.get_run(run_id)
+        if not run:
+            # Return empty analysis for missing runs (non-fatal)
+            return _json({
+                "run_id": run_id,
+                "token_analysis": {
+                    "prompt_optimizer_used": False,
+                    "tokens_saved_estimate": None,
+                    "counting_method": "fallback-estimate",
+                },
+                "note": "Run not found",
+            })
+
+        # Load scorecard if available
+        token_analysis: dict = {
+            "prompt_optimizer_used": False,
+            "tokens_saved_estimate": None,
+            "counting_method": "fallback-estimate",
+        }
+
+        report_row = None
+        try:
+            report_row = repo_module.get_report(run_id)
+        except Exception:
+            pass
+
+        if report_row:
+            details = report_row.get("details", {}) if isinstance(report_row, dict) else {}
+            scorecard_data = details.get("scorecard") if isinstance(details, dict) else None
+            if isinstance(scorecard_data, dict):
+                ta = scorecard_data.get("token_analysis")
+                if isinstance(ta, dict):
+                    token_analysis = ta
+
+        # Token budget from run metadata
+        test_mode = run.get("test_mode", "standard") if isinstance(run, dict) else "standard"
+        budget_map = {
+            "quick": 15000,
+            "standard": 40000,
+            "deep": 100000,
+        }
+        token_budget = budget_map.get(str(test_mode).lower(), 40000)
+
+        # Total tokens used — from run metadata if available
+        total_tokens_used = None
+        if isinstance(run, dict):
+            total_tokens_used = run.get("total_tokens_used")
+
+        return _json({
+            "run_id": run_id,
+            "test_mode": test_mode,
+            "token_budget": token_budget,
+            "total_tokens_used": total_tokens_used,
+            "token_analysis": token_analysis,
+            "note": "token_analysis populated from scorecard when run completes (v14 Phase 6)",
+        })
+
+    except Exception as e:
+        logger.error("Token analysis handler error", run_id=run_id, error=str(e))
+        return _error(f"Token analysis error: {e}", 500)
+
+
 # ── Phase 4: Judge Chain endpoint ─────────────────────────────────────────────
 
 def handle_judge_chain(path: str, qs: dict, body: dict):

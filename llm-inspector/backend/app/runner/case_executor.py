@@ -69,8 +69,23 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
     if "also_run_at" in case.params:
         return _execute_param_comparison(adapter, model_name, case)
 
+    # Adaptive sampling based on IRT information (v14 Phase 6)
+    n_samples = case.n_samples
+    try:
+        from app.runner.adaptive_sampling import get_adaptive_n_samples
+        case_dict = {
+            "irt_a": getattr(case, "irt_a", None),
+            "irt_b": getattr(case, "irt_b", None),
+            "irt_c": getattr(case, "irt_c", None),
+        }
+        adaptive_n = get_adaptive_n_samples(case_dict, current_theta=None)
+        if n_samples > adaptive_n:
+            n_samples = adaptive_n
+    except Exception:
+        pass  # Non-fatal fallback to original n_samples
+
     consecutive_truncations = 0
-    for i in range(case.n_samples):
+    for i in range(n_samples):
         # Early-stop: if 2+ consecutive responses were truncated, skip remaining
         # samples — they will almost certainly truncate too, wasting tokens.
         if consecutive_truncations >= 2:
@@ -88,7 +103,20 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             messages.append(Message("system", sys_content))
         elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
             messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
-        messages.append(Message("user", case.user_prompt))
+        # Wire in PromptOptimizer (v14 Phase 6 — B5 fix)
+        raw_prompt = case.user_prompt
+        try:
+            from app.runner.prompt_optimizer import prompt_optimizer
+            compiled = prompt_optimizer.compile_prompt(
+                test_prompt=raw_prompt,
+                judge_method=case.judge_method or "",
+                max_examples=2,
+            )
+            if compiled and compiled.prompt and compiled.prompt != raw_prompt:
+                raw_prompt = compiled.prompt
+        except Exception:
+            pass  # Non-fatal: optimizer failure falls back to original prompt
+        messages.append(Message("user", raw_prompt))
 
         # Build extra_params from case params if needed
         extra: dict = {}

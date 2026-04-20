@@ -2,6 +2,27 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase6] — 2026-04-20
+
+### Added
+- `backend/app/runner/adaptive_sampling.py` — IRT 2PL 信息量驱动动态采样数：`item_information(θ,a,b,c)`（Fisher 信息公式）；`adaptive_n_samples()` 阈值规则（I>1.0→n=1 / I>0.5→n=2 / I≤0.5→n=3）；`get_adaptive_n_samples(case, theta)` 便捷封装；引用 van der Linden & Glas 2010 + Weiss & Kingsbury 1984
+- `backend/app/runner/token_counter.py` — Token 精确计数：优先 tiktoken（o200k/cl100k 自动检测），fallback `len(text)//4`；`count_tokens(text, model)` 返回 `(count, method)` 元组；`count_messages_tokens(messages)` 含 3-token/message 格式开销；引用 OpenAI Cookbook
+- `ScoreCard` 新增字段：`prompt_optimizer_used: bool`、`tokens_saved_estimate: int | None`、`token_counting_method: str`
+- `ScoreCard.to_dict()` 新增 `"token_analysis"` 子块（optimizer_used / savings / counting_method）
+- `GET /api/v14/runs/{id}/token-analysis` — 返回 run 的 Token 使用分析（预算 vs 实际 + 优化器节省）
+- `handlers/v14_handlers.py` `handle_token_analysis` — 对应 handler
+- `tests/test_v14_phase6.py` — 37 条验收测试（全部通过）
+
+### Changed / Fixed
+- `runner/case_executor.py` — **B5 修复**：PromptOptimizer.compile_prompt() 入链（non-fatal try/except），动态 TF-IDF Few-Shot 示例注入；自适应采样入链（non-fatal），高信息量用例自动减少 n_samples
+- `runner/prompt_optimizer.py` — 修复 `_retrieve_tfidf_with_scores()` 返回值 bug（原本 strip 了 score tuple，导致 `_retrieve_hybrid()` TypeError）
+- `main.py` — 注册 `GET /api/v14/runs/[^/]+/token-analysis` 路由
+
+### Test Coverage
+- **423 passed, 4 skipped**（+37 vs Phase 5 的 386）
+
+---
+
 ## [v14.0.0-phase5] — 2026-04-20
 
 ### Added

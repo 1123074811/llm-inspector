@@ -361,6 +361,10 @@ class ScoreCard:
     theta_ci95: tuple[float, float] | None = None  # 95% CI for theta
     judge_kappa: float | None = None     # v13: Cohen's κ inter-judge agreement (Phase 2.3)
     completeness: float | None = None    # v14: fraction of non-None capability dims
+    # v14 Phase 6: Token efficiency tracking
+    prompt_optimizer_used: bool = False
+    tokens_saved_estimate: int | None = None
+    token_counting_method: str = "fallback-estimate"
 
     def to_dict(self) -> dict:
         return {
@@ -394,6 +398,11 @@ class ScoreCard:
                 "theta_ci95": list(self.theta_ci95) if self.theta_ci95 else None,
                 "judge_kappa": round(self.judge_kappa, 3) if self.judge_kappa is not None else None,
                 "completeness": self.completeness,
+            },
+            "token_analysis": {
+                "prompt_optimizer_used": getattr(self, "prompt_optimizer_used", False),
+                "tokens_saved_estimate": getattr(self, "tokens_saved_estimate", None),
+                "counting_method": getattr(self, "token_counting_method", "fallback-estimate"),
             },
         }
 

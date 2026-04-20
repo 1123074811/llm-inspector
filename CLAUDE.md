@@ -1,4 +1,4 @@
-# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14 Phase 5 完成）
+# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14 Phase 6 完成）
 
 ## Quick Start
 - `cd llm-inspector && python -m backend.app.main` — 启动服务（默认 :8000）
