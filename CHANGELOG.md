@@ -2,6 +2,41 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase9] — 2026-04-20
+
+### Added
+- `docs/MIGRATION_v13_to_v14.md` — v13→v14 迁移指南（API 变更 / ScoreCard null 化 / 前端 N/A 适配 / 判题方法变化 / DB 迁移说明）
+
+### Changed
+- `CLAUDE.md` / `README.md` / `CHANGELOG.md` — 同步所有 Phase 1–8 结构变更
+- 全量回归：`pytest backend/tests/ -q` → **471 passed, 4 skipped** ✅
+
+---
+
+## [v14.0.0-phase8] — 2026-04-20
+
+### Added
+- `frontend/app.js` `safeFetch(url, options)` — 全局错误边界：404/500/网络断开统一触发 Toast 提示，消除白屏
+- `frontend/app.js` `showToast(message, type)` — 类型化 Toast（info/error/warn），3.5s 自动消除
+- `frontend/app.js` `fmtScore(v, digits)` — null/undefined → `'N/A'`，消除假 0 / 假 50 展示
+- `frontend/app.js` `renderV14Cards(report, runId)` — Token 分析卡片 + 数据完整性进度条 + PreDetect 20 层状态点
+- `frontend/app.js` `renderBarChartFallback(dims)` — 雷达图维度 < 5 时降级为条形图展示
+- `frontend/styles.css` — Toast 动画样式（`.toast`/`.toast-info`/`.toast-error`/`.toast-warn`/`@keyframes fadeInUp`）+ `.v14-progress-bar`
+- `frontend/index.html` — 新增 `<div id="toast-container">`
+- `backend/tests/test_v14_phase8.py` — 16 条验收测试（ScoreCard v14 字段 / null 发射 / 排行榜分页 / 健康端点）
+
+### Changed
+- `frontend/app.js` — 排行榜分页（20 条/页，Prev/Next + 客户端模型名搜索）
+- `frontend/app.js` — 雷达图渲染前过滤 null 维度，< 5 维触发条形图降级
+- `frontend/app.js` — `loadReport()` / `loadLeaderboard()` 改用 `safeFetch()`
+- `handlers/models.py` — `/api/v1/leaderboard` 支持 `offset` 分页参数
+- 模式描述"预计消耗"→"最大预算"
+
+### Test Coverage
+- **471 passed, 4 skipped**（+16 vs Phase 7 的 455）
+
+---
+
 ## [v14.0.0-phase7] — 2026-04-20
 
 ### Added

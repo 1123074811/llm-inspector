@@ -1,4 +1,4 @@
-# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14 Phase 7 完成）
+# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14.0.0 全部 9 阶段完成）
 
 ## Quick Start
 - `cd llm-inspector && python -m backend.app.main` — 启动服务（默认 :8000）
@@ -96,6 +96,9 @@ backend/app/
 │   ├── adaptive_sampling.py # v14 IRT 信息量驱动动态 n_samples（Phase 6）
 │   ├── token_counter.py    # v14 tiktoken 精确计数 + fallback（Phase 6）
 │   └── retry_policy.py     # v14 分级重试策略（网络超时/429，指数退避，Phase 7）
+└── docs/
+    ├── UPGRADE_PLAN_V14.md # v14 权威升级方案（9阶段）
+    └── MIGRATION_v13_to_v14.md # v13→v14 迁移指南（Phase 9）
 │   ├── case_executor.py # 用例执行器
 │   ├── compression.py   # 提示词压缩
 │   ├── prompt_optimizer.py # v11 Phase 3 动态 Few-Shot 提示词优化（TF-IDF检索）
@@ -458,7 +461,8 @@ GET    /api/v10/runs/{id}/logs/stream
   - `test_v14_phase5.py` — v14 Phase 5 测试（L18/L19+JSONL sink+predetect-trace API，+40）
   - `test_v14_phase6.py` — v14 Phase 6 测试（Token效率+自适应采样+tiktoken，+37）
   - `test_v14_phase7.py` — v14 Phase 7 测试（进度修正+分级重试+Watchdog分页，+32）
-- **总计: 455 passed, 4 skipped**（v14 Phase7 后；archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
+  - `test_v14_phase8.py` — v14 Phase 8 测试（前端API验证+ScoreCard v14字段+排行榜分页，+16）
+- **总计: 471 passed, 4 skipped**（v14.0.0 全量；archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
 - 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http
 
 ## Task Queue Architecture

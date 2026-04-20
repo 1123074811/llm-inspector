@@ -46,4 +46,9 @@ def handle_theta_leaderboard(_path, qs, _body) -> tuple:
 def handle_elo_leaderboard(_path, qs, _body) -> tuple:
     from app.repository import repo
     limit = int(qs.get("limit", ["100"])[0])
-    return _json(repo.list_elo(limit=min(limit, 500)))
+    offset = int(qs.get("offset", ["0"])[0])
+    rows = repo.list_elo(limit=min(limit, 500))
+    # Apply offset for pagination
+    if offset > 0:
+        rows = rows[offset:]
+    return _json(rows)

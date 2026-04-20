@@ -1,6 +1,27 @@
 
 const API = '';  // Same origin
 let _pollTimer = null;
+
+// v14 Phase 8: safeFetch global error boundary
+async function safeFetch(url, options = {}) {
+    try {
+        const resp = await fetch(url, options);
+        if (!resp.ok) {
+            const msg = resp.status === 404 ? '资源未找到' :
+                        resp.status === 500 ? '服务器内部错误' : `请求失败 (${resp.status})`;
+            showToast(msg, 'error');
+            return null;
+        }
+        return resp;
+    } catch (e) {
+        showToast('网络连接失败，请检查服务是否运行', 'error');
+        return null;
+    }
+}
+
+// v14 Phase 8: leaderboard pagination state
+let _lbOffset = 0;
+const _LB_PAGE_SIZE = 20;
 let _currentRunId = null;
 let _lastProgressSnapshot = { completed: 0, total: 0, phase: 'queued', lastLayer: null, lastProbe: null, lastEvidenceCount: 0 };
 let _consoleLines = [];
@@ -113,51 +134,91 @@ function showPage(name) {
   if (_pollTimer && name !== 'task') { clearInterval(_pollTimer); _pollTimer = null; }
 }
 
-async function loadLeaderboard() {
+async function loadLeaderboard(offset = 0) {
+  _lbOffset = offset;
   const c = document.getElementById('leaderboard-content');
   c.innerHTML = '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
-  const {ok, data} = await api('GET', '/api/v1/elo-leaderboard');
-  if (!ok) { c.innerHTML = '<div class="fail">加载失败</div>'; return; }
+  const resp = await safeFetch(API + `/api/v1/elo-leaderboard?limit=${_LB_PAGE_SIZE}&offset=${offset}`);
+  if (!resp) { c.innerHTML = '<div class="fail">加载失败</div>'; return; }
+  const data = await resp.json().catch(() => []);
 
-  if (!data || data.length === 0) {
-    c.innerHTML = '<div style="color:var(--ink4);padding:40px;text-align:center">暂无排行榜数据，请先完成基准测试对比</div>';
-    return;
+  // Search input
+  const searchId = 'lb-search-input';
+  let searchVal = '';
+  const existingSearch = document.getElementById(searchId);
+  if (existingSearch) searchVal = existingSearch.value;
+
+  function renderTable(rows) {
+    if (!rows || rows.length === 0) {
+      return '<div style="color:var(--ink4);padding:40px;text-align:center">暂无排行榜数据，请先完成基准测试对比</div>';
+    }
+    let html = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>排名</th>
+            <th>模型名称</th>
+            <th>ELO 积分 (对战总局数)</th>
+            <th>胜 / 平 / 负</th>
+            <th>最高分</th>
+            <th>最后测试时间</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    rows.forEach((r, idx) => {
+      const globalIdx = offset + idx;
+      const medals = ['🥇', '🥈', '🥉'];
+      const rankLabel = globalIdx < 3 ? medals[globalIdx] : `#${globalIdx+1}`;
+      const dt = new Date(r.updated_at).toLocaleString();
+      html += `
+        <tr>
+          <td style="font-weight:bold;font-size:16px">${rankLabel}</td>
+          <td style="font-weight:600">${escHtml(r.display_name)} <br><span style="font-size:11px;font-weight:normal;color:var(--ink4)">${escHtml(r.model_name)}</span></td>
+          <td><b>${r.elo_rating.toFixed(0)}</b> <span style="color:var(--ink4);font-weight:normal;font-size:12px">(${r.games_played} 局)</span></td>
+          <td style="color:var(--ink3);font-size:13px"><span style="color:var(--green)">${r.wins}</span> / <span style="color:var(--amber)">${r.draws}</span> / <span style="color:var(--red)">${r.losses}</span></td>
+          <td style="color:var(--ink3)">${r.peak_elo.toFixed(0)}</td>
+          <td style="color:var(--ink4);font-size:12px">${dt}</td>
+        </tr>
+      `;
+    });
+    html += '</tbody></table>';
+    return html;
   }
 
-  let html = `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>排名</th>
-          <th>模型名称</th>
-          <th>ELO 积分 (对战总局数)</th>
-          <th>胜 / 平 / 负</th>
-          <th>最高分</th>
-          <th>最后测试时间</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
+  const filtered = searchVal
+    ? (data || []).filter(r => (r.display_name || r.model_name || '').toLowerCase().includes(searchVal.toLowerCase()))
+    : (data || []);
 
-  data.forEach((r, idx) => {
-    const eloClass = idx < 3 ? 'rank-top' : '';
-    const medals = ['🥇', '🥈', '🥉'];
-    const rankLabel = idx < 3 ? medals[idx] : `#${idx+1}`;
-    const dt = new Date(r.updated_at).toLocaleString();
-    html += `
-      <tr>
-        <td style="font-weight:bold;font-size:16px">${rankLabel}</td>
-        <td style="font-weight:600">${r.display_name} <br><span style="font-size:11px;font-weight:normal;color:var(--ink4)">${r.model_name}</span></td>
-        <td class="${eloClass}"><b>${r.elo_rating.toFixed(0)}</b> <span style="color:var(--ink4);font-weight:normal;font-size:12px">(${r.games_played} 局)</span></td>
-        <td style="color:var(--ink3);font-size:13px"><span style="color:var(--green)">${r.wins}</span> / <span style="color:var(--amber)">${r.draws}</span> / <span style="color:var(--red)">${r.losses}</span></td>
-        <td style="color:var(--ink3)">${r.peak_elo.toFixed(0)}</td>
-        <td style="color:var(--ink4);font-size:12px">${dt}</td>
-      </tr>
-    `;
-  });
+  const hasNext = (data || []).length >= _LB_PAGE_SIZE;
+  const hasPrev = offset > 0;
 
-  html += '</tbody></table>';
-  c.innerHTML = html;
+  let out = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <input id="${searchId}" type="text" placeholder="搜索模型名称…" value="${escAttr(searchVal)}"
+             style="flex:1;padding:7px 10px;border:1px solid var(--rule2);border-radius:var(--radius);font-size:13px"
+             oninput="document.getElementById('lb-table-body').innerHTML=renderLbTable(this.value)">
+      <span style="font-size:12px;color:var(--ink4)">第 ${offset+1}–${offset+(data||[]).length} 条</span>
+      <button class="btn" style="padding:6px 12px;font-size:12px" onclick="loadLeaderboard(${offset - _LB_PAGE_SIZE})" ${!hasPrev ? 'disabled' : ''}>← 上页</button>
+      <button class="btn" style="padding:6px 12px;font-size:12px" onclick="loadLeaderboard(${offset + _LB_PAGE_SIZE})" ${!hasNext ? 'disabled' : ''}>下页 →</button>
+    </div>
+    <div id="lb-table-body">${renderTable(filtered)}</div>`;
+
+  c.innerHTML = out;
+
+  // attach live search after render
+  const si = document.getElementById(searchId);
+  if (si) {
+    // store data on container for client-side filter
+    c.dataset.rows = JSON.stringify(data || []);
+    c.dataset.offset = String(offset);
+    si.oninput = function() {
+      const rows = JSON.parse(c.dataset.rows || '[]');
+      const q = this.value.toLowerCase();
+      const f = q ? rows.filter(r => (r.display_name || r.model_name || '').toLowerCase().includes(q)) : rows;
+      document.getElementById('lb-table-body').innerHTML = renderTable(f);
+    };
+  }
 }
 
 
@@ -440,10 +501,29 @@ const RADAR_DIMS = [
 function _scGet(sc, path) {
   let v = sc;
   for (const k of path) { v = (v != null) ? v[k] : undefined; }
-  return (v != null && !isNaN(v)) ? Number(v) : 0;
+  return (v != null && !isNaN(v)) ? Number(v) : null;
 }
 
 let _radarCurrentData = null;
+
+// v14 Phase 8: bar chart fallback when < 5 active dims
+function renderBarChartFallback(dims, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const rows = dims.map(d => {
+    const pct = Math.min(100, Math.max(0, d.value || 0));
+    const color = pct >= 80 ? '#16a34a' : pct >= 60 ? '#2563eb' : pct >= 40 ? '#d97706' : '#dc2626';
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:3px">
+        <span>${escHtml(d.label)}</span><span style="color:${color};font-weight:600">${pct.toFixed(1)}</span>
+      </div>
+      <div style="height:8px;background:var(--bg2);border-radius:4px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;transition:width .4s"></div>
+      </div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div style="padding:16px">${rows || '<p style="color:var(--ink4)">暂无雷达图数据</p>'}</div>`;
+}
 
 function renderRadarChart(containerId, data, mode) {
   _radarCurrentData = data;
@@ -461,35 +541,45 @@ function renderRadarChart(containerId, data, mode) {
   const existing = echarts.getInstanceByDom(container);
   if (existing) existing.dispose();
 
-  const chart = echarts.init(container);
   const scorecard = data.scorecard || {};
 
   // API stores scores in 0-10000 scale:
   //   ScoreCard internally uses 0-100, to_dict() multiplies by 100 → 0-10000
   //   (SVG radar confirms: rings at 2000/4000/6000/8000/10000, max 10000)
   // Normalise to 0-100 for human-readable display.
-  const raw10k = RADAR_DIMS.map(d => _scGet(scorecard, d.path));   // 0-10000
-  const raw100 = raw10k.map(v => v / 100);                          // 0-100
+  // v14 Phase 8: filter out null/undefined dimensions
+  const allDims = RADAR_DIMS.map(d => {
+    const raw = _scGet(scorecard, d.path);
+    return { ...d, value: raw !== null ? raw / 100 : null };
+  });
+  const activeDims = allDims.filter(d => d.value !== null && d.value !== undefined);
+
+  if (activeDims.length < 5) {
+    renderBarChartFallback(activeDims.map(d => ({ label: d.label, value: d.value })), containerId);
+    return;
+  }
+
+  const chart = echarts.init(container);
 
   let values, maxVal;
   if (mode === 'stanine') {
     // 0-100 pct → Stanine 1-9
     maxVal = 9;
-    values = raw100.map(v => Math.max(1, Math.min(9, Math.round(v / 100 * 8 + 1))));
+    values = activeDims.map(d => Math.max(1, Math.min(9, Math.round(d.value / 100 * 8 + 1))));
   } else if (mode === 'theta') {
     // 0-100 pct → θ ∈ [-3, 3]
     maxVal = 3;
-    values = raw100.map(v => {
-      const t = (v / 100 - 0.5) * 4;
+    values = activeDims.map(d => {
+      const t = (d.value / 100 - 0.5) * 4;
       return Math.max(-3, Math.min(3, Math.round(t * 10) / 10));
     });
   } else {
     // percent: 0-100
     maxVal = 100;
-    values = raw100.map(v => Math.round(v * 10) / 10);   // 1 decimal place
+    values = activeDims.map(d => Math.round(d.value * 10) / 10);   // 1 decimal place
   }
 
-  const indicators = RADAR_DIMS.map(d => ({
+  const indicators = activeDims.map(d => ({
     name: d.label,
     max: maxVal,
     min: mode === 'theta' ? -3 : 0,
@@ -501,7 +591,7 @@ function renderRadarChart(containerId, data, mode) {
       formatter: params => {
         const vals = params.value || [];
         const unit = mode === 'stanine' ? '' : mode === 'theta' ? '' : '%';
-        return RADAR_DIMS.map((d, i) => {
+        return activeDims.map((d, i) => {
           const v = vals[i] ?? 0;
           return `${d.label}: <b>${v}${unit}</b>`;
         }).join('<br/>');
@@ -1022,8 +1112,10 @@ function renderPredetectCard(pre, runId, status) {
 }
 
 async function loadReport(runId) {
-  const {ok, data} = await api('GET', '/api/v1/runs/' + runId + '/report');
-  if (!ok) return;
+  const resp = await safeFetch(API + '/api/v1/runs/' + runId + '/report');
+  if (!resp) return;
+  const data = await resp.json().catch(() => null);
+  if (!data) return;
   const el = document.getElementById('report-section');
   if (el) {
     el.innerHTML = renderReport(data);
@@ -1033,6 +1125,8 @@ async function loadReport(runId) {
       const sc = data.scorecard || {};
       renderRadarChart('radar-chart-container', { run_id: runId, scorecard: sc }, 'percent');
     }
+    // v14 Phase 8: render new v14 cards
+    renderV14Cards(data, runId);
   }
   // v14 Phase 3: fetch and render identity exposure
   fetch('/api/v14/runs/' + runId + '/identity-exposure')
@@ -2037,34 +2131,15 @@ async function deleteBaseline(baselineId) {
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
-// Show toast notification
-function showToast(message, duration = 2000) {
-  let toast = document.getElementById('toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'toast';
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #333;
-      color: white;
-      padding: 10px 20px;
-      border-radius: 4px;
-      font-size: 14px;
-      z-index: 10000;
-      opacity: 0;
-      transition: opacity 0.3s;
-      pointer-events: none;
-    `;
-    document.body.appendChild(toast);
-  }
+// Show toast notification (v14: supports type='info'|'error'|'warn')
+function showToast(message, type = 'info', duration = 3500) {
+  // Legacy call signature: showToast(msg, number) — treat as duration
+  if (typeof type === 'number') { duration = type; type = 'info'; }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
   toast.textContent = message;
-  toast.style.opacity = '1';
-  setTimeout(() => {
-    toast.style.opacity = '0';
-  }, duration);
+  document.body.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
 }
 
 function escHtml(s) {
@@ -2174,6 +2249,71 @@ function renderIdentityExposure(data) {
   }
 
   content.innerHTML = html || '<p style="color:#666; font-style:italic;">无法提取足够证据</p>';
+}
+
+// v14 Phase 8: Render new v14 report section cards
+function renderV14Cards(report, runId) {
+  const el = document.getElementById('report-section');
+  if (!el) return;
+  const sc = (report && report.scorecard) || {};
+  const ta = sc.token_analysis || null;
+  const completeness = (sc.v13 && sc.v13.completeness != null) ? sc.v13.completeness : sc.completeness;
+  const pre = (report && report.predetect_result) || null;
+
+  let html = '';
+
+  // Token Analysis card
+  if (ta) {
+    html += `
+      <div class="card" id="token-analysis-card">
+        <h3>Token 分析</h3>
+        <p style="font-size:12px;color:var(--ink3)">计数方法: ${escHtml(ta.counting_method || ta.token_counting_method || 'N/A')}</p>
+        <p style="font-size:12px;color:var(--ink3)">优化器已启用: <strong>${ta.prompt_optimizer_used ? '是' : '否'}</strong></p>
+        <p style="font-size:12px;color:var(--ink3)">节省估算: <strong>${ta.tokens_saved_estimate != null ? ta.tokens_saved_estimate : 'N/A'}</strong> tokens</p>
+      </div>`;
+  }
+
+  // Data completeness card
+  if (completeness != null) {
+    const pct = Math.round(completeness * 100);
+    html += `
+      <div class="card" id="completeness-card">
+        <h3>数据完整性</h3>
+        <div class="v14-progress-bar"><div style="width:${pct}%"></div></div>
+        <p style="font-size:12px;color:var(--ink3);margin-top:6px">${pct}% 维度有效数据</p>
+      </div>`;
+  }
+
+  // PreDetect layer status dots
+  if (pre && pre.layers && Array.isArray(pre.layers)) {
+    const TOTAL_LAYERS = 20;
+    const dots = [];
+    for (let i = 0; i < TOTAL_LAYERS; i++) {
+      const layer = pre.layers.find(l => l.layer === i || l.layer_id === i);
+      let color, title;
+      if (!layer) { color = '#d1d5db'; title = `L${i}: 未运行`; }
+      else if (layer.skipped) { color = '#fbbf24'; title = `L${i}: 已跳过`; }
+      else { color = '#22c55e'; title = `L${i}: ${layer.result || '通过'}`; }
+      dots.push(`<span title="${escAttr(title)}" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${color};margin:2px;cursor:help"></span>`);
+    }
+    html += `
+      <div class="card" id="predetect-layers-card">
+        <h3>预检测层状态 (${pre.layers.length}/${TOTAL_LAYERS} 层运行)</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:2px;margin-top:6px">${dots.join('')}</div>
+        <div style="font-size:11px;color:var(--ink4);margin-top:6px">
+          <span style="display:inline-block;width:12px;height:12px;background:#22c55e;border-radius:50%;vertical-align:middle"></span> 通过 &nbsp;
+          <span style="display:inline-block;width:12px;height:12px;background:#fbbf24;border-radius:50%;vertical-align:middle"></span> 跳过 &nbsp;
+          <span style="display:inline-block;width:12px;height:12px;background:#d1d5db;border-radius:50%;vertical-align:middle"></span> 未运行
+        </div>
+      </div>`;
+  }
+
+  if (html) {
+    const v14Container = document.createElement('div');
+    v14Container.id = 'v14-cards-container';
+    v14Container.innerHTML = html;
+    el.appendChild(v14Container);
+  }
 }
 
 function escapeHtml(text) {
