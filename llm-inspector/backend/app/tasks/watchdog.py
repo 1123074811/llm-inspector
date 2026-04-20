@@ -59,6 +59,9 @@ class RunWatchdog:
         """
         Scan for stale runs and mark them as partial_failed.
 
+        Uses cursor-based pagination (B8 fix) to scan the entire DB without
+        the old hard-coded limit=500 ceiling.
+
         Returns the number of runs that were transitioned.
         """
         from app.repository import repo
@@ -66,50 +69,55 @@ class RunWatchdog:
         marked = 0
         now = time.time()
 
-        try:
-            all_runs = repo.list_runs(limit=500)
-        except Exception as exc:
-            logger.error("Watchdog: failed to list runs", error=str(exc))
-            return 0
-
-        for run in all_runs:
-            status = run.get("status", "")
-            if status not in _STALE_STATUSES:
-                continue
-
-            run_id = run.get("id", "")
-
-            # Prefer updated_at, fall back to created_at for age computation
-            ref_ts = _parse_iso(run.get("updated_at")) or _parse_iso(run.get("created_at"))
-            if ref_ts is None:
-                continue
-
-            age_sec = now - ref_ts
-            if age_sec <= self._max_duration_sec:
-                continue
-
-            # Double-check current status in DB before mutating
+        # B8 fix: cursor-based pagination — scans entire DB, not just the first 500 rows
+        last_id: str | None = None
+        while True:
             try:
-                current = repo.get_run(run_id)
-                if not current:
-                    continue
-                if current.get("status") in _TERMINAL_STATUSES:
-                    continue
-                repo.update_run_status(
-                    run_id,
-                    "partial_failed",
-                    error_message="Watchdog: run exceeded max duration",
-                    error_code="E_WATCHDOG_TIMEOUT",
-                )
-                logger.warning(
-                    "Watchdog: marked stale run as partial_failed",
-                    run_id=run_id,
-                    age_sec=round(age_sec, 1),
-                    status_was=status,
-                )
-                marked += 1
+                batch = repo.list_stale_runs(limit=100, after_id=last_id)
             except Exception as exc:
-                logger.error("Watchdog: failed to update run", run_id=run_id, error=str(exc))
+                logger.error("Watchdog: failed to list stale runs", error=str(exc))
+                break
+
+            if not batch:
+                break
+
+            for run in batch:
+                run_id = run.get("id", "")
+                status = run.get("status", "")
+
+                # Prefer updated_at, fall back to created_at for age computation
+                ref_ts = _parse_iso(run.get("updated_at")) or _parse_iso(run.get("created_at"))
+                if ref_ts is None:
+                    continue
+
+                age_sec = now - ref_ts
+                if age_sec <= self._max_duration_sec:
+                    continue
+
+                # Double-check current status in DB before mutating
+                try:
+                    current = repo.get_run(run_id)
+                    if not current:
+                        continue
+                    if current.get("status") in _TERMINAL_STATUSES:
+                        continue
+                    repo.update_run_status(
+                        run_id,
+                        "partial_failed",
+                        error_message="Watchdog: run exceeded max duration",
+                        error_code="E_WATCHDOG_TIMEOUT",
+                    )
+                    logger.warning(
+                        "Watchdog: marked stale run as partial_failed",
+                        run_id=run_id,
+                        age_sec=round(age_sec, 1),
+                        status_was=status,
+                    )
+                    marked += 1
+                except Exception as exc:
+                    logger.error("Watchdog: failed to update run", run_id=run_id, error=str(exc))
+
+            last_id = batch[-1].get("id")
 
         if marked:
             logger.info("Watchdog: scan complete", stale_marked=marked)

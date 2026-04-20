@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -38,6 +39,33 @@ from typing import Optional
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# -- Event history ring buffer ------------------------------------------------
+
+_CB_HISTORY_MAX = 100  # keep last 100 trip/recovery events in memory
+
+# Module-level ring buffer, protected by the circuit_breaker's lock below.
+_cb_event_history: deque[dict] = deque(maxlen=_CB_HISTORY_MAX)
+
+
+def _record_cb_event(event_type: str, base_url: str, state: str, **extra) -> None:
+    """Append a state-change event to the in-memory ring buffer."""
+    _cb_event_history.append({
+        "event_type": event_type,  # "opened" | "closed" | "half_open" | "reset"
+        "base_url": base_url,
+        "state": state,
+        "timestamp": time.time(),
+        **extra,
+    })
+
+
+def get_cb_event_history(limit: int = 50, state_filter: str | None = None) -> list[dict]:
+    """Return recent circuit breaker state-change events, newest first."""
+    events = list(_cb_event_history)
+    events.reverse()
+    if state_filter:
+        events = [e for e in events if e.get("state") == state_filter]
+    return events[:limit]
 
 
 class CircuitState(Enum):
@@ -129,6 +157,7 @@ class CircuitBreaker:
                     # Transition to half-open
                     circuit.state = CircuitState.HALF_OPEN
                     circuit.half_open_probe_sent = False
+                    _record_cb_event("half_open", base_url, "half_open", elapsed_since_open=round(elapsed, 1))
                     logger.info(
                         "Circuit transitioning to HALF_OPEN",
                         base_url=base_url,
@@ -160,6 +189,7 @@ class CircuitBreaker:
                     # Enough successes in half-open — close the circuit
                     circuit.state = CircuitState.CLOSED
                     circuit.half_open_probe_sent = False
+                    _record_cb_event("closed", base_url, "closed", reason="recovered_from_half_open")
                     logger.info(
                         "Circuit CLOSED (recovered)",
                         base_url=base_url,
@@ -170,6 +200,7 @@ class CircuitBreaker:
                 # Shouldn't happen — success while open means something
                 # bypassed the check. Close immediately.
                 circuit.state = CircuitState.CLOSED
+                _record_cb_event("closed", base_url, "closed", reason="success_while_open_unexpected")
                 logger.warning(
                     "Circuit CLOSED (success while open — unexpected)",
                     base_url=base_url,
@@ -190,6 +221,7 @@ class CircuitBreaker:
                 circuit.state = CircuitState.OPEN
                 circuit.opened_at = time.monotonic()
                 circuit.half_open_probe_sent = False
+                _record_cb_event("opened", base_url, "open", reason="half_open_probe_failed", failure_reason=reason[:100])
                 logger.warning(
                     "Circuit re-OPENED (half-open probe failed)",
                     base_url=base_url,
@@ -201,6 +233,9 @@ class CircuitBreaker:
                 if circuit.consecutive_failures >= self._failure_threshold:
                     circuit.state = CircuitState.OPEN
                     circuit.opened_at = time.monotonic()
+                    _record_cb_event("opened", base_url, "open", reason="failure_threshold_reached",
+                                     consecutive_failures=circuit.consecutive_failures,
+                                     threshold=self._failure_threshold)
                     logger.warning(
                         "Circuit OPENED (failure threshold reached)",
                         base_url=base_url,
@@ -223,8 +258,10 @@ class CircuitBreaker:
             if base_url:
                 if base_url in self._circuits:
                     del self._circuits[base_url]
+                _record_cb_event("reset", base_url, "closed", reason="admin_reset")
             else:
                 self._circuits.clear()
+                _record_cb_event("reset", "*", "closed", reason="admin_reset_all")
 
     @property
     def stats(self) -> dict:

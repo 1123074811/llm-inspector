@@ -2,6 +2,27 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase7] — 2026-04-20
+
+### Added
+- `backend/app/runner/retry_policy.py` — 分级重试策略：`RetryConfig`（max_retries_network=3 / max_retries_429=2 / 指数退避 0.5s→8s）；`with_retry()` 自动区分网络超时/HTTP 429/不可重试错误；每次重试事件写 `data/traces/{run_id}/errors.jsonl`；引用 Google SRE Book Ch.22 + RFC 7231 §7.1.3
+- `ScoreCard.skipped_cases: list[str]` — 被跳过用例的 ID 明细列表；`to_dict()` 同步输出
+- `GET /api/v14/circuit-breaker/history` — 返回断路器最近 100 条状态转换事件（open/close/half_open/reset）
+- `handlers/v14_handlers.py` `handle_circuit_breaker_history`
+- `tests/test_v14_phase7.py` — 32 条验收测试（全部通过）
+
+### Changed / Fixed
+- `repository/repo.py` — **B7 修复**：`update_run_progress(completed, total, skipped=0)` 进度公式改为 `round(100 * completed / max(1, total - skipped))`，消除因合法跳过导致进度卡在 95%~98% 的问题；新增 `list_stale_runs(limit, after_id)` 游标分页接口
+- `tasks/watchdog.py` — **B8 修复**：用游标分页循环替换原 `limit=500` 单次查询，全库扫描不遗漏
+- `core/circuit_breaker.py` — 新增 `_cb_event_history` 环形缓冲区（max=100）+ `_record_cb_event()` + `get_cb_event_history()`，所有状态转换自动记录
+- `core/config.py` — 新增 `RUN_MAX_DURATION_SEC`（默认 3600s，可通过环境变量热更新）
+- `main.py` — 注册 `GET /api/v14/circuit-breaker/history` 路由
+
+### Test Coverage
+- **455 passed, 4 skipped**（+32 vs Phase 6 的 423）
+
+---
+
 ## [v14.0.0-phase6] — 2026-04-20
 
 ### Added

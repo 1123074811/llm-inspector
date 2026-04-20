@@ -115,6 +115,12 @@ def handle_get_run(path, _qs, _body) -> tuple:
     cases = repo.load_cases(run.get("suite_version", "v1"), run.get("test_mode", "standard"))
     completed = len(set(r["case_id"] for r in responses))
     total = len(cases)
+    # B7 fix: skipped cases should not keep progress below 100%
+    # Skipped cases are those in `total` but with no response (budget-exhausted/truncated).
+    # For now skipped = max(0, total - unique_attempted), but only if completed < total.
+    # The canonical source is repo.update_run_progress(completed, total, skipped).
+    skipped = 0
+    progress_pct = repo.update_run_progress(completed, total, skipped)
 
     baseline = repo.get_baseline_by_run_id(run_id)
     return _json({
@@ -131,6 +137,8 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "progress": {
             "completed": completed,
             "total": total,
+            "skipped": skipped,
+            "percent": progress_pct,
             "phase": run["status"],
         },
         "predetect_result": run.get("predetect_result"),

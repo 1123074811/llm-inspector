@@ -186,6 +186,52 @@ def list_runs(limit: int = 50, offset: int = 0) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_stale_runs(limit: int = 100, after_id: str | None = None) -> list[dict]:
+    """
+    Return runs in non-terminal statuses, with cursor-based pagination.
+
+    Args:
+        limit: Maximum number of rows to return per page.
+        after_id: If provided, only return rows with id > after_id (cursor pagination).
+    """
+    conn = get_conn()
+    stale_statuses = ("running", "pre_detecting")
+    placeholders = ",".join("?" * len(stale_statuses))
+    if after_id is not None:
+        rows = conn.execute(
+            f"SELECT * FROM test_runs WHERE status IN ({placeholders}) AND id > ? "
+            f"ORDER BY id ASC LIMIT ?",
+            (*stale_statuses, after_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT * FROM test_runs WHERE status IN ({placeholders}) "
+            f"ORDER BY id ASC LIMIT ?",
+            (*stale_statuses, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_run_progress(completed: int, total: int, skipped: int = 0) -> int:
+    """
+    Compute and return the run progress percentage.
+
+    Formula (B7 fix): progress = round(100 * completed / max(1, total - skipped))
+    So that skipped cases do not keep progress permanently below 100%.
+
+    Args:
+        completed: Number of cases that have been executed (responded to).
+        total: Total number of cases in the run.
+        skipped: Number of cases that were skipped (budget, truncation, etc.).
+
+    Returns the computed progress value (0-100).
+    """
+    denominator = max(1, total - skipped)
+    progress = round(100 * completed / denominator)
+    progress = min(100, max(0, progress))
+    return progress
+
+
 def delete_run(run_id: str) -> None:
     conn = get_conn()
     conn.execute("DELETE FROM test_runs WHERE id=?", (run_id,))

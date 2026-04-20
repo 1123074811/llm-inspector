@@ -42,8 +42,13 @@ class TestWatchdog:
 
         updated_statuses: dict[str, str] = {}
 
-        def fake_list_runs(limit=50, offset=0):
-            return [fake_run]
+        call_count = {"n": 0}
+
+        def fake_list_stale_runs(limit=100, after_id=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return [fake_run]
+            return []
 
         def fake_get_run(run_id):
             return fake_run
@@ -56,7 +61,7 @@ class TestWatchdog:
 
         # Run directly with mocked repo
         with (
-            patch("app.repository.repo.list_runs", side_effect=fake_list_runs),
+            patch("app.repository.repo.list_stale_runs", side_effect=fake_list_stale_runs),
             patch("app.repository.repo.get_run", side_effect=fake_get_run),
             patch("app.repository.repo.update_run_status", side_effect=fake_update_run_status),
         ):
@@ -78,9 +83,14 @@ class TestWatchdog:
             "created_at": fresh_ts,
         }
         updated_statuses: dict[str, str] = {}
+        _call = {"n": 0}
+
+        def fake_stale(limit=100, after_id=None):
+            _call["n"] += 1
+            return [fake_run] if _call["n"] == 1 else []
 
         with (
-            patch("app.repository.repo.list_runs", return_value=[fake_run]),
+            patch("app.repository.repo.list_stale_runs", side_effect=fake_stale),
             patch("app.repository.repo.get_run", return_value=fake_run),
             patch("app.repository.repo.update_run_status",
                   side_effect=lambda run_id, status, **kw: updated_statuses.__setitem__(run_id, status)),
@@ -92,7 +102,12 @@ class TestWatchdog:
         assert "fresh-run-001" not in updated_statuses
 
     def test_watchdog_ignores_terminal_runs(self):
-        """Already-completed runs must never be touched."""
+        """Already-completed runs must never be touched.
+
+        Note: list_stale_runs only returns running/pre_detecting statuses,
+        so terminal runs won't appear in its results. This test verifies the
+        double-check in get_run also catches any edge cases.
+        """
         from app.tasks.watchdog import RunWatchdog
 
         old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime(
@@ -106,8 +121,16 @@ class TestWatchdog:
                 "created_at": old_ts,
             }
             updated_statuses: dict[str, str] = {}
+            # list_stale_runs would normally not return terminal runs,
+            # but patch it to return one to test the double-check path
+            _call = {"n": 0}
+
+            def fake_stale(limit=100, after_id=None, _run=fake_run):
+                _call["n"] += 1
+                return [_run] if _call["n"] == 1 else []
+
             with (
-                patch("app.repository.repo.list_runs", return_value=[fake_run]),
+                patch("app.repository.repo.list_stale_runs", side_effect=fake_stale),
                 patch("app.repository.repo.get_run", return_value=fake_run),
                 patch("app.repository.repo.update_run_status",
                       side_effect=lambda run_id, status, **kw: updated_statuses.__setitem__(run_id, status)),

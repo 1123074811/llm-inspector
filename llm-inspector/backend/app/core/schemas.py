@@ -365,6 +365,8 @@ class ScoreCard:
     prompt_optimizer_used: bool = False
     tokens_saved_estimate: int | None = None
     token_counting_method: str = "fallback-estimate"
+    # v14 Phase 7: Skipped case tracking
+    skipped_cases: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -404,6 +406,7 @@ class ScoreCard:
                 "tokens_saved_estimate": getattr(self, "tokens_saved_estimate", None),
                 "counting_method": getattr(self, "token_counting_method", "fallback-estimate"),
             },
+            "skipped_cases": list(getattr(self, "skipped_cases", [])),
         }
 
 

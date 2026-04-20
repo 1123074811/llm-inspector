@@ -488,3 +488,41 @@ def handle_judge_chain(path: str, qs: dict, body: dict):
     except Exception as e:
         logger.error("Judge chain handler error", run_id=run_id, error=str(e))
         return _error(f"Judge chain error: {e}", 500)
+
+
+# ── Phase 7: Circuit Breaker History ─────────────────────────────────────────
+
+def handle_circuit_breaker_history(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/circuit-breaker/history
+
+    Returns recent circuit breaker trip/recovery events from the in-memory
+    ring buffer (last 100 events, newest first).
+
+    Query params:
+        ?limit=50       — Maximum number of events to return (default 50, max 100).
+        ?state=open     — Filter by state: open | closed | half_open
+    """
+    try:
+        from app.core.circuit_breaker import get_cb_event_history
+
+        try:
+            limit = int(qs.get("limit", 50))
+        except (ValueError, TypeError):
+            limit = 50
+        limit = max(1, min(100, limit))
+
+        state_filter = qs.get("state") or None
+
+        events = get_cb_event_history(limit=limit, state_filter=state_filter)
+
+        return _json({
+            "events": events,
+            "count": len(events),
+            "limit": limit,
+            "state_filter": state_filter,
+            "note": "In-memory ring buffer — resets on server restart. Max 100 events.",
+        })
+    except Exception as e:
+        logger.error("Circuit breaker history error", error=str(e))
+        return _error(f"Circuit breaker history error: {e}", 500)
