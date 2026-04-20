@@ -14,7 +14,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_inspector.db"
 
 def test_config_defaults():
     from app.core.config import settings
-    assert settings.PORT == 8000
+    assert settings.PORT == 9999
     assert settings.DEFAULT_REQUEST_TIMEOUT_SEC == 60
     assert settings.MAX_STREAM_CHUNKS == 512
 

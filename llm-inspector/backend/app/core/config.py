@@ -26,7 +26,7 @@ class Settings:
     STRICT_PROVENANCE: bool = os.getenv("STRICT_PROVENANCE", "false").lower() == "true"
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    PORT: int = int(os.getenv("PORT", "9999"))
     CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
     # Database (SQLite for portability; swap DATABASE_URL for PostgreSQL)

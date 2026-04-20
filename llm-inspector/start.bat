@@ -50,6 +50,6 @@ echo.
 echo ====================================
 echo Starting Server...
 echo ====================================
-python start.py --port 8000
+python start.py --port 9999
 
 pause
