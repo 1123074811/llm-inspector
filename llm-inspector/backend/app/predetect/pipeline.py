@@ -20,8 +20,13 @@ shared data live in dedicated files:
 """
 from __future__ import annotations
 
+import json
+import pathlib
+import time
+
 from app.core.schemas import LayerResult, PreDetectionResult, LLMRequest, Message
 from app.core.logging import get_logger
+from app.core.config import settings
 
 from app.predetect.signatures import CONFIDENCE_THRESHOLD
 
@@ -52,6 +57,48 @@ from app.predetect.indirect_injection import Layer16IndirectInject     # Layer 1
 from app.predetect.identity_exposure import Layer17IdentityExposure   # Layer 17 slot
 
 logger = get_logger(__name__)
+
+
+# ── JSONL trace sink ──────────────────────────────────────────────────────────
+
+def _write_predetect_trace(run_id: str | None, layer_record: dict) -> None:
+    """
+    Append a layer result as a JSONL line to {DATA_DIR}/traces/{run_id}/predetect.jsonl.
+    Non-fatal: any I/O error is caught and logged as warning only.
+    Also emits EventKind.PREDETECT_LAYER_TRACE via the event bus.
+    """
+    if not run_id:
+        return
+
+    try:
+        trace_dir = pathlib.Path(settings.DATA_DIR) / "traces" / run_id
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_file = trace_dir / "predetect.jsonl"
+
+        record = {
+            "layer": layer_record.get("layer"),
+            "name": layer_record.get("name"),
+            "started_at": layer_record.get("started_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+            "duration_ms": layer_record.get("duration_ms"),
+            "tokens": layer_record.get("tokens", 0),
+            "confidence": layer_record.get("confidence", 0.0),
+            "skipped": layer_record.get("skipped", False),
+            "evidence": layer_record.get("evidence", []),
+        }
+        with trace_file.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception as exc:
+        logger.warning("Could not write predetect trace", run_id=run_id, error=str(exc))
+
+    # Emit SSE event (best-effort)
+    try:
+        from app.core.events import emit, EventKind
+        emit(run_id, EventKind.PREDETECT_LAYER_TRACE, **{
+            k: v for k, v in layer_record.items()
+            if not isinstance(v, (dict, list)) or k in ("evidence",)
+        })
+    except Exception:
+        pass
 
 
 # ── Main Pipeline ─────────────────────────────────────────────────────────────
@@ -368,8 +415,39 @@ class PreDetectionPipeline:
                 layer_results.append(r17)
                 total_tokens += r17.tokens_used
                 self._log_layer_result("Layer17/IdentityExposure", r17)
+                _write_predetect_trace(run_id, r17.to_dict() if hasattr(r17, "to_dict") else r17)
                 if r17.confidence >= CONFIDENCE_THRESHOLD:
                     return self._build_result(True, r17, layer_results, total_tokens)
+
+                # v14 Phase 5: Layer 18 — Timing Side-Channel (zero tokens, deep/extraction mode)
+                _report_progress("Layer18/TimingSideChannel")
+                logger.info("PreDetect Layer18: Timing side-channel analysis", model=model_name)
+                from app.predetect.layers_l18_l19 import Layer18TimingSideChannel
+                r18_dict = Layer18TimingSideChannel().run(adapter, model_name, layer_results)
+                r18 = LayerResult(
+                    layer="Layer18/TimingSideChannel",
+                    confidence=r18_dict.get("confidence", 0.0),
+                    identified_as=r18_dict.get("closest_family") if not r18_dict.get("skipped") else None,
+                    evidence=r18_dict.get("evidence", []),
+                    tokens_used=r18_dict.get("tokens", 0),
+                )
+                layer_results.append(r18)
+                _write_predetect_trace(run_id, r18_dict)
+
+                # v14 Phase 5: Layer 19 — Token Distribution Side-Channel (zero tokens)
+                _report_progress("Layer19/TokenDistribution")
+                logger.info("PreDetect Layer19: Token distribution side-channel analysis", model=model_name)
+                from app.predetect.layers_l18_l19 import Layer19TokenDistribution
+                r19_dict = Layer19TokenDistribution().run(adapter, model_name, layer_results)
+                r19 = LayerResult(
+                    layer="Layer19/TokenDistribution",
+                    confidence=r19_dict.get("confidence", 0.0),
+                    identified_as=r19_dict.get("closest_family") if not r19_dict.get("skipped") else None,
+                    evidence=r19_dict.get("evidence", []),
+                    tokens_used=r19_dict.get("tokens", 0),
+                )
+                layer_results.append(r19)
+                _write_predetect_trace(run_id, r19_dict)
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

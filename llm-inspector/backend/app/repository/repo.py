@@ -93,6 +93,37 @@ def get_identity_exposure(run_id: str) -> dict | None:
     return from_json_col(row["identity_exposure_result"])
 
 
+def get_predetect_trace_path(run_id: str) -> str:
+    """v14 Phase 5: return path to predetect JSONL trace file for a run."""
+    import pathlib
+    from app.core.config import settings
+    return str(pathlib.Path(settings.DATA_DIR) / "traces" / run_id / "predetect.jsonl")
+
+
+def read_predetect_trace(run_id: str, offset: int = 0, limit: int = 50) -> list[dict]:
+    """v14 Phase 5: read JSONL predetect trace for a run, with pagination.
+    Returns empty list if file doesn't exist or on any I/O error.
+    """
+    import pathlib
+    from app.core.config import settings
+    trace_file = pathlib.Path(settings.DATA_DIR) / "traces" / run_id / "predetect.jsonl"
+    if not trace_file.exists():
+        return []
+    try:
+        lines: list[dict] = []
+        with trace_file.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                raw_line = raw_line.strip()
+                if raw_line:
+                    try:
+                        lines.append(json.loads(raw_line))
+                    except json.JSONDecodeError:
+                        pass
+        return lines[offset: offset + limit]
+    except Exception:
+        return []
+
+
 def save_predetect_result(run_id: str, result_dict: dict) -> None:
     confidence = result_dict.get("confidence", 0.0)
     identified = result_dict.get("success", False)

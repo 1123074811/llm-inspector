@@ -2,6 +2,25 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v14.0.0-phase5] — 2026-04-20
+
+### Added
+- `backend/app/predetect/layers_l18_l19.py` — L18 Response Timing Side-Channel（零 Token；重分析前层 TTFT/TPS 数据；Gaussian KL 散度对比 6 家族参考分布；置信度上限 0.50；引用 Yu et al. 2024 timing fingerprinting）+ L19 Token Distribution Side-Channel（零 Token；4-gram 重复率；响应长度 Wasserstein 距离；置信度上限 0.45；引用 Carlini et al. 2023 arXiv:2403.06634）
+- `core/events.py` 新增 `EventKind.PREDETECT_LAYER_TRACE` — 每层预检测完成后发射 SSE 事件
+- `GET /api/v14/runs/{id}/predetect-trace?offset=N&limit=N` — 分页读取预检测 JSONL 日志
+- `handlers/v14_handlers.py` `handle_predetect_trace` — 对应 handler
+- `repository/repo.py` `get_predetect_trace_path()` + `read_predetect_trace()` — JSONL 读取工具
+- `tests/test_v14_phase5.py` — 40 条验收测试（全部通过）
+
+### Changed
+- `predetect/pipeline.py` — 新增 `_write_predetect_trace()` JSONL sink（非致命；每层写入 `data/traces/{run_id}/predetect.jsonl`；同步发射 SSE `PREDETECT_LAYER_TRACE` 事件）；Deep 模式新增 L18 + L19 执行块（运行于 L17 之后）；`run()` 接受可选 `run_id` 参数用于日志落盘
+- `main.py` — 注册 `GET /api/v14/runs/[^/]+/predetect-trace` 路由
+
+### Test Coverage
+- **386 passed, 4 skipped**（+40 vs Phase 4 的 346）
+
+---
+
 ## [v14.0.0-phase4] — 2026-04-20
 
 ### Added

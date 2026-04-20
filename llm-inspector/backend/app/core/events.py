@@ -61,6 +61,9 @@ class EventKind(str, enum.Enum):
     RUN_COMPLETED    = "run.completed"
     RUN_FAILED       = "run.failed"
 
+    # PreDetect layer tracing (v14 Phase 5)
+    PREDETECT_LAYER_TRACE = "predetect_layer_trace"
+
 
 # ── Event dataclass ───────────────────────────────────────────────────────────
 

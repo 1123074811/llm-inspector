@@ -77,6 +77,7 @@ from app.handlers.v14_handlers import (
     handle_identity_exposure,
     handle_system_prompt,
     handle_judge_chain,
+    handle_predetect_trace,
 )
 
 logger = get_logger(__name__)
@@ -172,6 +173,7 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v14/runs/[^/]+/identity-exposure$",      handle_identity_exposure),
     ("GET",    r"^/api/v14/runs/[^/]+/system-prompt$",          handle_system_prompt),
     ("GET",    r"^/api/v14/runs/[^/]+/judge-chain$",            handle_judge_chain),
+    ("GET",    r"^/api/v14/runs/[^/]+/predetect-trace$",        handle_predetect_trace),
 ]
 
 

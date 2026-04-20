@@ -303,6 +303,39 @@ def handle_system_prompt(path: str, qs: dict, body: dict):
         return _error(f"System prompt error: {e}", 500)
 
 
+# ── Phase 5: PreDetect Trace endpoint ────────────────────────────────────────
+
+def handle_predetect_trace(path: str, qs: dict, body: dict):
+    """
+    GET /api/v14/runs/{id}/predetect-trace?offset=0&limit=20
+
+    Returns paginated predetect layer trace for a run.
+    Each entry: {layer, name, started_at, duration_ms, tokens, confidence, skipped, evidence[]}
+    """
+    import re
+    m = re.search(r"/runs/([^/]+)/predetect-trace", path)
+    if not m:
+        return _error("Run ID not found in path", 400)
+    run_id = m.group(1)
+    offset = int((qs.get("offset") or [0])[0] if isinstance(qs.get("offset"), list) else qs.get("offset", 0))
+    limit = min(int((qs.get("limit") or [20])[0] if isinstance(qs.get("limit"), list) else qs.get("limit", 20)), 50)
+
+    try:
+        from app.repository.repo import read_predetect_trace, get_predetect_trace_path
+        entries = read_predetect_trace(run_id, offset=offset, limit=limit)
+        return _json({
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit,
+            "count": len(entries),
+            "trace_path": get_predetect_trace_path(run_id),
+            "entries": entries,
+        })
+    except Exception as e:
+        logger.error("Predetect trace handler error", run_id=run_id, error=str(e))
+        return _error(f"Predetect trace error: {e}", 500)
+
+
 # ── Phase 4: Judge Chain endpoint ─────────────────────────────────────────────
 
 def handle_judge_chain(path: str, qs: dict, body: dict):
