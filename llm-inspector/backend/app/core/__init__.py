@@ -19,12 +19,14 @@ from app.core.references import (
     validate_formula_source,
 )
 from app.core.structured_logger import (
-    StructuredLogger,
+    AuditLogger,
     StructuredLogEntry,
     LogLevel,
     LogEventType,
     get_structured_logger,
 )
+# v15: AuditLogger replaces StructuredLogger; keep alias for backward compat
+StructuredLogger = AuditLogger
 
 __all__ = [
     # 数据血缘

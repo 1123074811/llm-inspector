@@ -487,7 +487,7 @@ async function cancelRun(runId) {
 async function retryRun(runId) {
   const {ok, data} = await api('POST', `/api/v1/runs/${runId}/retry`);
   if (!ok) {
-    alert('重试失败: ' + (data.error || 'unknown error'));
+    showToast('重试失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
   openTask(data.run_id || runId);
@@ -496,7 +496,7 @@ async function retryRun(runId) {
 async function continueFullTest(runId) {
   const {ok, data} = await api('POST', `/api/v1/runs/${runId}/continue`);
   if (!ok) {
-    alert('继续测试失败: ' + (data.error || 'unknown error'));
+    showToast('继续测试失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
   // Restart polling
@@ -506,10 +506,10 @@ async function continueFullTest(runId) {
 }
 
 async function unmarkAsBaseline(runId, baselineId) {
-  if (!confirm('确认该模型不再作为对比基准？这不会删除原始检测记录。')) return;
+  if (!await showConfirmModal('确认该模型不再作为对比基准？这不会删除原始检测记录。')) return;
   const {ok, data} = await api('DELETE', '/api/v1/baselines/' + baselineId);
   if (!ok) {
-    alert('移除失败: ' + (data.error || 'unknown error'));
+    showToast('移除失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
   // Refresh current page actions
@@ -522,7 +522,7 @@ async function unmarkAsBaseline(runId, baselineId) {
 async function skipTesting(runId) {
   const {ok, data} = await api('POST', `/api/v1/runs/${runId}/skip-testing`);
   if (!ok) {
-    alert('跳过失败: ' + (data.error || 'unknown error'));
+    showToast('跳过失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
   // Restart polling to catch completion
@@ -2087,7 +2087,7 @@ function toggleRunSelect(evt, runId) {
 function batchExportSelected(type) {
   const ids = [..._runSelected];
   if (!ids.length) {
-    alert('请先勾选至少一条记录');
+    showToast('请先勾选至少一条记录', 'warn');
     return;
   }
 
@@ -2099,7 +2099,7 @@ function batchExportSelected(type) {
 function batchExportZipAll() {
   const ids = [..._runSelected];
   if (!ids.length) {
-    alert('请先勾选至少一条记录');
+    showToast('请先勾选至少一条记录', 'warn');
     return;
   }
   const url = `/api/v1/exports/runs.zip?run_ids=${encodeURIComponent(ids.join(','))}&types=csv,svg`;
@@ -2109,30 +2109,30 @@ function batchExportZipAll() {
 async function batchDeleteSelected() {
   const ids = [..._runSelected];
   if (!ids.length) {
-    alert('请先勾选至少一条记录');
+    showToast('请先勾选至少一条记录', 'warn');
     return;
   }
 
-  if (!confirm(`确定要删除选中的 ${ids.length} 条记录吗？此操作不可恢复。`)) return;
+  if (ids.length > 0 && !await showConfirmModal(`确定要删除选中的 ${ids.length} 条记录吗？此操作不可恢复。`)) return;
 
   const {ok, data} = await api('POST', '/api/v1/runs/batch-delete', { run_ids: ids });
   if (!ok) {
-    alert('批量删除失败: ' + (data.error || 'unknown error'));
+    showToast('批量删除失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
 
-  alert(`成功删除 ${data.deleted_count} 条记录${data.errors && data.errors.length ? `，${data.errors.length} 条失败` : ''}`);
+  showToast(`成功删除 ${data.deleted_count} 条记录${data.errors && data.errors.length ? `，${data.errors.length} 条失败` : ''}`, 'info');
   _runSelected.clear();
   loadRuns();
 }
 
 async function deleteRunFromList(evt, runId) {
   if (evt) evt.stopPropagation();
-  if (!confirm('确认删除该检测记录？此操作不可恢复。')) return;
+  if (!await showConfirmModal('确认删除该检测记录？此操作不可恢复。')) return;
 
   const {ok, data} = await api('DELETE', '/api/v1/runs/' + runId);
   if (!ok) {
-    alert('删除失败: ' + (data.error || 'unknown error'));
+    showToast('删除失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
   loadRuns();
@@ -2143,7 +2143,7 @@ async function deleteRunFromList(evt, runId) {
 async function markAsBaseline(runId) {
   const {ok, data} = await api('GET', '/api/v1/runs/' + runId);
   if (!ok) {
-    alert('无法获取任务信息');
+    showToast('无法获取任务信息', 'error');
     return;
   }
   const defaultName = data.model || '';
@@ -2165,10 +2165,10 @@ async function markAsBaseline(runId) {
     notes: '',
   });
   if (!ok2) {
-    alert(data2.error || '创建基准失败');
+    showToast(data2.error || '创建基准失败', 'error');
     return;
   }
-  alert('已创建基准: ' + display_name);
+  showToast('已创建基准: ' + display_name, 'info');
   const {ok: ok3, data: data3} = await api('GET', '/api/v1/runs/' + runId);
   if (ok3) {
     renderTaskActions(runId, data3.status, data3.baseline_id);
@@ -2179,13 +2179,13 @@ async function compareWithBaseline(runId) {
   // First, fetch available baselines
   const {ok: baselinesOk, data: baselinesData} = await api('GET', '/api/v1/baselines');
   if (!baselinesOk) {
-    alert('无法获取基准模型列表: ' + (baselinesData.error || 'unknown error'));
+    showToast('无法获取基准模型列表: ' + (baselinesData.error || 'unknown error'), 'error');
     return;
   }
 
   const baselines = baselinesData.baselines || [];
   if (!baselines.length) {
-    alert('暂无可用基准模型，请先标记某个模型为基准');
+    showToast('暂无可用基准模型，请先标记某个模型为基准', 'warn');
     return;
   }
 
@@ -2224,19 +2224,19 @@ async function confirmBaselineComparison(runId, modal) {
   const baseline_id = select.value;
 
   if (!baseline_id) {
-    alert('请选择一个基准模型');
+    showToast('请选择一个基准模型', 'warn');
     return;
   }
 
   modal.remove();
 
   // Now perform the comparison with both baseline_id and run_id
-  const {ok, data} = await api('POST', '/api/v1/baselines/compare', { 
-    baseline_id: baseline_id, 
-    run_id: runId 
+  const {ok, data} = await api('POST', '/api/v1/baselines/compare', {
+    baseline_id: baseline_id,
+    run_id: runId
   });
   if (!ok) {
-    alert('基准对比失败: ' + (data.error || 'unknown error'));
+    showToast('基准对比失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
 
@@ -2358,7 +2358,7 @@ async function loadBaselines() {
 
 async function viewBaselineReport(baselineId) {
   const {ok, data} = await api('GET', '/api/v1/baselines/' + baselineId);
-  if (!ok) { alert('加载失败'); return; }
+  if (!ok) { showToast('加载失败', 'error'); return; }
 
   if (data.source_run_id) {
     openTask(data.source_run_id);
@@ -2387,9 +2387,9 @@ async function viewBaselineReport(baselineId) {
 }
 
 async function deleteBaseline(baselineId) {
-  if (!confirm('确认删除该基准模型？')) return;
+  if (!await showConfirmModal('确认删除该基准模型？')) return;
   const {ok, data} = await api('DELETE', '/api/v1/baselines/' + baselineId);
-  if (!ok) { alert('删除失败: ' + (data.error || 'unknown error')); return; }
+  if (!ok) { showToast('删除失败: ' + (data.error || 'unknown error'), 'error'); return; }
   loadBaselines();
 }
 
@@ -2407,26 +2407,28 @@ function showToast(message, type = 'info', duration = 3500) {
 }
 
 // v15 Phase 12: Modal confirmation (replaces browser confirm())
-function showConfirmModal(message, onConfirm, onCancel) {
-  const existing = document.getElementById('v15-confirm-modal');
-  if (existing) existing.remove();
+function showConfirmModal(message) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('v15-confirm-modal');
+    if (existing) existing.remove();
 
-  const modal = document.createElement('div');
-  modal.id = 'v15-confirm-modal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:8px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.2)">
-      <p style="margin:0 0 16px;font-size:15px;color:#1e293b">${message}</p>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button id="v15-confirm-cancel" style="padding:8px 16px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">取消</button>
-        <button id="v15-confirm-ok" style="padding:8px 16px;border:none;border-radius:6px;background:#ef4444;color:#fff;cursor:pointer;font-size:13px">确认</button>
+    const modal = document.createElement('div');
+    modal.id = 'v15-confirm-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.2)">
+        <p style="margin:0 0 16px;font-size:15px;color:#1e293b">${escHtml(message)}</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="v15-confirm-cancel" style="padding:8px 16px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">取消</button>
+          <button id="v15-confirm-ok" style="padding:8px 16px;border:none;border-radius:6px;background:#ef4444;color:#fff;cursor:pointer;font-size:13px">确认</button>
+        </div>
       </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-  document.getElementById('v15-confirm-ok').onclick = () => { modal.remove(); onConfirm && onConfirm(); };
-  document.getElementById('v15-confirm-cancel').onclick = () => { modal.remove(); onCancel && onCancel(); };
-  modal.onclick = (e) => { if (e.target === modal) { modal.remove(); onCancel && onCancel(); } };
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('v15-confirm-ok').onclick = () => { modal.remove(); resolve(true); };
+    document.getElementById('v15-confirm-cancel').onclick = () => { modal.remove(); resolve(false); };
+    modal.onclick = (e) => { if (e.target === modal) { modal.remove(); resolve(false); } };
+  });
 }
 
 function escHtml(s) {

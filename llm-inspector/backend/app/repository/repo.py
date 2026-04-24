@@ -54,13 +54,88 @@ def get_run(run_id: str) -> dict | None:
     return d
 
 
+# ── Run state machine (v15 Phase 2) ──────────────────────────────────────────
+# §2.3: created → preflight_running → [preflight_failed|preflight_passed]
+#        preflight_passed → pre_detecting → [predetect_failed|pre_detected]
+#        pre_detected → running → [completed|partial_failed|failed|cancelled]
+_RUN_STATE_TRANSITIONS: dict[str, set[str]] = {
+    "queued":              {"preflight_running", "running", "completed", "failed", "cancelled"},  # direct→running/completed: legacy compat
+    "preflight_running":   {"preflight_failed", "pre_detecting", "failed", "cancelled"},
+    "preflight_failed":    set(),  # terminal
+    "pre_detecting":       {"predetect_failed", "pre_detected", "running", "failed", "cancelled"},
+    "predetect_failed":    set(),  # terminal
+    "pre_detected":        {"running", "cancelled", "failed"},
+    "running":             {"completed", "partial_failed", "failed", "cancelled"},
+    "partial_failed":      {"completed", "running"},  # retry continues
+    "completed":           set(),  # terminal
+    "failed":              set(),  # terminal
+    "cancelled":           set(),  # terminal
+    "suspended":           {"queued", "running", "failed"},  # cb recovery
+}
+
+_TERMINAL_STATES = {s for s, nexts in _RUN_STATE_TRANSITIONS.items() if not nexts}
+
+
+def transition_state(run_id: str, from_state: str, to_state: str) -> None:
+    """Validate and execute a run state transition.
+
+    Raises ValueError if the transition is illegal.
+    """
+    allowed = _RUN_STATE_TRANSITIONS.get(from_state, set())
+    if to_state not in allowed:
+        raise ValueError(
+            f"Illegal state transition: {from_state} \u2192 {to_state}. "
+            f"Allowed from '{from_state}': {sorted(allowed)}"
+        )
+    repo_transition_state(run_id, to_state)
+
+
+def is_terminal(state: str) -> bool:
+    """Return True if state is a terminal (no outgoing transitions)."""
+    return state in _TERMINAL_STATES
+
+
+def repo_transition_state(run_id: str, to_state: str) -> None:
+    """Directly set a run state (no validation). Internal use."""
+    conn = get_conn()
+    sets = ["status=?"]
+    vals: list = [to_state]
+    if to_state == "running" or to_state == "preflight_running":
+        sets.append("started_at=?")
+        vals.append(now_iso())
+    if to_state in _TERMINAL_STATES:
+        sets.append("completed_at=?")
+        vals.append(now_iso())
+    vals.append(run_id)
+    conn.execute(f"UPDATE test_runs SET {','.join(sets)} WHERE id=?", vals)
+    conn.commit()
+
+
 def update_run_status(run_id: str, status: str, **kwargs) -> None:
+    """Update run status with optional extra fields.
+
+    Validates the transition against the v15 state machine.
+    """
+    conn = get_conn()
+    current = conn.execute(
+        "SELECT status FROM test_runs WHERE id=?", (run_id,)
+    ).fetchone()
+    from_state = current["status"] if current else None
+
+    if from_state in _RUN_STATE_TRANSITIONS:
+        allowed = _RUN_STATE_TRANSITIONS[from_state]
+        if status not in allowed:
+            raise ValueError(
+                f"Illegal state transition: {from_state} \u2192 {status}"
+            )
+    # else: unknown/missing state legacy — just set
+
     sets = ["status=?"]
     vals: list = [status]
     if status == "running" and "started_at" not in kwargs:
         sets.append("started_at=?")
         vals.append(now_iso())
-    if status in ("completed", "failed") and "completed_at" not in kwargs:
+    if status in _TERMINAL_STATES and "completed_at" not in kwargs:
         sets.append("completed_at=?")
         vals.append(now_iso())
     for k, v in kwargs.items():

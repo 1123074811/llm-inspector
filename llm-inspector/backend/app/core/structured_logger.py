@@ -79,18 +79,18 @@ class StructuredLogEntry:
         return json.dumps(self.to_dict(), ensure_ascii=False)
 
 
-class StructuredLogger:
+class AuditLogger:
     """
-    v8.0 structured logging system.
-    
+    v8.0 structured logging system — renamed from StructuredLogger in v15.
+
     Features:
     - Event type classification
     - Hierarchical event tracing
     - Queryable log storage
     - Export to JSON
     """
-    
-    _instance: Optional['StructuredLogger'] = None
+
+    _instance: Optional['AuditLogger'] = None
     _lock = threading.Lock()
     
     def __new__(cls):
@@ -340,6 +340,6 @@ class StructuredLogger:
 
 
 # Global accessor
-def get_structured_logger() -> StructuredLogger:
-    """Get the global structured logger instance."""
-    return StructuredLogger()
+def get_structured_logger() -> AuditLogger:
+    """Get the global audit logger instance."""
+    return AuditLogger()

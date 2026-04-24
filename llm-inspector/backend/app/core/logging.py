@@ -91,13 +91,13 @@ def get_logger(name: str) -> StructuredLogger:
     return StructuredLogger(name)
 
 
-# -- Re-export v8 structured logger for backward compatibility -----------------
+# -- Re-export v8 audit logger (renamed from StructuredLogger in v15) ----------
 try:
     from app.core.structured_logger import (  # noqa: F401
-        StructuredLogger as _SL8,
+        AuditLogger,
         get_structured_logger,
-        LogLevel,
-        LogEventType,
+        LogLevel as AuditLogLevel,
+        LogEventType as AuditLogEventType,
         StructuredLogEntry,
     )
 except Exception:

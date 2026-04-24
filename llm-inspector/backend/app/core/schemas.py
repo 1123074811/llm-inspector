@@ -218,6 +218,8 @@ class SampleResult:
 class CaseResult:
     case: TestCase
     samples: list[SampleResult] = field(default_factory=list)
+    # v15 Phase 2: failure layer for error categorization
+    failure_layer: str | None = None  # None / preflight / network / upstream_http / parse / judge / analysis
 
     @property
     def pass_rate(self) -> float:
