@@ -224,9 +224,33 @@ class Migration006IdentityExposureColumnGuard(Migration):
             logger.info("identity_exposure_result column already present, skipping")
 
 
+class Migration007V15CacheTable(Migration):
+    """v15 Phase 10: ensure llm_response_cache table exists.
+
+    The CacheStrategy module (runner/cache_strategy.py) uses an SQLite table
+    for persistent caching. This migration creates the table idempotently so
+    that the table is available even on databases created before Phase 10.
+    """
+    version = 7
+    description = "v15-phase10: create llm_response_cache table if not exists"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_response_cache (
+                cache_key TEXT PRIMARY KEY,
+                response_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        logger.info("Ensured llm_response_cache table exists")
+
+
 register_migration(Migration001InitialSchema())
 register_migration(Migration002JsonColumnsToColumns())
 register_migration(Migration003V14DropBenchmarkProfiles())
 register_migration(Migration004V14IdentityExposureColumn())
 register_migration(Migration005V15PreflightReportColumn())
 register_migration(Migration006IdentityExposureColumnGuard())
+register_migration(Migration007V15CacheTable())

@@ -142,27 +142,60 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             category=case.category,
         )
 
-        try:
-            resp = adapter.chat(req)
-        except Exception as e:
-            logger.error(
-                "Adapter chat failed",
-                case_id=case.id,
-                sample=i,
-                error=str(e),
-                error_type=type(e).__name__,
-            )
-            # Create a mock response for error handling
-            from app.core.schemas import LLMResponse
-            resp = LLMResponse(
-                content="",
-                finish_reason="error",
-                status_code=500,
-                error_type=type(e).__name__,
-                error_message=str(e),
-                latency_ms=0,
-                usage_total_tokens=0,
-            )
+        # Cache check: only for deterministic (temperature=0) requests
+        _cache_key: str | None = None
+        _cache_hit = False
+        if case.temperature == 0.0:
+            try:
+                from app.runner.cache_strategy import cache_strategy
+                _cache_payload = {
+                    "model": model_name,
+                    "messages": [{"role": m.role, "content": m.content} for m in messages],
+                    "max_tokens": case.max_tokens,
+                }
+                _cache_key = cache_strategy.build_key(
+                    getattr(adapter, "base_url", ""), _cache_payload
+                )
+                _cached = cache_strategy.get(_cache_key)
+                if _cached is not None:
+                    resp = _cached
+                    _cache_hit = True
+                    logger.info(
+                        "Cache hit",
+                        case_id=case.id, sample=i, category=case.category,
+                    )
+            except Exception:
+                pass  # Non-fatal: cache miss → proceed normally
+
+        if not _cache_hit:
+            try:
+                resp = adapter.chat(req)
+            except Exception as e:
+                logger.error(
+                    "Adapter chat failed",
+                    case_id=case.id,
+                    sample=i,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+                # Create a mock response for error handling
+                from app.core.schemas import LLMResponse
+                resp = LLMResponse(
+                    content="",
+                    finish_reason="error",
+                    status_code=500,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    latency_ms=0,
+                    usage_total_tokens=0,
+                )
+            # Store successful deterministic response in cache
+            if _cache_key and case.temperature == 0.0:
+                try:
+                    from app.runner.cache_strategy import cache_strategy
+                    cache_strategy.set(_cache_key, resp, category=case.category or "")
+                except Exception:
+                    pass  # Non-fatal
 
         # Inter-sample delay to avoid rate limits
         _update_delay(resp)

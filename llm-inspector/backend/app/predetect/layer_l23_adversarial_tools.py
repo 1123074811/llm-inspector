@@ -64,7 +64,7 @@ class Layer23AdversarialTools:
                 temperature=0.0,
                 timeout_sec=15,
                 tools=[tool_def],
-                tool_choice="auto",
+                extra_params={"tool_choice": "auto"},
             ))
             content = (resp.content or "").strip().lower()
             total_tokens += _count_tokens(resp)
