@@ -270,6 +270,49 @@ function validateUrl(input) {
 
 // ── Submit run ─────────────────────────────────────────────────────────────
 
+// ── Form submit handler ──────────────────────────────────────────────────────
+
+function submitForm(event) {
+  event.preventDefault();
+  submitRun();
+  return false;
+}
+
+// ── LocalStorage auto-fill ───────────────────────────────────────────────────
+
+const STORAGE_KEY = 'llm_inspector_form';
+
+function saveForm() {
+  const data = {
+    url:   document.getElementById('f-url').value.trim(),
+    key:   document.getElementById('f-key').value.trim(),
+    model: document.getElementById('f-model').value.trim(),
+  };
+  if (data.url && data.key && data.model) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+  }
+}
+
+function restoreForm() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.url)   document.getElementById('f-url').value = data.url;
+    if (data.key)   document.getElementById('f-key').value = data.key;
+    if (data.model) document.getElementById('f-model').value = data.model;
+  } catch {}
+}
+
+function clearSavedForm() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  document.getElementById('f-url').value = '';
+  document.getElementById('f-key').value = '';
+  document.getElementById('f-model').value = '';
+  document.getElementById('submit-hint').textContent = '已清除保存的信息';
+  document.getElementById('submit-hint').style.color = 'var(--ink4)';
+}
+
 async function submitRun() {
   const url   = document.getElementById('f-url').value.trim();
   const key   = document.getElementById('f-key').value.trim();
@@ -298,8 +341,8 @@ async function submitRun() {
     return;
   }
 
-  // Clear form
-  document.getElementById('f-key').value = '';
+  // Save for next time
+  saveForm();
 
   // Navigate to task page
   openTask(data.run_id);
@@ -2596,4 +2639,5 @@ function setNavStatus(status) {
 }
 
 // Init
+restoreForm();
 showPage('home');

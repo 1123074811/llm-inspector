@@ -47,26 +47,27 @@
     <p class="subtitle">利用统计学指纹与测试矩阵验证模型真实身份。系统将依据预检测置信度自动分配算力资源。</p>
   </div>
 
+  <form id="run-form" onsubmit="return submitForm(event)">
   <div class="card">
     <div class="form-group">
       <label>Base URL</label>
-      <input type="text" id="f-url" placeholder="https://api.example.com/v1"
+      <input type="text" id="f-url" name="url" placeholder="https://api.example.com/v1"
              oninput="validateUrl(this)">
       <div class="form-hint" id="url-hint">仅支持 http/https，不允许内网地址</div>
     </div>
     <div class="form-group">
       <label>API Key</label>
-      <input type="password" id="f-key" placeholder="sk-...">
+      <input type="password" id="f-key" name="api_key" placeholder="sk-...">
       <div class="form-hint">密钥在服务端使用 AES-256-GCM 加密存储，72小时后自动清除</div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Model Name</label>
-        <input type="text" id="f-model" placeholder="gpt-4o / custom-chat-v1">
+        <input type="text" id="f-model" name="model" placeholder="gpt-4o / custom-chat-v1">
       </div>
       <div class="form-group">
         <label>测试模式</label>
-        <select id="f-mode">
+        <select id="f-mode" name="mode">
           <option value="quick">快速扫描 Quick（~18题，基础能力+粗筛真伪）</option>
           <option value="standard" selected>标准评测 Standard（~44题，完整能力+可靠真伪）</option>
           <option value="deep">深度审计 Deep（~87题，精确指纹+对抗测试+全维度）</option>
@@ -74,12 +75,14 @@
       </div>
     </div>
     <div style="display:flex;gap:12px;align-items:center;margin-top:8px">
-      <button class="btn primary" id="submit-btn" onclick="submitRun()">
+      <button type="submit" class="btn primary" id="submit-btn">
         开始检测
       </button>
       <span id="submit-hint" style="font-size:12px;color:var(--ink4)"></span>
+      <span style="font-size:12px;color:var(--ink4);cursor:pointer;text-decoration:underline" onclick="clearSavedForm()">清除保存</span>
     </div>
   </div>
+  </form>
 
   <div class="card" style="background:var(--bg2);border-style:dashed">
     <div class="card-label">检测流程说明</div>
