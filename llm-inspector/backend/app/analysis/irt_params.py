@@ -34,7 +34,8 @@ class IRTParameters:
     case_id: str
     a: float  # Discrimination (ideal range: 0.5-2.0)
     b: float  # Difficulty (ideal range: -3 to 3)
-    c: float = 0.25  # Guessing parameter (fixed for 4-option items)
+    c: float | None = None  # Guessing parameter (None = per-question calculation)
+    mcq_options: int | None = None  # Number of MCQ options (for guessing c=1/options); None = free-response
     
     # Quality metrics
     fit_rmse: float = 0.0  # Root mean square error of fit
@@ -44,34 +45,52 @@ class IRTParameters:
     is_valid: bool = True
     validation_notes: str = ""
     
+    @property
+    def effective_c(self) -> float:
+        """Effective guessing parameter. For MCQ items, c = 1/options.
+        For free-response items, c = 0 (no guessing benefit).
+
+        Reference: Lord (1980) "Applications of Item Response Theory".
+        """
+        if self.c is not None:
+            return self.c
+        if self.mcq_options and self.mcq_options > 1:
+            return 1.0 / self.mcq_options
+        return 0.0  # free-response / code / open-ended
+
     def probability_correct(self, theta: float) -> float:
         """Calculate probability of correct response at ability level θ.
-        
+
         Args:
             theta: Ability parameter (-4 to 4)
-            
+
         Returns:
             Probability of correct response (0-1)
         """
-        return self.c + (1 - self.c) / (1 + math.exp(-self.a * (theta - self.b)))
+        c = self.effective_c
+        return c + (1 - c) / (1 + math.exp(-self.a * (theta - self.b)))
     
     def calculate_information(self, theta: float) -> float:
         """Calculate Fisher information at ability level θ.
-        
+
         Formula: I(θ) = a² * P(θ) * (1-P(θ)) / (1-c)²
-        
+
         Higher information means more precise measurement at this ability level.
-        
+
         Reference: Embretson & Reise (2000), Eq. 5.8
-        
+
         Args:
             theta: Ability parameter (-4 to 4)
-            
+
         Returns:
             Fisher information value
         """
         p = self.probability_correct(theta)
-        return (self.a ** 2 * p * (1 - p)) / ((1 - self.c) ** 2)
+        c = self.effective_c
+        denom = (1 - c)
+        if denom <= 0:
+            return 0.0
+        return (self.a ** 2 * p * (1 - p)) / (denom ** 2)
     
     def get_optimal_ability_range(self) -> Tuple[float, float]:
         """Get the ability range where this item provides good information.

@@ -369,6 +369,11 @@ class ScoreCard:
     token_counting_method: str = "fallback-estimate"
     # v14 Phase 7: Skipped case tracking
     skipped_cases: list[str] = field(default_factory=list)
+    # v15 Phase 8: Score reliability & calibration metadata
+    score_reliability: float | None = None  # 0-1 composite (sample+judge+completeness)
+    measurement_completeness: dict | None = None  # {measured_dims, total_dims, ratio}
+    judge_agreement: dict | None = None    # {fleiss_kappa: float, pairwise_kappas: list}
+    calibration_quality: dict | None = None  # {brier: float, ece: float}
 
     def to_dict(self) -> dict:
         # v15 Phase 3: helper — return None for unmeasured, integer percentage for measured
@@ -423,6 +428,11 @@ class ScoreCard:
                 "counting_method": getattr(self, "token_counting_method", "fallback-estimate"),
             },
             "skipped_cases": list(getattr(self, "skipped_cases", [])),
+            # v15 Phase 8: Score reliability & calibration
+            "score_reliability": round(self.score_reliability, 4) if self.score_reliability is not None else None,
+            "measurement_completeness": self.measurement_completeness,
+            "judge_agreement": self.judge_agreement,
+            "calibration_quality": self.calibration_quality,
         }
 
 
@@ -462,6 +472,35 @@ class SimilarityResult:
     rank: int
     confidence_level: str = "unknown"  # "high" / "medium" / "low" / "insufficient"
     valid_feature_count: int = 0
+
+
+@dataclass
+class JudgmentRecord:
+    """v15 Phase 9: Per-case judgment trace with transparency metadata."""
+    case_id: str
+    judge_method: str           # exact_match / regex / semantic_v2 / numeric_tolerance / nli_entailment / kg_lookup / ...
+    judge_mode: str             # rule / llm / nli / kg
+    confidence: float           # 0-1
+    basis: str                  # Judgment basis (e.g., "Match regex ^[A-D]$, answer=A")
+    evidence_snippets: list[str] = field(default_factory=list)
+    fallback_level: int = 0     # 0=primary, 1-4=fallback depth
+    fallback_reason: str | None = None
+    agreement_with_rules: bool | None = None  # vs rule-based judge if applicable
+    elapsed_ms: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "case_id": self.case_id,
+            "judge_method": self.judge_method,
+            "judge_mode": self.judge_mode,
+            "confidence": round(self.confidence, 3),
+            "basis": self.basis,
+            "evidence_snippets": self.evidence_snippets[:5],  # cap for transport
+            "fallback_level": self.fallback_level,
+            "fallback_reason": self.fallback_reason,
+            "agreement_with_rules": self.agreement_with_rules,
+            "elapsed_ms": round(self.elapsed_ms, 1),
+        }
 
 
 @dataclass

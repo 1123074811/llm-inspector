@@ -114,6 +114,33 @@ def _checkpoint_should_stop(test_mode: str, case_results: list[CaseResult],
             if top.similarity_score >= 0.70 and (top.similarity_score - second.similarity_score) >= 0.15:
                 return True, features, similarities, scorecard_cache
 
+    # v15 Phase 10: CI-width based early stopping
+    # If theta CI is sufficiently narrow (< THETA_CI_STOP_WIDTH), we have enough confidence.
+    if total_cases >= 10 and test_mode in ("quick", "standard"):
+        try:
+            from app.analysis.estimation import ThetaEstimator, UncertaintyEstimator
+            from app.repository import repo as repo_module
+            item_stats_rows = repo_module.list_item_stats()
+            item_stats = {r.get("item_id"): r for r in item_stats_rows}
+            theta_estimator = ThetaEstimator()
+            theta_report = theta_estimator.estimate(case_results, item_stats)
+            theta_report = UncertaintyEstimator().apply_ci(theta_report, case_results, theta_estimator, item_stats)
+
+            ci_width = theta_report.global_ci_high - theta_report.global_ci_low if (
+                theta_report.global_ci_high is not None and theta_report.global_ci_low is not None
+            ) else 999.0
+
+            if ci_width < settings.THETA_CI_STOP_WIDTH:
+                logger.info(
+                    "v15 CI-width early stopping triggered",
+                    ci_width=round(ci_width, 3),
+                    threshold=settings.THETA_CI_STOP_WIDTH,
+                    cases_run=total_cases,
+                )
+                return True, features_cache, sims_cache, scorecard_cache
+        except Exception as e:
+            logger.debug("CI-width early stopping check failed (non-blocking)", error=str(e))
+
     # Require at least 6 cases before the threshold check
     if len(case_results) < 6:
         return False, features_cache, sims_cache, scorecard_cache

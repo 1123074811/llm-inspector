@@ -1,0 +1,78 @@
+# judge_registry.yaml — v15 Phase 9: Judge method registry
+# Each entry documents input/output schema, applicable question types,
+# known biases, and literature references.
+
+exact_match:
+  name: Exact Match
+  mode: rule
+  description: "Compare output to expected answer string exactly (after normalization)"
+  input_schema: { expected: "str", actual: "str" }
+  output_schema: { passed: "bool", confidence: "float (0 or 1)" }
+  applicable_types: [multiple_choice, short_answer, cloze]
+  known_biases: ["Case sensitivity without normalization", "Whitespace sensitivity"]
+  references: ["SQuAD 1.1 (Rajpurkar et al. 2016)"]
+
+regex:
+  name: Regex Match
+  mode: rule
+  description: "Match output against a regular expression pattern"
+  input_schema: { pattern: "str", actual: "str", flags: "str (optional)" }
+  output_schema: { passed: "bool", confidence: "float" }
+  applicable_types: [multiple_choice, short_answer, cloze, code]
+  known_biases: ["Overly permissive patterns", "Unicode normalization issues"]
+  references: ["IEEE POSIX regex standard"]
+
+numeric_tolerance:
+  name: Numeric Tolerance
+  mode: rule
+  description: "Compare numeric output within tolerance (absolute or relative)"
+  input_schema: { expected: "float", actual: "float", tolerance: "float", unit: "str (optional)" }
+  output_schema: { passed: "bool", confidence: "float (0 or 1)", delta: "float" }
+  applicable_types: [math, physics, numeric_reasoning]
+  known_biases: ["Unit conversion assumptions", "Significant figure handling"]
+  references: ["NIST SP 330-2019 (SI Brochure)"]
+
+semantic_v2:
+  name: Semantic Similarity v2
+  mode: llm
+  description: "Use LLM-as-Judge to evaluate semantic equivalence"
+  input_schema: { expected: "str", actual: "str", rubric: "str (optional)" }
+  output_schema: { passed: "bool", confidence: "float (0-1)", reasoning: "str" }
+  applicable_types: [open_ended, reasoning, long_answer]
+  known_biases: ["LLM leniency bias", "Position bias (preferring longer answers)",
+                  "Self-enhancement bias (LLM prefers own style)"]
+  references: ["Zheng et al. (2023) 'Judging LLM-as-a-Judge'",
+               "Liu et al. (2023) 'Position bias in LLM evaluation'"]
+
+nli_entailment:
+  name: NLI Entailment
+  mode: nli
+  description: "Use sentence-transformers NLI model to check if expected entails actual"
+  input_schema: { premise: "str", hypothesis: "str" }
+  output_schema: { passed: "bool", confidence: "float (0-1)", entailment_score: "float" }
+  applicable_types: [open_ended, reasoning, factual]
+  known_biases: ["Local NLI model may miss domain-specific knowledge",
+                  "Shorter hypotheses favored"]
+  references: ["Reimers & Gurevych (2019) 'Sentence-BERT'",
+               "Bowman et al. (2015) 'SNLI corpus'"]
+
+kg_lookup:
+  name: Knowledge Graph Lookup
+  mode: kg
+  description: "Verify factual claims via DBpedia/Wikidata SPARQL queries"
+  input_schema: { claim: "str", subject: "str", property: "str" }
+  output_schema: { passed: "bool", confidence: "float", evidence_uri: "str (optional)" }
+  applicable_types: [factual, knowledge, entity_recognition]
+  known_biases: ["KG coverage gaps for recent events", "Entity disambiguation errors"]
+  references: ["DBpedia SPARQL Endpoint", "Wikidata Query Service",
+               "SPARQL 1.1 W3C Recommendation"]
+
+code_execution:
+  name: Code Execution
+  mode: rule
+  description: "Execute generated code and verify output against expected"
+  input_schema: { code: "str", language: "str", test_cases: "list" }
+  output_schema: { passed: "bool", confidence: "float (0 or 1)", stdout: "str", stderr: "str" }
+  applicable_types: [coding, programming]
+  known_biases: ["Sandbox restrictions", "Runtime dependency availability"]
+  references: ["SWE-bench (Jimenez et al. 2024)"]

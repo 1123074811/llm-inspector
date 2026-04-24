@@ -1,6 +1,6 @@
 {
   "version": "v15.0.0-phase2",
-  "phases_complete": ["phase0", "phase1", "phase2", "phase3", "phase4-bugs", "phase5", "phase6", "phase12", "phase13"],
+  "phases_complete": ["phase0", "phase1", "phase2", "phase3", "phase4-bugs", "phase5", "phase6", "phase7", "phase8", "phase9", "phase10", "phase11", "phase12", "phase13"],
   "built_at": "2026-04-24T00:00:00Z",
   "changelog": "https://github.com/llm-inspector/CHANGELOG.md"
 }

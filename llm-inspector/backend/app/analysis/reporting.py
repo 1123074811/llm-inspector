@@ -680,6 +680,9 @@ class ReportBuilder:
         # Phase B: token ROI billing for cost/benefit transparency
         report["token_roi"] = self._build_token_roi(case_results)
 
+        # v15 Phase 10: Token audit — aggregate token metrics with cache & budget info
+        report["token_audit"] = self._build_token_audit(case_results, predetect)
+
         return report
 
     @staticmethod
@@ -730,6 +733,54 @@ class ReportBuilder:
                 "average_roi": round(avg_roi, 6),
             },
             "per_case": rows,
+        }
+
+    @staticmethod
+    def _build_token_audit(
+        case_results: list[CaseResult],
+        predetect: PreDetectionResult | None,
+    ) -> dict:
+        """v15 Phase 10: Build token audit with phase breakdown, cache metrics, budget."""
+        total_tokens = 0
+        predetect_tokens = 0
+        testing_tokens = 0
+        phase_tokens: dict[str, int] = {}
+        per_category: dict[str, int] = {}
+
+        for r in case_results:
+            case_tokens = 0
+            for s in r.samples:
+                t = s.response.usage_total_tokens
+                if isinstance(t, (int, float)) and t > 0:
+                    case_tokens += int(t)
+            total_tokens += case_tokens
+            testing_tokens += case_tokens
+
+            cat = r.case.category or "unknown"
+            per_category[cat] = per_category.get(cat, 0) + case_tokens
+
+        # Predetect token usage
+        if predetect:
+            predetect_tokens = predetect.total_tokens_used or 0
+
+        # Try to get cache metrics from the global cache strategy
+        cache_metrics = None
+        try:
+            from app.runner.cache_strategy import cache_strategy
+            cache_metrics = cache_strategy.snapshot().to_dict()
+        except Exception:
+            pass
+
+        # Phase breakdown
+        phase_tokens["predetect"] = predetect_tokens
+        phase_tokens["testing"] = testing_tokens
+        phase_tokens["total"] = total_tokens + predetect_tokens
+
+        return {
+            "phase_breakdown": phase_tokens,
+            "per_category": per_category,
+            "cache_metrics": cache_metrics,
+            "early_stop_info": None,  # Populated by pipeline if early stop triggered
         }
 
     def _build_evidence_chain(

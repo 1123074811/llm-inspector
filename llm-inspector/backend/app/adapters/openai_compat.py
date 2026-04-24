@@ -204,6 +204,13 @@ class OpenAICompatibleAdapter:
         return hashlib.sha256(key_src.encode()).hexdigest()
 
     def _get_cache(self, key: str) -> LLMResponse | None:
+        # v15 Phase 10: delegate to cache_strategy for metrics tracking
+        try:
+            from app.runner.cache_strategy import cache_strategy
+            return cache_strategy.get(key)
+        except Exception:
+            pass
+        # Fallback: direct DB query
         try:
             conn = get_conn()
             row = conn.execute(
@@ -220,9 +227,16 @@ class OpenAICompatibleAdapter:
     def _save_cache(self, key: str, resp: LLMResponse, ttl_hours: int = 24) -> None:
         if not resp.ok or resp.error_type:
             return
+        # v15 Phase 10: delegate to cache_strategy for metrics tracking
+        try:
+            from app.runner.cache_strategy import cache_strategy
+            cache_strategy.set(key, resp)
+            return
+        except Exception:
+            pass
+        # Fallback: direct DB write
         try:
             conn = get_conn()
-            # Calculate expiry (naive string comparison OK for ISO)
             from datetime import datetime, timedelta, timezone
             expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
             conn.execute(

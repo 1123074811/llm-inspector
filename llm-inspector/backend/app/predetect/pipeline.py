@@ -58,6 +58,12 @@ from app.predetect.indirect_injection import Layer16IndirectInject     # Layer 1
 # v14 Phase 3: Identity Exposure
 from app.predetect.identity_exposure import Layer17IdentityExposure   # Layer 17 slot
 
+# v15 Phase 7: Enhanced wrapper detection layers (Deep mode only)
+from app.predetect.layer_l20_self_paradox import Layer20SelfParadox
+from app.predetect.layer_l21_multistep_drift import Layer21MultiStepDrift
+from app.predetect.layer_l22_prompt_reconstruct import Layer22PromptReconstruct
+from app.predetect.layer_l23_adversarial_tools import Layer23AdversarialTools
+
 logger = get_logger(__name__)
 
 
@@ -391,6 +397,50 @@ class PreDetectionPipeline:
                 )
                 layer_results.append(r19)
                 _write_predetect_trace(run_id, r19_dict)
+
+                # v15 Phase 7: Enhanced wrapper detection layers (L20-L23, Deep mode only)
+                # L20 — Context Self-Report Paradox
+                _report_progress("Layer20/SelfParadox")
+                logger.info("PreDetect Layer20: Self-report paradox", model=model_name)
+                try:
+                    r20 = Layer20SelfParadox().run(adapter, model_name)
+                    layer_results.append(r20)
+                    total_tokens += r20.tokens_used
+                    self._log_layer_result("Layer20/SelfParadox", r20)
+                except Exception as e:
+                    logger.warning("Layer20 failed", error=str(e))
+
+                # L21 — Multi-Step Identity Drift
+                _report_progress("Layer21/MultiStepDrift")
+                logger.info("PreDetect Layer21: Multi-step identity drift", model=model_name)
+                try:
+                    r21 = Layer21MultiStepDrift().run(adapter, model_name)
+                    layer_results.append(r21)
+                    total_tokens += r21.tokens_used
+                    self._log_layer_result("Layer21/MultiStepDrift", r21)
+                except Exception as e:
+                    logger.warning("Layer21 failed", error=str(e))
+
+                # L22 — System Prompt Reconstruction (passive, zero tokens)
+                _report_progress("Layer22/PromptReconstruct")
+                logger.info("PreDetect Layer22: Prompt reconstruction", model=model_name)
+                try:
+                    r22 = Layer22PromptReconstruct().run(adapter, model_name, run_id=run_id)
+                    layer_results.append(r22)
+                    self._log_layer_result("Layer22/PromptReconstruct", r22)
+                except Exception as e:
+                    logger.warning("Layer22 failed", error=str(e))
+
+                # L23 — Adversarial Tool Use Probe
+                _report_progress("Layer23/AdversarialTools")
+                logger.info("PreDetect Layer23: Adversarial tool use", model=model_name)
+                try:
+                    r23 = Layer23AdversarialTools().run(adapter, model_name)
+                    layer_results.append(r23)
+                    total_tokens += r23.tokens_used
+                    self._log_layer_result("Layer23/AdversarialTools", r23)
+                except Exception as e:
+                    logger.warning("Layer23 failed", error=str(e))
 
         # Merge all layers
         best = max(layer_results, key=lambda r: r.confidence)

@@ -227,17 +227,50 @@ def _check_auth_and_probe(base_url: str, api_key: str, model_name: str,
             pass
         code = _http_status_to_error_code(e.code, raw_body)
         return make_error(code, raw_status=e.code, raw_body=raw_body), {}, f"HTTP {e.code}"
+    except urllib.error.URLError as e:
+        msg = str(e.reason) if hasattr(e, "reason") else str(e)
+        msg_lower = msg.lower()
+        if "timed out" in msg_lower or "timeout" in msg_lower:
+            return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=msg), {}, msg
+        if "connection refused" in msg_lower or "connection reset" in msg_lower:
+            return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=msg), {}, msg
+        if "dns" in msg_lower or "name resolution" in msg_lower or "getaddrinfo" in msg_lower:
+            return make_error(ErrorCode.E_NET_DNS_FAIL, raw_body=msg), {}, msg
+        if "ssl" in msg_lower or "certificate" in msg_lower or "tls" in msg_lower:
+            return make_error(ErrorCode.E_TLS_INVALID, raw_body=msg), {}, msg
+        return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=msg), {}, msg
     except socket.timeout as e:
         return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=str(e) or f"timed out after {timeout}s"), {}, f"timeout after {timeout}s"
     except ConnectionRefusedError as e:
         return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=str(e)), {}, str(e)
+    except ConnectionResetError as e:
+        return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=str(e)), {}, str(e)
     except socket.gaierror as e:
         return make_error(ErrorCode.E_NET_DNS_FAIL, raw_body=str(e)), {}, str(e)
+    except OSError as e:
+        msg = str(e)
+        msg_lower = msg.lower()
+        if "ssl" in msg_lower or "cert" in msg_lower:
+            return make_error(ErrorCode.E_TLS_INVALID, raw_body=msg), {}, msg
+        if "refused" in msg_lower or "reset" in msg_lower:
+            return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=msg), {}, msg
+        if "timeout" in msg_lower:
+            return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=msg), {}, msg
+        return make_error(ErrorCode.E_UNKNOWN, raw_body=msg), {}, msg
     except Exception as e:
         return make_error(ErrorCode.E_UNKNOWN, raw_body=str(e)), {}, str(e)
 
 
 def _http_status_to_error_code(status: int, body: str) -> ErrorCode:
+    if status == 400:
+        # Some providers return 400 instead of 401 for auth errors
+        body_lower = body.lower()
+        if any(kw in body_lower for kw in ("auth", "api_key", "api key", "token", "bearer",
+                                            "unauthorized", "invalid", "secret")):
+            return ErrorCode.E_AUTH_INVALID_KEY
+        if any(kw in body_lower for kw in ("model", "not found", "not_found", "deployment")):
+            return ErrorCode.E_MODEL_NOT_FOUND
+        return ErrorCode.E_UNKNOWN
     if status == 401:
         return ErrorCode.E_AUTH_INVALID_KEY
     if status == 403:

@@ -82,7 +82,7 @@ from app.handlers.v14_handlers import (
     handle_circuit_breaker_history,
 )
 from app.handlers.preflight_handlers import handle_get_preflight_result
-from app.handlers.v15_handlers import handle_get_evidence_ledger, handle_get_model_card_diff
+from app.handlers.v15_handlers import handle_get_evidence_ledger, handle_get_model_card_diff, handle_token_audit, handle_cache_stats, handle_evict_expired_cache
 
 logger = get_logger(__name__)
 
@@ -200,6 +200,11 @@ ROUTES: list[tuple[str, str, callable]] = [
     # -- v15 namespace ----
     ("GET",    r"^/api/v15/health$",                            _handle_v15_health),
     ("GET",    r"^/api/v15/runs/[^/]+/preflight$",              handle_get_preflight_result),
+    ("GET",    r"^/api/v15/runs/[^/]+/evidence-ledger$",        handle_get_evidence_ledger),
+    ("GET",    r"^/api/v15/runs/[^/]+/model-card-diff$",        handle_get_model_card_diff),
+    ("GET",    r"^/api/v15/runs/[^/]+/token-audit$",            handle_token_audit),
+    ("GET",    r"^/api/v15/cache-stats$",                       handle_cache_stats),
+    ("POST",   r"^/api/v15/cache/evict$",                       handle_evict_expired_cache),
 ]
 
 

@@ -82,3 +82,65 @@ def handle_get_model_card_diff(path: str, qs: dict, body: dict) -> dict:
     except Exception as e:
         logger.error("Error building model card diff", run_id=run_id, error=str(e))
         return {"status": 500, "body": {"error": str(e)}}
+
+
+def handle_token_audit(path: str, qs: dict, body: dict) -> dict:
+    """GET /api/v15/runs/{id}/token-audit — v15 Phase 10: Token efficiency audit."""
+    parts = path.split("/")
+    run_id = parts[5] if len(parts) > 5 else None
+    if not run_id:
+        return {"status": 400, "body": {"error": "run_id required"}}
+
+    run = repo.get_run(run_id)
+    if not run:
+        return {"status": 404, "body": {"error": "Run not found"}}
+
+    try:
+        report = repo.get_report(run_id)
+        if not report:
+            return {"status": 200, "body": {"run_id": run_id, "token_audit": None,
+                                            "note": "Report not yet generated"}}
+
+        details = report.get("details", {}) if isinstance(report, dict) else {}
+        token_audit = None
+        if isinstance(details, dict):
+            token_audit = details.get("token_audit")
+
+        # Also fetch cache metrics from the global cache strategy
+        cache_metrics = None
+        try:
+            from app.runner.cache_strategy import cache_strategy
+            cache_metrics = cache_strategy.snapshot().to_dict()
+        except Exception:
+            pass
+
+        return {"status": 200, "body": {
+            "run_id": run_id,
+            "token_audit": token_audit,
+            "cache_metrics": cache_metrics,
+        }}
+    except Exception as e:
+        logger.error("Error fetching token audit", run_id=run_id, error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
+
+
+def handle_cache_stats(path: str, qs: dict, body: dict) -> dict:
+    """GET /api/v15/cache-stats — v15 Phase 10: Global cache strategy metrics."""
+    try:
+        from app.runner.cache_strategy import cache_strategy
+        metrics = cache_strategy.snapshot()
+        return {"status": 200, "body": metrics.to_dict()}
+    except Exception as e:
+        logger.error("Error fetching cache stats", error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
+
+
+def handle_evict_expired_cache(path: str, qs: dict, body: dict) -> dict:
+    """POST /api/v15/cache/evict — Evict expired cache entries."""
+    try:
+        from app.runner.cache_strategy import cache_strategy
+        removed = cache_strategy.evict_expired()
+        return {"status": 200, "body": {"evicted": removed}}
+    except Exception as e:
+        logger.error("Error evicting cache", error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
