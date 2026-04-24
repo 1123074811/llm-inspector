@@ -132,6 +132,9 @@ function showPage(name) {
   if (name === 'benchmarks') loadBaselines();
   if (name === 'leaderboard') loadLeaderboard();
   if (_pollTimer && name !== 'task') { clearInterval(_pollTimer); _pollTimer = null; }
+  // Close the SSE connection when leaving the task page so it doesn't hold
+  // the server's thread and block subsequent API requests.
+  if (name !== 'task' && _eventSource) { _eventSource.close(); _eventSource = null; }
 }
 
 async function loadLeaderboard(offset = 0) {
@@ -224,14 +227,24 @@ async function loadLeaderboard(offset = 0) {
 
 // ── API helpers ────────────────────────────────────────────────────────────
 
-async function api(method, path, body) {
+async function api(method, path, body, timeoutMs = 15000) {
   const opts = { method, headers: {'Content-Type':'application/json'} };
   if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(API + path, opts);
-  const text = await r.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = {error: text}; }
-  return { ok: r.ok, status: r.status, data };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  opts.signal = controller.signal;
+  try {
+    const r = await fetch(API + path, opts);
+    clearTimeout(timer);
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = {error: text}; }
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    clearTimeout(timer);
+    const msg = e.name === 'AbortError' ? '请求超时，请检查服务器状态' : `网络错误: ${e.message}`;
+    return { ok: false, status: 0, data: { error: msg } };
+  }
 }
 
 // ── Form validation ────────────────────────────────────────────────────────
@@ -318,7 +331,7 @@ function openTask(runId) {
 }
 
 function setupSSE(runId) {
-  _eventSource = new EventSource(API + '/api/v8/runs/' + runId + '/stream');
+  _eventSource = new EventSource(API + '/api/v10/runs/' + runId + '/logs/stream');
   _eventSource.onmessage = (e) => {
     try {
       const log = JSON.parse(e.data);
@@ -368,14 +381,20 @@ async function pollTask(runId) {
   if (status === 'pre_detected') {
     clearInterval(_pollTimer); _pollTimer = null;
   }
+  // preflight_failed / suspended / cancelled: terminal, stop polling
+  if (['preflight_failed','suspended','cancelled'].includes(status)) {
+    clearInterval(_pollTimer); _pollTimer = null;
+  }
 }
 
 function renderStatusBadge(status) {
   const labels = {
     queued:'排队中', pre_detecting:'预检测中', pre_detected:'预检测完成',
-    running:'测试执行中', completed:'已完成', partial_failed:'部分失败', failed:'失败'
+    running:'测试执行中', completed:'已完成', partial_failed:'部分失败', failed:'失败',
+    preflight_running:'连接预检中', preflight_failed:'连接预检失败'
   };
-  const cls = {completed:'badge-green', failed:'badge-red', partial_failed:'badge-amber'};
+  const cls = {completed:'badge-green', failed:'badge-red', partial_failed:'badge-amber',
+               preflight_failed:'badge-red'};
   const c = cls[status] || 'badge-blue';
   return `<span class="badge ${c}">${labels[status]||status}</span>`;
 }
@@ -384,7 +403,7 @@ function renderTaskActions(runId, status, baselineId, data) {
   const el = document.getElementById('task-actions');
   if (!el) return;
 
-  const canCancel = ['queued','pre_detecting','running'].includes(status);
+  const canCancel = ['queued','preflight_running','pre_detecting','running'].includes(status);
   const canContinue = status === 'pre_detected';
   const canRetry = ['failed','partial_failed'].includes(status);
   const canExport = ['completed','partial_failed'].includes(status);
@@ -411,14 +430,15 @@ function renderTaskActions(runId, status, baselineId, data) {
 }
 
 async function cancelRun(runId) {
-  if (!confirm('确认停止当前任务？已发出的请求可能仍会完成，但会尽快停止后续请求。')) return;
-  const {ok, data} = await api('POST', `/api/v1/runs/${runId}/cancel`);
-  if (!ok) {
-    alert('停止失败: ' + (data.error || 'unknown error'));
-    return;
-  }
-  setNavStatus('cancelling');
-  pollTask(runId);
+  showConfirmModal('确认停止当前任务？已发出的请求可能仍会完成，但会尽快停止后续请求。', async () => {
+    const {ok, data} = await api('POST', `/api/v1/runs/${runId}/cancel`);
+    if (!ok) {
+      showToast('停止失败: ' + (data.error || 'unknown error'), 'error');
+      return;
+    }
+    setNavStatus('cancelling');
+    pollTask(runId);
+  });
 }
 
 async function retryRun(runId) {
@@ -655,7 +675,9 @@ function renderTaskProgress(data, responses = []) {
   animateProcessConsole(prog, data.status, data.predetect_result, responses);
 
   const pre = data.predetect_result;
+  const pf = data.preflight_report || null;
 
+  const preflightHtml = pf ? renderPreflightCard(pf) : '';
   const preHtml = pre ? renderPredetectCard(pre, data.run_id, data.status) : '';
   const progressHtml = prog.total > 0 ? `
     <div class="card">
@@ -687,6 +709,7 @@ function renderTaskProgress(data, responses = []) {
         </div>
 
         ${renderStageExperience(data, prog, pct, {includeConsole:false})}
+        ${preflightHtml}
         ${preHtml}
         ${progressHtml}
         ${errorHtml}
@@ -798,9 +821,18 @@ function renderStageExperience(data, prog, pct, opts = {includeConsole:true}) {
 
   const stageItems = stageNames.map((name, idx) => {
     const state = idx < stage ? 'done' : idx === stage ? 'active' : '';
+    const step1Text = data.status === 'preflight_running' ? '连接预检中...'
+      : data.status === 'preflight_failed' ? `预检失败: ${data.error_message || '连接异常'}`
+      : `任务已提交${data.created_at ? ' · ' + fmtTime(data.created_at) : ''}`;
     const texts = [
-      `任务已提交${data.created_at ? ' · ' + fmtTime(data.created_at) : ''}`,
-      data.predetect_result?.identified_as ? `识别: ${data.predetect_result.identified_as}` : '执行指纹探测',
+      step1Text,
+      (() => {
+        const cl = data.predetect_result?.current_layer || '';
+        const pm = cl.match(/^parallel_([^(]+)\((\d+)\/(\d+)\)$/);
+        if (pm) return `⚡ 并行探测 ${pm[2]}/${pm[3]} 层`;
+        if (data.predetect_result?.identified_as) return `识别: ${data.predetect_result.identified_as}`;
+        return cl ? `${cl.split('/')[1] || cl}` : '执行指纹探测';
+      })(),
       prog.total ? `${prog.completed}/${prog.total} 用例` : '等待执行',
       ['completed','partial_failed'].includes(data.status) ? '报告已生成' : '等待汇总',
     ];
@@ -822,7 +854,11 @@ function renderStageExperience(data, prog, pct, opts = {includeConsole:true}) {
       <div class="stage-head">
         <div>
           <div class="stage-title">检测过程可视化</div>
-          <div class="stage-sub">当前阶段：${escHtml(stageNames[stage] || '分析报告')} · 进度 ${pct}%</div>
+          <div class="stage-sub">当前阶段：${escHtml(
+            data.status === 'preflight_running' ? '连接预检' :
+            data.status === 'preflight_failed'  ? '预检失败' :
+            stageNames[stage] || '分析报告'
+          )} · 进度 ${pct}%</div>
         </div>
         <div>${renderStatusBadge(data.status)}</div>
       </div>
@@ -832,7 +868,7 @@ function renderStageExperience(data, prog, pct, opts = {includeConsole:true}) {
 }
 
 function stageFromStatus(status, prog, pre) {
-  if (status === 'queued') return 0;
+  if (status === 'queued' || status === 'preflight_running' || status === 'preflight_failed') return 0;
   if (status === 'pre_detecting' || status === 'pre_detected') return 1;
   if (status === 'running' || ((prog?.completed || 0) > 0 && !['completed','partial_failed','failed'].includes(status))) return 2;
   if (['completed','partial_failed','failed'].includes(status)) return 3;
@@ -848,12 +884,16 @@ function animateProcessConsole(prog, status, pre, responses = []) {
   if (status !== prev.phase) {
     const phaseLabel = {
       queued: '排队中',
+      preflight_running: '连接预检中',
+      preflight_failed: '连接预检失败',
       pre_detecting: '预检测中',
       pre_detected: '预检测完成',
       running: '能力测试中',
       completed: '已完成',
       partial_failed: '部分失败',
       failed: '失败',
+      suspended: '已暂停',
+      cancelled: '已取消',
     };
     pushConsoleSeparator('阶段切换');
     pushConsole(`[阶段] ${phaseLabel[status] || status}`, 'meta');
@@ -881,8 +921,30 @@ function animateProcessConsole(prog, status, pre, responses = []) {
       'Layer11/ToolCapability': '工具能力',
       'Layer12/MultiTurn': '多轮上下文',
       'Layer13/Adversarial': '对抗分析',
+      'Layer14/Multilingual': '多语言攻击',
+      'Layer15/ASCIIArt': 'ASCII视觉注入',
+      'Layer16/IndirectInject': '间接提示注入',
+      'Layer17/IdentityExposure': '身份暴露分析',
+      'Layer18/TimingSideChannel': '时序侧信道',
+      'Layer19/TokenDistribution': 'Token分布分析',
     };
-    const layerDisplay = layerNames[currentLayer] || currentLayer || '初始化';
+
+    // Detect parallel group progress markers: "parallel_L3_L4_L5(2/3)"
+    let layerDisplay;
+    const parallelMatch = currentLayer.match(/^parallel_([^(]+)\((\d+)\/(\d+)\)$/);
+    if (parallelMatch) {
+      const done = parseInt(parallelMatch[2]);
+      const total = parseInt(parallelMatch[3]);
+      const groupKey = parallelMatch[1]; // e.g. "L3_L4_L5" or "L6b_L16"
+      const groupLabel = groupKey === 'L3_L4_L5'
+        ? '知识+偏好+Tokenizer 并行检测'
+        : groupKey === 'L6b_L16'
+        ? '深度多维探测 并行执行'
+        : `并行组 ${groupKey}`;
+      layerDisplay = `⚡ ${groupLabel} (${done}/${total} 已完成)`;
+    } else {
+      layerDisplay = layerNames[currentLayer] || currentLayer || '初始化';
+    }
 
     // Show detailed probe info
     if (currentProbe && prev.lastProbe !== currentProbe) {
@@ -923,9 +985,27 @@ function animateProcessConsole(prog, status, pre, responses = []) {
 
       prev.lastProbe = currentProbe;
     } else if (prev.lastLayer !== currentLayer) {
-      pushConsole(`[预检测] 进入层: ${layerDisplay}`, 'meta');
+      if (parallelMatch) {
+        const done2 = parseInt(parallelMatch[2]);
+        const total2 = parseInt(parallelMatch[3]);
+        if (done2 === 0) {
+          pushConsole(`[预检测] ⚡ 启动并行探测: ${layerDisplay}`, 'meta');
+        } else {
+          pushConsole(`[预检测] ⚡ 并行进度: ${done2}/${total2} 层已完成`, 'meta');
+          // Show new evidence from parallel layers
+          if (evidence && evidence.length > (prev.lastEvidenceCount || 0)) {
+            const newEvs = evidence.slice(prev.lastEvidenceCount || 0);
+            newEvs.forEach(ev => {
+              pushConsole(`  证据: ${ev.substring(0, 80)}${ev.length > 80 ? '...' : ''}`, 'normal');
+            });
+            prev.lastEvidenceCount = evidence.length;
+          }
+        }
+      } else {
+        pushConsole(`[预检测] 进入层: ${layerDisplay}`, 'meta');
+      }
       prev.lastLayer = currentLayer;
-      prev.lastEvidenceCount = 0;
+      prev.lastEvidenceCount = (evidence || []).length;
     }
   }
 
@@ -1014,7 +1094,7 @@ function animateProcessConsole(prog, status, pre, responses = []) {
 
 function pushConsole(line, type = 'normal', tag = '') {
   _consoleLines.push({ text: line, type, tag });
-  if (_consoleLines.length > 160) _consoleLines.shift();
+  if (_consoleLines.length > 3000) _consoleLines.shift();
   updateLogPanel();
 }
 
@@ -1048,66 +1128,207 @@ function renderConsoleLines() {
   return visible.map(l => `<div class="console-line ${l.type === 'typing' ? 'typing' : ''} ${l.type === 'del' ? 'del' : ''} ${l.type === 'sep' ? 'sep' : ''} ${l.type === 'meta' ? 'meta' : ''}">${escHtml(l.text)}</div>`).join('');
 }
 
+// Human-readable layer name lookup
+const _LAYER_NAMES = {
+  'Layer0/HTTP':              'L0 · HTTP 头指纹',
+  'Layer1/SelfReport':        'L1 · 自我报告身份',
+  'Layer2/Identity':          'L2 · 身份探针矩阵',
+  'Layer3/Knowledge':         'L3 · 知识截止验证',
+  'Layer4/Bias':              'L4 · 行为偏好分析',
+  'Layer5/Tokenizer':         'L5 · Tokenizer 指纹',
+  'Layer6/Extraction':        'L6 · 主动提取攻击',
+  'Layer6/Extraction(early-skip)': 'L6 · 主动提取（快速路径）',
+  'Layer6/Extraction(fast-path)':  'L6 · 主动提取（快速路径）',
+  'Layer6b/MultiTurn':        'L6b · 多轮对话探测',
+  'Layer7/Logprobs':          'L7 · Logprobs 指纹',
+  'Layer8/SemanticFP':        'L8 · 语义指纹匹配',
+  'Layer9/AdvExtractionV2':   'L9 · 高级提取攻击 v2',
+  'Layer10/Differential':     'L10 · 差分一致性测试',
+  'Layer11/ToolCapability':   'L11 · 工具能力探测',
+  'Layer12/MultiTurn':        'L12 · 多轮上下文溢出',
+  'Layer13/Adversarial':      'L13 · 对抗性响应分析',
+  'Layer14/Multilingual':     'L14 · 多语言翻译攻击',
+  'Layer15/ASCIIArt':         'L15 · ASCII 艺术视觉注入',
+  'Layer16/IndirectInject':   'L16 · 间接提示注入',
+  'Layer17/IdentityExposure': 'L17 · 真实模型身份暴露',
+  'Layer18/TimingSideChannel':'L18 · 响应时序侧信道',
+  'Layer19/TokenDistribution':'L19 · Token 分布侧信道',
+};
+
 function renderPredetectCard(pre, runId, status) {
-  if (!pre.success && !pre.identified_as) return '';
+  // Always show if there's any data at all (even failed/unidentified runs)
+  if (!pre || (!pre.layer_results?.length && !pre.identified_as && !pre.current_layer)) return '';
+
   const conf = Math.round((pre.confidence || 0) * 100);
   const layers = pre.layer_results || [];
-  const stopLayer = pre.layer_stopped || '全部';
+  const stopLayer = pre.layer_stopped || null;
   const routing = pre.routing_info || {};
 
-  // Routing detail section
+  // ── Summary header ──────────────────────────────────────────────────────────
+  const confColor = conf >= 85 ? '#16a34a' : conf >= 60 ? '#d97706' : '#dc2626';
+  const identText = pre.identified_as
+    ? `<span style="font-size:16px;font-weight:700;color:var(--ink1)">${escHtml(pre.identified_as)}</span>`
+    : `<span style="font-size:14px;color:var(--ink3);font-style:italic">未识别到模型家族</span>`;
+
+  const confBar = `
+    <div style="margin-top:6px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink4);margin-bottom:2px">
+        <span>综合置信度</span><span style="font-weight:600;color:${confColor}">${conf}%</span>
+      </div>
+      <div class="progress-bar" style="height:5px">
+        <div class="progress-fill" style="width:${conf}%;background:${confColor}"></div>
+      </div>
+    </div>`;
+
+  // ── Routing info ─────────────────────────────────────────────────────────────
   let routingHtml = '';
   if (routing.is_routed) {
     routingHtml = `
-      <div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,.6);border-radius:8px;font-size:12px">
-        <div style="font-weight:600;color:var(--ink2);margin-bottom:4px">路由检测</div>
-        <div style="display:flex;gap:20px;flex-wrap:wrap">
-          <div><span style="color:var(--ink4)">声称模型：</span><code>${escHtml(routing.claimed_model || '?')}</code></div>
-          <div><span style="color:var(--ink4)">实际模型：</span><code style="color:var(--red);font-weight:600">${escHtml(routing.returned_model || '?')}</code></div>
+      <div style="margin-top:10px;padding:8px 12px;background:rgba(220,38,38,.07);border:1px solid rgba(220,38,38,.2);border-radius:6px;font-size:12px">
+        <div style="font-weight:600;color:var(--red);margin-bottom:4px">⚠ 路由检测 — 实际模型与声称不符</div>
+        <div style="display:flex;gap:20px;flex-wrap:wrap;color:var(--ink3)">
+          <div>声称：<code style="color:var(--ink2)">${escHtml(routing.claimed_model || '?')}</code></div>
+          <div>实际：<code style="color:var(--red);font-weight:600">${escHtml(routing.returned_model || '?')}</code></div>
+          ${routing.probe_latency_ms ? `<div>延迟：${routing.probe_latency_ms}ms</div>` : ''}
         </div>
-        ${routing.probe_latency_ms ? `<div style="margin-top:4px"><span style="color:var(--ink4)">探针延迟：</span>${routing.probe_latency_ms}ms</div>` : ''}
       </div>`;
   } else if (routing.returned_model) {
     routingHtml = `
       <div style="margin-top:8px;font-size:12px;color:var(--ink3)">
-        实际返回模型：<code>${escHtml(routing.returned_model)}</code>
+        实际返回模型：<code style="color:var(--ink2)">${escHtml(routing.returned_model)}</code>
         ${routing.probe_latency_ms ? ` · 延迟 ${routing.probe_latency_ms}ms` : ''}
       </div>`;
   }
 
-  let evidenceHtml = '';
-  if (layers.length) {
-    const allEvidence = layers.flatMap(l => l.evidence || []);
-    evidenceHtml = `<ul class="evidence-list" style="margin-top:8px">
-      ${allEvidence.slice(0, 6).map(e => `<li>${escHtml(e)}</li>`).join('')}
-    </ul>`;
+  // ── Per-layer breakdown ──────────────────────────────────────────────────────
+  let layersHtml = '';
+  if (layers.length > 0) {
+    const layerRows = layers.map(l => {
+      const lConf = Math.round((l.confidence || 0) * 100);
+      const lColor = lConf >= 85 ? '#16a34a' : lConf >= 50 ? '#d97706' : '#6b7280';
+      const lName = _LAYER_NAMES[l.layer] || escHtml(l.layer || '');
+      const evidence = l.evidence || [];
+      const evHtml = evidence.length
+        ? `<ul style="margin:3px 0 0 12px;padding:0;list-style:disc;font-size:11px;color:var(--ink3)">
+            ${evidence.map(e => `<li style="margin-bottom:1px">${escHtml(String(e).length > 100 ? String(e).slice(0,100)+'…' : e)}</li>`).join('')}
+           </ul>`
+        : '';
+      const tokText = l.tokens_used > 0 ? `<span style="color:var(--ink4);font-size:10px">${l.tokens_used}tok</span>` : '';
+      const confBadge = lConf > 0
+        ? `<span style="font-size:10px;font-weight:600;color:${lColor};min-width:32px;text-align:right">${lConf}%</span>`
+        : `<span style="font-size:10px;color:var(--ink4);min-width:32px;text-align:right">-</span>`;
+      const idText = l.identified_as
+        ? `<span style="font-size:10px;background:rgba(59,130,246,.1);color:#2563eb;padding:1px 5px;border-radius:3px;margin-left:4px">${escHtml(l.identified_as)}</span>`
+        : '';
+      return `
+        <div style="padding:5px 0;border-bottom:1px solid var(--rule)">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:12px;font-weight:600;color:var(--ink2);flex:1">${lName}${idText}</span>
+            ${tokText}
+            ${confBadge}
+          </div>
+          ${evHtml}
+        </div>`;
+    }).join('');
+
+    // Note about skipped layers
+    const modeNote = (status !== 'pre_detecting') ? (() => {
+      const deepOnlyCount = 20 - 7; // L7-L19 = 13 layers only in deep mode
+      const ranCount = layers.length;
+      if (ranCount < 7) {
+        const stopNote = stopLayer && stopLayer !== 'null' && stopLayer !== 'None'
+          ? `（置信度阈值已在 ${escHtml(String(stopLayer))} 达到，提前停止）`
+          : '（置信度阈值提前达到）';
+        return `<div style="font-size:11px;color:var(--ink4);margin-top:6px;padding:4px 8px;background:var(--bg2);border-radius:4px">
+          ⚡ 共运行 ${ranCount} 层 ${stopNote}。L7-L19 仅在 <strong>Deep 模式</strong>下运行。
+        </div>`;
+      }
+      return `<div style="font-size:11px;color:var(--ink4);margin-top:6px;padding:4px 8px;background:var(--bg2);border-radius:4px">
+        ⚡ 共运行 ${ranCount} 层。L7-L19（深度对抗层）仅在 <strong>Deep 模式</strong>下启用。
+      </div>`;
+    })() : '';
+
+    layersHtml = `
+      <div style="margin-top:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--ink4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">层级明细</div>
+        ${layerRows}
+        ${modeNote}
+      </div>`;
   }
 
-  // Action buttons: show when pre_detected and testing was skipped
+  // ── Action buttons ────────────────────────────────────────────────────────────
   let actionHtml = '';
   if (status === 'pre_detected' && pre.should_proceed_to_testing === false) {
     actionHtml = `
-      <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
-        <button class="btn primary" style="padding:8px 16px;font-size:13px" data-action="continueFullTest" data-run-id="${escAttr(runId)}">
-          继续完整测试
-        </button>
-        <button class="btn" style="padding:8px 16px;font-size:13px" data-action="skipTesting" data-run-id="${escAttr(runId)}">
-          跳过测试，直接出报告
-        </button>
-        <span style="font-size:11px;color:var(--ink4)">完整测试将获得详细评分、相似度对比等数据</span>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn primary" style="padding:8px 16px;font-size:13px" data-action="continueFullTest" data-run-id="${escAttr(runId)}">继续完整测试</button>
+        <button class="btn" style="padding:8px 16px;font-size:13px" data-action="skipTesting" data-run-id="${escAttr(runId)}">跳过测试，直接出报告</button>
+        <span style="font-size:11px;color:var(--ink4)">完整测试可获得详细评分和相似度对比</span>
       </div>`;
-  } else if (pre.should_proceed_to_testing === false && !['pre_detected'].includes(status)) {
-    actionHtml = '<div style="margin-top:8px;font-size:11px;color:var(--blue);font-weight:600">✓ 置信度充足，已跳过完整能力测试</div>';
+  } else if (pre.should_proceed_to_testing === false && status !== 'pre_detected') {
+    actionHtml = '<div style="margin-top:8px;font-size:11px;color:var(--green,#16a34a);font-weight:600">✓ 置信度充足，已跳过完整能力测试</div>';
   }
 
   return `
     <div class="predetect-card">
-      <div class="card-label" style="color:var(--blue);opacity:.7">预检测结果 · Layer ${escHtml(String(stopLayer))}</div>
-      <div class="predetect-id">${pre.identified_as ? escHtml(pre.identified_as) : '未识别'}</div>
-      <div class="predetect-conf">置信度 ${conf}% · 消耗约 ${pre.total_tokens_used || 0} tokens</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px">
+        <div>
+          <div class="card-label" style="color:var(--blue);opacity:.7;margin-bottom:4px">预检测指纹分析 · ${layers.length} 层运行</div>
+          ${identText}
+        </div>
+        <div style="font-size:11px;color:var(--ink4);text-align:right">
+          消耗 ${pre.total_tokens_used || 0} tokens
+        </div>
+      </div>
+      ${confBar}
       ${routingHtml}
-      ${evidenceHtml}
+      ${layersHtml}
       ${actionHtml}
+    </div>`;
+}
+
+function renderPreflightCard(pf) {
+  if (!pf) return '';
+  const steps = pf.steps || [];
+  const passed = pf.passed;
+  const totalMs = pf.total_duration_ms != null ? Math.round(pf.total_duration_ms) : null;
+
+  const stepNames = { A1:'输入校验', A2:'网络连通', A3:'鉴权探测', A4:'响应格式', A5:'能力探测' };
+  const stepsHtml = steps.map(s => {
+    const icon = s.passed ? '✅' : (s.notes && s.notes.startsWith('skipped') ? '⏭' : '❌');
+    const dur = s.duration_ms != null && s.duration_ms > 0 ? `<span style="color:var(--ink4);font-size:11px">${Math.round(s.duration_ms)}ms</span>` : '';
+    const label = stepNames[s.step] || s.name || s.step;
+    let errHtml = '';
+    if (s.error) {
+      const e = s.error;
+      errHtml = `<div style="margin-top:3px;font-size:11px;color:var(--red)">${escHtml(e.user_message_zh || e.message || e.code || '')}</div>`;
+    } else if (s.notes && !s.notes.startsWith('skipped')) {
+      errHtml = `<div style="margin-top:2px;font-size:11px;color:var(--ink4)">${escHtml(s.notes)}</div>`;
+    }
+    return `
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--rule)">
+        <span style="font-size:14px;line-height:1.4">${icon}</span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:12px;font-weight:600;color:var(--ink2)">${escHtml(s.step)} · ${escHtml(label)}</span>
+            ${dur}
+          </div>
+          ${errHtml}
+        </div>
+      </div>`;
+  }).join('');
+
+  const headerColor = passed ? 'var(--green,#16a34a)' : 'var(--red,#dc2626)';
+  const headerText = passed ? '✅ 连接预检通过' : '❌ 连接预检失败';
+  const totalText = totalMs != null ? ` · ${totalMs}ms` : '';
+
+  return `
+    <div class="card" id="preflight-result-card" style="border-left:3px solid ${headerColor}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:700;color:${headerColor}">${headerText}${escHtml(totalText)}</div>
+        <div style="font-size:11px;color:var(--ink4)">${pf.checked_at ? fmtTime(pf.checked_at) : ''}</div>
+      </div>
+      ${stepsHtml}
     </div>`;
 }
 
@@ -2142,6 +2363,29 @@ function showToast(message, type = 'info', duration = 3500) {
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
 }
 
+// v15 Phase 12: Modal confirmation (replaces browser confirm())
+function showConfirmModal(message, onConfirm, onCancel) {
+  const existing = document.getElementById('v15-confirm-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'v15-confirm-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:8px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.2)">
+      <p style="margin:0 0 16px;font-size:15px;color:#1e293b">${message}</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="v15-confirm-cancel" style="padding:8px 16px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">取消</button>
+        <button id="v15-confirm-ok" style="padding:8px 16px;border:none;border-radius:6px;background:#ef4444;color:#fff;cursor:pointer;font-size:13px">确认</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById('v15-confirm-ok').onclick = () => { modal.remove(); onConfirm && onConfirm(); };
+  document.getElementById('v15-confirm-cancel').onclick = () => { modal.remove(); onCancel && onCancel(); };
+  modal.onclick = (e) => { if (e.target === modal) { modal.remove(); onCancel && onCancel(); } };
+}
+
 function escHtml(s) {
   return String(s||'')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -2159,6 +2403,22 @@ function fmtScore(v) {
   else if (n >= 40) color = '#d97706';  // 橙色: 一般
   else color = '#dc2626';               // 红色: 差
   return `<span style="color:${color};font-weight:600">${Math.round(n)}</span>`;
+}
+
+// v15: Data quality label for score fields
+function dataLabel(value, reason) {
+  if (value !== null && value !== undefined) return 'measured';
+  if (reason) return reason;
+  return 'unavailable';
+}
+
+// v15: Render a score with its data label
+function renderScoreWithLabel(value, label) {
+  const formattedScore = fmtScore(value);
+  if (value === null || value === undefined) {
+    return `<span class="score-na" title="${label || 'Not measured'}">${formattedScore}</span>`;
+  }
+  return `<span class="score-measured">${formattedScore}</span>`;
 }
 
 // v6 fix: Render dimension score with null handling

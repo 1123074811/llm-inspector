@@ -9,7 +9,7 @@ import re
 import pathlib
 import urllib.parse
 import zipfile
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from app.core.config import settings
 from app.core.db import init_db
 from app.core.db_migrations import migrate as run_migrations
@@ -81,6 +81,8 @@ from app.handlers.v14_handlers import (
     handle_token_analysis,
     handle_circuit_breaker_history,
 )
+from app.handlers.preflight_handlers import handle_get_preflight_result
+from app.handlers.v15_handlers import handle_get_evidence_ledger, handle_get_model_card_diff
 
 logger = get_logger(__name__)
 
@@ -96,11 +98,28 @@ def handle_sse_logs(path: str, qs: dict, body: dict):
     pass
 
 
+import os as _os
+
+def _load_version_info() -> dict:
+    """Load version info from _data/version.json."""
+    try:
+        _vpath = _os.path.join(_os.path.dirname(__file__), "_data", "version.json")
+        with open(_vpath, "r", encoding="utf-8") as _f:
+            return json.load(_f)
+    except Exception:
+        return {"version": "unknown", "phases_complete": [], "built_at": "unknown"}
+
+
 def _handle_v14_health(path: str, qs: dict, body: dict):
-    """v14 namespace health check — Phase 2 complete, Phase 3 active."""
-    return _json({"status": "ok", "api_version": "v14",
-                  "phases_complete": ["phase1", "phase2", "phase3"],
-                  "note": "v14 Phase 3: Identity Exposure Engine active"})
+    """v14 namespace health check — reads from _data/version.json."""
+    info = _load_version_info()
+    return _json({"status": "ok", "api_version": "v14", **info})
+
+
+def _handle_v15_health(path: str, qs: dict, body: dict):
+    """v15 namespace health check."""
+    info = _load_version_info()
+    return _json({"status": "ok", "api_version": "v15", **info})
 
 
 ROUTES: list[tuple[str, str, callable]] = [
@@ -178,7 +197,32 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v14/runs/[^/]+/predetect-trace$",        handle_predetect_trace),
     ("GET",    r"^/api/v14/runs/[^/]+/token-analysis$",         handle_token_analysis),
     ("GET",    r"^/api/v14/circuit-breaker/history$",           handle_circuit_breaker_history),
+    # -- v15 namespace ----
+    ("GET",    r"^/api/v15/health$",                            _handle_v15_health),
+    ("GET",    r"^/api/v15/runs/[^/]+/preflight$",              handle_get_preflight_result),
 ]
+
+
+# Benign client-disconnect errors that should not pollute stderr.
+_IGNORED_CLIENT_ERRORS = (
+    ConnectionAbortedError,   # WinError 10053 — client closed before server read
+    ConnectionResetError,     # WinError 10054 — client reset the connection
+    BrokenPipeError,          # Linux equivalent of the above
+)
+
+
+class InspectorServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that silently swallows client-disconnect errors."""
+
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, _IGNORED_CLIENT_ERRORS):
+            return  # client went away — not a server error
+        # Also swallow OSError wrapping errno 10053/10054/32/104
+        if isinstance(exc, OSError) and exc.errno in (10053, 10054, 32, 104):
+            return
+        super().handle_error(request, client_address)
 
 
 class InspectorHandler(BaseHTTPRequestHandler):
@@ -310,12 +354,38 @@ def run_server(host: str = None, port: int = None) -> None:
     from app.tasks.seeder import seed_all
     seed_all()
 
+    # Re-submit any runs that were left in 'queued' state from a previous server session.
+    # This handles the case where the server was restarted while tasks were pending.
+    _resubmit_orphaned_runs()
+
     host = host or settings.HOST
     port = port or settings.PORT
-    server = HTTPServer((host, port), InspectorHandler)
+    # Use InspectorServer (ThreadingHTTPServer subclass) so that:
+    # 1. SSE long-poll connections don't block normal API requests.
+    # 2. Client-disconnect errors (ConnectionAbortedError etc.) are silently swallowed.
+    server = InspectorServer((host, port), InspectorHandler)
     logger.info("Server ready", host=host, port=port,
                 url=f"http://{host}:{port}")
     server.serve_forever()
+
+
+def _resubmit_orphaned_runs() -> None:
+    """Re-submit runs left in 'queued' state from a prior server session."""
+    from app.core.db import get_conn
+    from app.tasks.worker import submit_run
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id FROM test_runs WHERE status = 'queued' ORDER BY created_at ASC"
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        run_id = row["id"]
+        logger.info("Re-submitting orphaned queued run", run_id=run_id)
+        try:
+            submit_run(run_id)
+        except Exception as exc:
+            logger.error("Failed to re-submit orphaned run", run_id=run_id, error=str(exc))
 
 
 def main() -> None:

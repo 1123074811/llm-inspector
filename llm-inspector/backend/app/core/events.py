@@ -64,6 +64,16 @@ class EventKind(str, enum.Enum):
     # PreDetect layer tracing (v14 Phase 5)
     PREDETECT_LAYER_TRACE = "predetect_layer_trace"
 
+    # Preflight (v15)
+    PREFLIGHT_STARTED    = "preflight.started"
+    PREFLIGHT_STEP       = "preflight.step"
+    PREFLIGHT_PASSED     = "preflight.passed"
+    PREFLIGHT_FAILED     = "preflight.failed"
+    # Measurement / evidence (v15)
+    MEASUREMENT_SKIPPED  = "measurement.skipped"
+    EVIDENCE_ADDED       = "authenticity.evidence_added"
+    JUDGE_FALLBACK       = "judge.fallback"
+
 
 # ── Event dataclass ───────────────────────────────────────────────────────────
 

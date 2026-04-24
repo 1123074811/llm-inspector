@@ -1,7 +1,12 @@
 """
-Structured JSON logging — stdlib only.
-logger.info("msg", key=val, ...) style (compatible with structlog API).
+core/logging.py — Structured JSON logging (v15 shim layer).
+
+All runtime logging (get_logger / setup_logging / set_sse_publisher) is
+implemented here.  The v8 StructuredLogger singleton lives in
+core/structured_logger.py and is re-exported for backward compatibility.
 """
+from __future__ import annotations
+
 import json
 import logging
 import sys
@@ -11,13 +16,16 @@ from app.core.config import settings
 # Global SSE publisher (initialized in routes/main)
 _sse_publisher = None
 
-def set_sse_publisher(publisher):
+
+def set_sse_publisher(publisher) -> None:
     """Set the global SSE publisher for real-time logs."""
     global _sse_publisher
     _sse_publisher = publisher
 
+
 class StructuredLogger:
     """Wraps stdlib Logger to accept keyword args like structlog."""
+
     def __init__(self, name: str):
         self._log = logging.getLogger(name)
 
@@ -26,32 +34,32 @@ class StructuredLogger:
             extras = " ".join(f"{k}={v!r}" for k, v in kwargs.items())
             return f"{msg} | {extras}"
         return msg
-    
-    def _publish_sse(self, level: str, msg: str, kwargs: dict):
+
+    def _publish_sse(self, level: str, msg: str, kwargs: dict) -> None:
         if _sse_publisher and "run_id" in kwargs:
             try:
                 _sse_publisher.publish(kwargs["run_id"], {
                     "level": level,
                     "msg": msg,
                     "kwargs": kwargs,
-                    "ts": time.time()
+                    "ts": time.time(),
                 })
             except Exception:
                 pass
 
-    def info(self, msg: str, **kwargs):
+    def info(self, msg: str, **kwargs) -> None:
         self._log.info(self._fmt(msg, kwargs))
         self._publish_sse("info", msg, kwargs)
 
-    def warning(self, msg: str, **kwargs):
+    def warning(self, msg: str, **kwargs) -> None:
         self._log.warning(self._fmt(msg, kwargs))
         self._publish_sse("warning", msg, kwargs)
 
-    def error(self, msg: str, **kwargs):
+    def error(self, msg: str, **kwargs) -> None:
         self._log.error(self._fmt(msg, kwargs))
         self._publish_sse("error", msg, kwargs)
 
-    def debug(self, msg: str, **kwargs):
+    def debug(self, msg: str, **kwargs) -> None:
         self._log.debug(self._fmt(msg, kwargs))
         self._publish_sse("debug", msg, kwargs)
 
@@ -81,3 +89,25 @@ def setup_logging() -> None:
 
 def get_logger(name: str) -> StructuredLogger:
     return StructuredLogger(name)
+
+
+# -- Re-export v8 structured logger for backward compatibility -----------------
+try:
+    from app.core.structured_logger import (  # noqa: F401
+        StructuredLogger as _SL8,
+        get_structured_logger,
+        LogLevel,
+        LogEventType,
+        StructuredLogEntry,
+    )
+except Exception:
+    pass
+
+
+__all__ = [
+    "StructuredLogger",
+    "get_logger",
+    "set_sse_publisher",
+    "setup_logging",
+    "JsonFormatter",
+]

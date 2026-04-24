@@ -1,8 +1,10 @@
-# LLM Inspector v14.0
+# LLM Inspector v15.0
 
-> 套壳检测 · 能力评估 · 数据溯源 · 20层对抗探针 · 真实模型暴露引擎（开发中）
+> 套壳检测 · 能力评估 · 数据溯源 · 20层对抗探针 · 真实模型暴露引擎（v15.0 Bug修复与版本对齐）
 
-**v14.0.0 全部 9 个阶段已完成** 🎉。详见 [CHANGELOG.md](CHANGELOG.md) 和 [迁移指南](docs/MIGRATION_v13_to_v14.md)。
+**v15.0.0 Phase 0 + Phase 4 已完成**。v14.0.0 全部 9 个阶段亦已完成。详见 [CHANGELOG.md](CHANGELOG.md) 和 [迁移指南](docs/MIGRATION_v13_to_v14.md)。
+
+> 📖 [v15 升级方案](docs/UPGRADE_PLAN_V15.md)
 
 LLM Inspector 是一款面向 OpenAI 兼容 API 的**模型真伪鉴别与能力评估工具**。它通过渐进式指纹识别、多维度测试套件和统计学评分系统，帮助用户判断所接入的 LLM API 是否是其声称的模型。
 
@@ -18,10 +20,10 @@ start.bat
 # 手动（任意平台）
 cd llm-inspector
 pip install -r backend/requirements.txt
-python backend/start.py --port 8000
+python backend/start.py --port 9999
 ```
 
-访问 http://localhost:8000
+访问 http://localhost:9999
 
 ## 三种检测模式
 

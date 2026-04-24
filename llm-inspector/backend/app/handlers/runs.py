@@ -1,6 +1,8 @@
 """Run management handlers."""
 from __future__ import annotations
 
+import json as _json_stdlib
+
 from app.core.config import settings
 from app.core.security import validate_and_sanitize_url, get_key_manager
 from app.handlers.helpers import _json, _error, _extract_id
@@ -123,6 +125,16 @@ def handle_get_run(path, _qs, _body) -> tuple:
     progress_pct = repo.update_run_progress(completed, total, skipped)
 
     baseline = repo.get_baseline_by_run_id(run_id)
+
+    # Parse preflight_report from JSON string if present
+    raw_pf = run.get("preflight_report")
+    preflight_report = None
+    if raw_pf:
+        try:
+            preflight_report = _json_stdlib.loads(raw_pf) if isinstance(raw_pf, str) else raw_pf
+        except Exception:
+            preflight_report = None
+
     return _json({
         "run_id": run_id,
         "status": run["status"],
@@ -149,6 +161,7 @@ def handle_get_run(path, _qs, _body) -> tuple:
         "scoring_profile_version": run.get("scoring_profile_version", settings.CALIBRATION_VERSION),
         "calibration_tag": run.get("calibration_tag"),
         "baseline_id": baseline["id"] if baseline else None,
+        "preflight_report": preflight_report,
     })
 
 

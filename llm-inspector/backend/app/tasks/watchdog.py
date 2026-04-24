@@ -20,10 +20,13 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Statuses that are considered non-terminal (i.e., the run is still "in progress")
-_STALE_STATUSES = ("running", "pre_detecting")
+_STALE_STATUSES = ("running", "pre_detecting", "queued", "preflight_running")
 
 # Statuses that are already terminal — watchdog must not touch these
-_TERMINAL_STATUSES = frozenset(("completed", "failed", "partial_failed", "cancelled", "pre_detected", "suspended"))
+_TERMINAL_STATUSES = frozenset((
+    "completed", "failed", "partial_failed", "cancelled",
+    "pre_detected", "suspended", "preflight_failed",
+))
 
 
 def _parse_iso(ts: str | None) -> float | None:

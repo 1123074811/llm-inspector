@@ -369,29 +369,34 @@ class ScoreCard:
     skipped_cases: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
+        # v15 Phase 3: helper — return None for unmeasured, integer percentage for measured
+        def pct(v: float | None) -> int | None:
+            return round(v * 100) if v is not None else None
+
+        _bd = getattr(self, "breakdown", {}) or {}
+
         return {
-            "total_score": round(self.total_score * 100) if self.total_score is not None else None,
-            "capability_score": round((self.capability_score or 0) * 100),
-            "authenticity_score": round((self.authenticity_score or 0) * 100),
-            "performance_score": round((self.performance_score or 0) * 100),
+            "total_score": pct(self.total_score),
+            "capability_score": pct(self.capability_score),
+            "authenticity_score": pct(self.authenticity_score),
+            "performance_score": pct(self.performance_score),
             "breakdown": {
-                "reasoning": round(self.reasoning_score * 100) if self.reasoning_score is not None else None,
-                "adversarial_reasoning": round(self.adversarial_reasoning_score * 100) if self.adversarial_reasoning_score is not None else None,
-                "instruction": round((self.instruction_score or 0) * 100),
-                "coding": round(self.coding_score * 100) if self.coding_score is not None else None,
-                "safety": round((self.safety_score or 0) * 100),
-                "protocol": round((self.protocol_score or 0) * 100),
-                "consistency": round((self.consistency_score or 0) * 100),
-                "speed": round(self.speed_score * 100) if self.speed_score is not None else None,
-                "stability": round(self.stability_score * 100) if self.stability_score is not None else None,
-                "cost_efficiency": round((self.cost_efficiency or 0) * 100),
-                "behavioral_invariant": round((self.behavioral_invariant_score or 0) * 100),
-                **{k: round((v or 0) * 100) for k, v in getattr(self, "breakdown", {}).items() if k not in ["knowledge_score", "tool_use_score", "extraction_resistance", "fingerprint_match", "ttft_plausibility"]},
-                "knowledge_score": round((getattr(self, "breakdown", {}).get("knowledge_score") or 0) * 100),
-                "tool_use_score": round((getattr(self, "breakdown", {}).get("tool_use_score") or 0) * 100),
-                "extraction_resistance": round((getattr(self, "breakdown", {}).get("extraction_resistance") or 0) * 100),
-                "fingerprint_match": round((getattr(self, "breakdown", {}).get("fingerprint_match") or 0) * 100),
-                "ttft_plausibility": round((getattr(self, "breakdown", {}).get("ttft_plausibility") or 0) * 100),
+                "reasoning": pct(self.reasoning_score),
+                "adversarial_reasoning": pct(self.adversarial_reasoning_score),
+                "instruction": pct(self.instruction_score),
+                "coding": pct(self.coding_score),
+                "safety": pct(self.safety_score),
+                "protocol": pct(self.protocol_score),
+                "consistency": pct(self.consistency_score),
+                "speed": pct(self.speed_score),
+                "stability": pct(self.stability_score),
+                "cost_efficiency": pct(self.cost_efficiency),
+                "behavioral_invariant": pct(self.behavioral_invariant_score),
+                "knowledge_score": pct(_bd.get("knowledge_score")),
+                "tool_use_score": pct(_bd.get("tool_use_score")),
+                "extraction_resistance": pct(_bd.get("extraction_resistance")),
+                "fingerprint_match": pct(_bd.get("fingerprint_match")),
+                "ttft_plausibility": pct(_bd.get("ttft_plausibility")),
             },
             "v13": {
                 "stanine": self.stanine,
@@ -400,6 +405,15 @@ class ScoreCard:
                 "theta_ci95": list(self.theta_ci95) if self.theta_ci95 else None,
                 "judge_kappa": round(self.judge_kappa, 3) if self.judge_kappa is not None else None,
                 "completeness": self.completeness,
+            },
+            "measurement": {
+                "completeness": self.completeness,
+                "measured_dims": sum(1 for v in [
+                    self.reasoning_score, self.coding_score, self.speed_score,
+                    self.stability_score, self.similarity_to_claimed,
+                    self.adversarial_reasoning_score,
+                ] if v is not None),
+                "total_possible_dims": 8,
             },
             "token_analysis": {
                 "prompt_optimizer_used": getattr(self, "prompt_optimizer_used", False),
@@ -547,3 +561,28 @@ class RiskAssessment:
         " / Risk level reflects behavioural similarity only and does not constitute "
         "definitive proof of the underlying model's origin."
     )
+
+
+# ── v15 Preflight schemas ────────────────────────────────────────────────────
+
+@dataclass
+class PreflightStepResult:
+    """Result of a single preflight check step (v15)."""
+    step: str
+    name: str
+    passed: bool
+    duration_ms: float
+    error_code: str | None = None
+    error_message: str | None = None
+    notes: str = ""
+
+
+@dataclass
+class PreflightReportSchema:
+    """Full preflight report stored in run record (v15)."""
+    passed: bool
+    steps: list[dict] = field(default_factory=list)
+    first_error: dict | None = None
+    total_duration_ms: float = 0.0
+    capabilities: dict = field(default_factory=dict)
+    checked_at: str = ""

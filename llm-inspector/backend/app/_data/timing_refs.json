@@ -1,0 +1,72 @@
+{
+  "_provenance": {
+    "note": "PLACEHOLDER — these values are approximate starting points. Real values require sampling via backend/scripts/sample_timing_references.py.",
+    "source": "Internal estimates based on general API observation patterns. Not peer-reviewed.",
+    "version": "v15.0-placeholder",
+    "created_at": "2026-04-23T00:00:00Z",
+    "sampling_required": true,
+    "sampling_script": "backend/scripts/sample_timing_references.py"
+  },
+  "families": {
+    "claude": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 800,
+      "ttft_ms_std": 200,
+      "tps_mean": 45,
+      "tps_std": null
+    },
+    "gpt": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 600,
+      "ttft_ms_std": 150,
+      "tps_mean": 50,
+      "tps_std": null
+    },
+    "gemini": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 700,
+      "ttft_ms_std": 180,
+      "tps_mean": 55,
+      "tps_std": null
+    },
+    "qwen": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 500,
+      "ttft_ms_std": 120,
+      "tps_mean": 60,
+      "tps_std": null
+    },
+    "deepseek": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 1200,
+      "ttft_ms_std": 300,
+      "tps_mean": 35,
+      "tps_std": null
+    },
+    "llama": {
+      "sampled": false,
+      "sample_size": null,
+      "sampled_at": null,
+      "model_version": null,
+      "ttft_ms_mean": 400,
+      "ttft_ms_std": 100,
+      "tps_mean": 70,
+      "tps_std": null
+    }
+  }
+}

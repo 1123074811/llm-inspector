@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v13.0 - Unix/Linux/Mac Startup Script
+# LLM Inspector v15.0 - Unix/Linux/Mac Startup Script
 # Idempotent dependency check + provenance validation + server start
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v13.0"
+echo "LLM Inspector v15.0"
 echo "===================================="
 
 # Colors for output

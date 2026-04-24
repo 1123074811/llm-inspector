@@ -630,3 +630,32 @@
   retrieved_at: "2026-04-18T00:00:00Z"
   license: "internal"
   note: "KG query cache TTL — DBpedia facts stable over 30d window"
+
+# ---------------------------------------------------------------------------
+# v15 Phase 5: L18/L19 reference data
+# ---------------------------------------------------------------------------
+- id: timing_refs_v15
+  value: "placeholder"
+  unit: "reference_data_file"
+  source_url: "https://github.com/llm-inspector/blob/main/backend/scripts/sample_timing_references.py"
+  source_type: empirical
+  retrieved_at: "2026-04-23"
+  license: "internal"
+  note: >
+    L18 TTFT/TPS placeholder reference distributions per model family.
+    Values require real sampling via backend/scripts/sample_timing_references.py.
+    Data stored in backend/app/_data/timing_refs.json.
+    Reference: Yu et al. (2024) timing fingerprinting methodology.
+
+- id: token_dist_refs_v15
+  value: "placeholder"
+  unit: "reference_data_file"
+  source_url: "https://github.com/llm-inspector/blob/main/backend/scripts/sample_timing_references.py"
+  source_type: empirical
+  retrieved_at: "2026-04-23"
+  license: "internal"
+  note: >
+    L19 token length distribution and 4-gram repetition rate placeholder references.
+    Values require real sampling via backend/scripts/sample_timing_references.py.
+    Data stored in backend/app/_data/token_dist_refs.json.
+    Reference: Carlini et al. (2023) arXiv:2403.06634.

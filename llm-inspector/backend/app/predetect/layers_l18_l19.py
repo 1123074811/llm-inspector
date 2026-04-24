@@ -11,33 +11,60 @@ L19 Reference:
 """
 from __future__ import annotations
 
+import json as _json
 import math
+import os as _os
 from collections import Counter
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ── Data directory ───────────────────────────────────────────────────────────
 
-# ── Timing reference profiles ────────────────────────────────────────────────
+_DATA_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "_data")
+_timing_refs_cache: dict | None = None
+_dist_refs_cache: dict | None = None
 
-_TIMING_REFS: dict[str, dict] = {
-    "claude":    {"ttft_ms_mean": 800,  "ttft_ms_std": 200, "tps_mean": 45},
-    "gpt":       {"ttft_ms_mean": 600,  "ttft_ms_std": 150, "tps_mean": 50},
-    "gemini":    {"ttft_ms_mean": 700,  "ttft_ms_std": 180, "tps_mean": 55},
-    "qwen":      {"ttft_ms_mean": 500,  "ttft_ms_std": 120, "tps_mean": 60},
-    "deepseek":  {"ttft_ms_mean": 1200, "ttft_ms_std": 300, "tps_mean": 35},
-    "llama":     {"ttft_ms_mean": 400,  "ttft_ms_std": 100, "tps_mean": 70},
-}
 
-# ── Distribution reference profiles ─────────────────────────────────────────
+def _load_timing_refs() -> dict:
+    """Load L18 timing reference profiles from _data/timing_refs.json."""
+    global _timing_refs_cache
+    if _timing_refs_cache is None:
+        path = _os.path.join(_DATA_DIR, "timing_refs.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            _timing_refs_cache = {
+                k: v for k, v in data.get("families", {}).items()
+            }
+        except Exception as e:
+            logger.warning(
+                "Could not load timing_refs.json, L18 will use empty refs",
+                error=str(e),
+            )
+            _timing_refs_cache = {}
+    return _timing_refs_cache
 
-_DIST_REFS: dict[str, dict] = {
-    "claude":    {"avg_len": 480, "len_cv": 0.4,  "repetition_rate": 0.05},
-    "gpt":       {"avg_len": 350, "len_cv": 0.5,  "repetition_rate": 0.06},
-    "qwen":      {"avg_len": 400, "len_cv": 0.45, "repetition_rate": 0.07},
-    "deepseek":  {"avg_len": 600, "len_cv": 0.35, "repetition_rate": 0.04},
-}
+
+def _load_dist_refs() -> dict:
+    """Load L19 token distribution reference profiles from _data/token_dist_refs.json."""
+    global _dist_refs_cache
+    if _dist_refs_cache is None:
+        path = _os.path.join(_DATA_DIR, "token_dist_refs.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            _dist_refs_cache = {
+                k: v for k, v in data.get("families", {}).items()
+            }
+        except Exception as e:
+            logger.warning(
+                "Could not load token_dist_refs.json, L19 will use empty refs",
+                error=str(e),
+            )
+            _dist_refs_cache = {}
+    return _dist_refs_cache
 
 
 # ── Helper: compute KL-like distance (Gaussian approximation) ────────────────
@@ -141,10 +168,23 @@ class Layer18TimingSideChannel:
         mean_tps = sum(tps_samples) / len(tps_samples) if tps_samples else None
 
         # KL distances against reference profiles
+        timing_refs = _load_timing_refs()
         kl_scores: dict[str, float] = {}
-        for family, ref in _TIMING_REFS.items():
+        for family, ref in timing_refs.items():
             kl = _kl_gaussian(mean_ttft, ref["ttft_ms_mean"], ref["ttft_ms_std"])
             kl_scores[family] = kl
+
+        if not kl_scores:
+            logger.debug("Layer18: no timing reference profiles available", model=model_name)
+            return {
+                "layer": self.LAYER,
+                "name": self.NAME,
+                "tokens": 0,
+                "skipped": True,
+                "reason": "no_reference_profiles",
+                "confidence": 0.0,
+                "evidence": [],
+            }
 
         closest_family = min(kl_scores, key=kl_scores.get)
         min_kl = kl_scores[closest_family]
@@ -184,6 +224,7 @@ class Layer18TimingSideChannel:
             "kl_distance": round(min_kl, 4),
             "confidence": confidence,
             "evidence": evidence,
+            "reference_data_sampled": timing_refs.get(closest_family, {}).get("sampled", False),
         }
 
 
@@ -256,10 +297,23 @@ class Layer19TokenDistribution:
         stop_token_freq = stop_count / n
 
         # Wasserstein distances against reference profiles
+        dist_refs = _load_dist_refs()
         w_scores: dict[str, float] = {}
-        for family, ref in _DIST_REFS.items():
+        for family, ref in dist_refs.items():
             w = _wasserstein_1d(avg_len, ref["avg_len"])
             w_scores[family] = w
+
+        if not w_scores:
+            logger.debug("Layer19: no distribution reference profiles available", model=model_name)
+            return {
+                "layer": self.LAYER,
+                "name": self.NAME,
+                "tokens": 0,
+                "skipped": True,
+                "reason": "no_reference_profiles",
+                "confidence": 0.0,
+                "evidence": [],
+            }
 
         closest_family = min(w_scores, key=w_scores.get)
         min_w = w_scores[closest_family]
@@ -300,4 +354,5 @@ class Layer19TokenDistribution:
             "wasserstein_distance": round(min_w, 4),
             "confidence": confidence,
             "evidence": evidence,
+            "reference_data_sampled": dist_refs.get(closest_family, {}).get("sampled", False),
         }

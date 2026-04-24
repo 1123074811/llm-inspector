@@ -1,0 +1,35 @@
+{
+  "_provenance": {
+    "note": "PLACEHOLDER — these values are approximate starting points. Real values require sampling via backend/scripts/sample_timing_references.py.",
+    "source": "Internal estimates. Not peer-reviewed.",
+    "version": "v15.0-placeholder",
+    "created_at": "2026-04-23T00:00:00Z",
+    "sampling_required": true
+  },
+  "families": {
+    "claude": {
+      "sampled": false,
+      "avg_len": 480,
+      "len_cv": 0.4,
+      "repetition_rate": 0.05
+    },
+    "gpt": {
+      "sampled": false,
+      "avg_len": 350,
+      "len_cv": 0.5,
+      "repetition_rate": 0.06
+    },
+    "qwen": {
+      "sampled": false,
+      "avg_len": 400,
+      "len_cv": 0.45,
+      "repetition_rate": 0.07
+    },
+    "deepseek": {
+      "sampled": false,
+      "avg_len": 600,
+      "len_cv": 0.35,
+      "repetition_rate": 0.04
+    }
+  }
+}

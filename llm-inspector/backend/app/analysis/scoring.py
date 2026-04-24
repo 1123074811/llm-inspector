@@ -266,8 +266,11 @@ class ScoreCardCalculator:
         card.similarity_to_claimed = self._similarity_to_claimed(
             similarities, claimed_model
         )
+        # v15 Phase 3: None means not measured; 0.0 means measured and zero
         card.predetect_confidence = (
-            (predetect.confidence or 0) * 100 if predetect and predetect.success else 0.0
+            predetect.confidence * 100
+            if (predetect and predetect.success and predetect.confidence is not None)
+            else None
         )
         card.consistency_score = self._consistency_score(case_results)
         card.temperature_effectiveness = (

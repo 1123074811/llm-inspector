@@ -16,7 +16,7 @@ def handle_benchmarks(_path, qs, _body) -> tuple:
         {
             "name": b.get("benchmark_name") or b.get("name", "unknown"),
             "suite_version": b.get("suite_version", ""),
-            "data_source": b.get("data_source", "estimated"),
+            "data_source": b.get("data_source", "not_measured"),
             "sample_count": b.get("sample_count", 3),
         }
         for b in benchmarks

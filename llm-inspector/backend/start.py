@@ -1,5 +1,5 @@
 """
-LLM Inspector v13.0 - Smart Startup Script
+LLM Inspector v15.0 - Smart Startup Script
 
 Automatically checks and installs dependencies before starting the service.
 
@@ -127,7 +127,7 @@ def check_environment(strict_provenance: bool = False):
 def run_server(host: str, port: int, reload: bool = False):
     """Run the HTTP server."""
     print("\n" + "=" * 60)
-    print("Starting LLM Inspector v13.0")
+    print("Starting LLM Inspector v15.0")
     print("=" * 60)
     print(f"Host: {host}")
     print(f"Port: {port}")
@@ -164,7 +164,7 @@ def run_server(host: str, port: int, reload: bool = False):
 def verify_sources_only(strict: bool) -> int:
     """Run SOURCES.yaml validation and exit (used by --verify-sources flag)."""
     print("\n" + "=" * 60)
-    print("LLM Inspector v13.0 - Provenance Verification")
+    print("LLM Inspector v15.0 - Provenance Verification")
     print("=" * 60)
     try:
         from app._data.provenance_guard import ProvenanceGuard
@@ -181,13 +181,13 @@ def verify_sources_only(strict: bool) -> int:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="LLM Inspector v13.0 Startup Script"
+        description="LLM Inspector v15.0 Startup Script"
     )
     parser.add_argument(
         "--port", "-p",
         type=int,
-        default=8080,
-        help="Server port (default: 8080)"
+        default=9999,
+        help="Server port (default: 9999)"
     )
     parser.add_argument(
         "--host", "-H",
@@ -229,7 +229,7 @@ def main():
 
     # Print banner
     print("\n" + "=" * 60)
-    print("LLM Inspector v13.0 - Startup")
+    print("LLM Inspector v15.0 - Startup")
     print("=" * 60)
     
     # Check dependencies

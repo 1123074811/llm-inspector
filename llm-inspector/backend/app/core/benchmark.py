@@ -373,7 +373,12 @@ class TokenEfficiencyBenchmarks:
             # Estimate tokens
             words = len(prompt.split())
             chars = len(prompt)
-            estimated_tokens = int(chars / 4)  # Rough estimate
+            # v15 Phase 3: use tiktoken when available, fallback to chars/4 estimate
+            try:
+                from app.runner.token_counter import count_tokens
+                estimated_tokens, _method = count_tokens(prompt)
+            except Exception:
+                estimated_tokens = int(len(prompt) / 4)  # fallback: cl100k ~4 chars/token avg
             
             stats = BenchmarkStats(
                 name=f"prompt_{name}",

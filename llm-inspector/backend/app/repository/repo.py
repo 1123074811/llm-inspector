@@ -72,6 +72,16 @@ def update_run_status(run_id: str, status: str, **kwargs) -> None:
     conn.commit()
 
 
+def update_run_field(run_id: str, field_name: str, value) -> None:
+    """v15: Update a single field on a test_run record (safe for known columns only)."""
+    conn = get_conn()
+    conn.execute(
+        f"UPDATE test_runs SET {field_name} = ? WHERE id = ?",
+        (value, run_id),
+    )
+    conn.commit()
+
+
 def save_identity_exposure(run_id: str, report_dict: dict) -> None:
     """v14 Phase 3: persist IdentityExposureReport for a run."""
     conn = get_conn()
@@ -195,7 +205,7 @@ def list_stale_runs(limit: int = 100, after_id: str | None = None) -> list[dict]
         after_id: If provided, only return rows with id > after_id (cursor pagination).
     """
     conn = get_conn()
-    stale_statuses = ("running", "pre_detecting")
+    stale_statuses = ("running", "pre_detecting", "queued", "preflight_running")
     placeholders = ",".join("?" * len(stale_statuses))
     if after_id is not None:
         rows = conn.execute(
@@ -440,6 +450,41 @@ def get_responses(run_id: str) -> list[dict]:
         d["request_payload"] = from_json_col(d.get("request_payload"))
         result.append(d)
     return result
+
+
+def list_case_results(run_id: str) -> list[dict]:
+    """Return all case results for a run, ordered by created_at ASC.
+
+    Implemented over test_responses + test_cases (there is no separate
+    case_results table).  Fields are mapped to the canonical names expected
+    by callers: case_id, dimension, judge_passed, judge_score, judge_method,
+    judge_reason, response_text, latency_ms, tokens_used, created_at.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT r.case_id,
+                  c.category                          AS dimension,
+                  r.judge_passed,
+                  r.judge_detail,
+                  c.judge_method,
+                  r.response_text,
+                  r.latency_ms,
+                  r.usage_total_tokens                AS tokens_used,
+                  r.created_at
+           FROM test_responses r
+           LEFT JOIN test_cases c ON c.id = r.case_id
+           WHERE r.run_id = ?
+           ORDER BY r.created_at ASC""",
+        (run_id,),
+    ).fetchall()
+    results = []
+    for row in rows:
+        d = dict(row)
+        detail = from_json_col(d.pop("judge_detail", None)) or {}
+        d["judge_score"] = detail.get("score") if isinstance(detail, dict) else None
+        d["judge_reason"] = detail.get("reason") if isinstance(detail, dict) else None
+        results.append(d)
+    return results
 
 
 # ── Features ──────────────────────────────────────────────────────────────────
@@ -1055,25 +1100,6 @@ def get_theta_leaderboard(dimension: str = "global", limit: int = 50) -> list[di
 
     data.sort(key=lambda x: x.get("sort_theta", 0.0), reverse=True)
     return data[:limit]
-
-
-def save_pairwise_result(run_id: str, model_a: str, model_b: str,
-                         delta_theta: float, win_prob_a: float,
-                         method: str = "bradley_terry",
-                         details: dict | None = None) -> None:
-    conn = get_conn()
-    conn.execute(
-        """INSERT INTO pairwise_results
-           (id, run_id, model_a, model_b, delta_theta, win_prob_a, method, details, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            new_id(), run_id, model_a, model_b,
-            delta_theta, win_prob_a, method,
-            json_col(details) if details else None,
-            now_iso(),
-        ),
-    )
-    conn.commit()
 
 
 def get_pairwise_by_run(run_id: str) -> list[dict]:

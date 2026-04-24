@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 from app.core.schemas import LayerResult, PreDetectionResult, LLMRequest, Message
 from app.core.logging import get_logger
@@ -227,62 +229,68 @@ class PreDetectionPipeline:
                 routing_info=routing_info,
             )
 
-        # Layer 3 — Knowledge cutoff
-        _report_progress("Layer3/Knowledge")
-        logger.info("PreDetect Layer3: Knowledge probes", model=model_name)
-        r3 = Layer3Knowledge().run(adapter, model_name, layer3_extra)
-        layer_results.append(r3)
-        total_tokens += r3.tokens_used
-        self._log_layer_result("Layer3/Knowledge", r3)
-        if r3.confidence >= CONFIDENCE_THRESHOLD:
-            return self._build_result(True, r3, layer_results, total_tokens)
+        # ── Parallel Group 1: L3 + L4 + L5 ──────────────────────────────────────
+        # These three layers are fully independent (each only needs adapter + model_name;
+        # L3 additionally uses layer3_extra from L2 but that's already available).
+        # Running them in parallel reduces this phase from ~30 s to ~10 s.
+        logger.info("PreDetect: Starting parallel group 1 (L3+L4+L5)", model=model_name)
+        _report_progress("parallel_L3_L4_L5(0/3)")
 
-        # If Layer 0-3 merged confidence >= 0.75, skip Layer 4-5 and go to Layer 6
-        current_conf = self._merge_confidences(layer_results)
-        if current_conf >= 0.75:
-            logger.info("PreDetect: Good confidence from Layer 0-3, skipping to Layer 6", confidence=current_conf)
-            r6 = None
+        _parallel_tasks_g1: list[tuple[str, Callable]] = [
+            ("Layer3/Knowledge",  lambda: Layer3Knowledge().run(adapter, model_name, layer3_extra)),
+            ("Layer4/Bias",       lambda: Layer4Bias().run(adapter, model_name)),
+            ("Layer5/Tokenizer",  lambda: Layer5Tokenizer().run(adapter, model_name)),
+        ]
+        _g1_done = 0
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="predetect-g1") as _ex:
+            _futures_g1 = {_ex.submit(fn): name for name, fn in _parallel_tasks_g1}
+            for _fut in as_completed(_futures_g1):
+                _layer_name = _futures_g1[_fut]
+                _g1_done += 1
+                try:
+                    _r = _fut.result()
+                    layer_results.append(_r)
+                    total_tokens += _r.tokens_used
+                    self._log_layer_result(_layer_name, _r)
+                except Exception as _e:
+                    logger.warning(f"PreDetect parallel layer {_layer_name} failed", error=str(_e))
+                _report_progress(
+                    f"parallel_L3_L4_L5({_g1_done}/3)",
+                    evidence=[ev for r in layer_results for ev in r.evidence],
+                    tokens_used=total_tokens,
+                )
+        logger.info("PreDetect: Parallel group 1 complete", layers_done=_g1_done, model=model_name)
+
+        # After G1: check early-stop threshold
+        _conf_after_g1 = self._merge_confidences(layer_results)
+        if _conf_after_g1 >= CONFIDENCE_THRESHOLD:
+            _best = max(layer_results, key=lambda r: r.confidence)
+            return self._build_result(True, _best, layer_results, total_tokens, routing_info=routing_info)
+
+        # Legacy early-skip path (high conf after L0-L3): jump to Layer 6 confirmation
+        if _conf_after_g1 >= 0.75:
+            logger.info("PreDetect: High conf after G1, jumping to L6 confirmation", confidence=_conf_after_g1)
             try:
-                r6 = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
-                layer_results.append(r6)
-            except Exception as e:
-                logger.warning("Layer6 failed in fast-path, continuing with accumulated confidence", error=str(e))
-            if r6:
-                total_tokens += r6.tokens_used
-                self._log_layer_result("Layer6/Extraction(early-skip)", r6)
-                if r6.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r6, layer_results, total_tokens)
-            best = max(layer_results, key=lambda r: r.confidence)
-            merged_conf = self._merge_confidences(layer_results)
-            identified = best.identified_as if merged_conf >= 0.50 else None
+                _r6_fast = Layer6ActiveExtraction().run(adapter, model_name, run_id=run_id)
+                layer_results.append(_r6_fast)
+                total_tokens += _r6_fast.tokens_used
+                self._log_layer_result("Layer6/Extraction(fast-path)", _r6_fast)
+                if _r6_fast.confidence >= CONFIDENCE_THRESHOLD:
+                    return self._build_result(True, _r6_fast, layer_results, total_tokens, routing_info=routing_info)
+            except Exception as _e:
+                logger.warning("Layer6 fast-path failed", error=str(_e))
+            _best_fp = max(layer_results, key=lambda r: r.confidence)
+            _mc_fp = self._merge_confidences(layer_results)
             return PreDetectionResult(
-                success=merged_conf >= 0.60,
-                identified_as=identified,
-                confidence=merged_conf,
+                success=_mc_fp >= 0.60,
+                identified_as=_best_fp.identified_as if _mc_fp >= 0.50 else None,
+                confidence=_mc_fp,
                 layer_stopped="early_skip",
                 layer_results=layer_results,
                 total_tokens_used=total_tokens,
-                should_proceed_to_testing=merged_conf < CONFIDENCE_THRESHOLD,
+                should_proceed_to_testing=_mc_fp < CONFIDENCE_THRESHOLD,
                 routing_info=routing_info,
             )
-
-        # Layer 4 — Bias / format
-        _report_progress("Layer4/Bias")
-        logger.info("PreDetect Layer4: Bias fingerprint", model=model_name)
-        r4 = Layer4Bias().run(adapter, model_name)
-        layer_results.append(r4)
-        total_tokens += r4.tokens_used
-        self._log_layer_result("Layer4/Bias", r4)
-        if r4.confidence >= CONFIDENCE_THRESHOLD:
-            return self._build_result(True, r4, layer_results, total_tokens)
-
-        # Layer 5 — Tokenizer fingerprint (only in full mode or when earlier layers inconclusive)
-        _report_progress("Layer5/Tokenizer")
-        logger.info("PreDetect Layer5: Tokenizer fingerprint", model=model_name)
-        r5 = Layer5Tokenizer().run(adapter, model_name)
-        layer_results.append(r5)
-        total_tokens += r5.tokens_used
-        self._log_layer_result("Layer5/Tokenizer", r5)
 
         # Layer 6 — Active Extraction (only in extraction mode or when confidence is low)
         if extraction_mode or (max(r.confidence for r in layer_results) < 0.60):
@@ -295,118 +303,53 @@ class PreDetectionPipeline:
             if r6.confidence >= CONFIDENCE_THRESHOLD:
                 return self._build_result(True, r6, layer_results, total_tokens)
 
-            # Layer 6b — Multi-turn context overload
+            # ── Parallel Group 2: L6b + L7 – L16 (deep/extraction mode only) ─────
             if extraction_mode:
-                _report_progress("Layer6b/MultiTurn")
-                logger.info("PreDetect Layer6b: Multi-turn extraction", model=model_name)
-                r6b = Layer6MultiTurnProbes().run(adapter, model_name)
-                layer_results.append(r6b)
-                total_tokens += r6b.tokens_used
-                self._log_layer_result("Layer6b/MultiTurn", r6b)
-                if r6b.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r6b, layer_results, total_tokens)
+                logger.info("PreDetect: Starting parallel group 2 (L6b+L7-L16)", model=model_name)
+                _report_progress("parallel_L6b_L16(0/11)")
 
-                # Layer 7 — Logprobs tokenizer fingerprint (deep/extraction mode only)
-                _report_progress("Layer7/Logprobs")
-                logger.info("PreDetect Layer7: Logprobs fingerprint", model=model_name)
-                r7 = Layer7Logprobs().run(adapter, model_name)
-                layer_results.append(r7)
-                total_tokens += r7.tokens_used
-                self._log_layer_result("Layer7/Logprobs", r7)
-                if r7.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r7, layer_results, total_tokens)
+                _parallel_tasks_g2: list[tuple[str, Callable]] = [
+                    ("Layer6b/MultiTurn",         lambda: Layer6MultiTurnProbes().run(adapter, model_name)),
+                    ("Layer7/Logprobs",            lambda: Layer7Logprobs().run(adapter, model_name)),
+                    ("Layer8/SemanticFP",          lambda: Layer8SemanticFingerprint().run(adapter, model_name)),
+                    ("Layer9/AdvExtractionV2",     lambda: Layer7AdvancedExtraction().run(adapter, model_name, run_id=run_id)),
+                    ("Layer10/Differential",       lambda: Layer8DifferentialTesting().run(adapter, model_name)),
+                    ("Layer11/ToolCapability",     lambda: Layer9ToolCapability().run(adapter, model_name)),
+                    ("Layer12/MultiTurn",          lambda: Layer6MultiTurnProbes().run(adapter, model_name)),
+                    ("Layer13/Adversarial",        lambda: Layer11AdversarialAnalysis().run(adapter, model_name)),
+                    ("Layer14/Multilingual",       lambda: Layer14MultilingualAttack().run(adapter, model_name)),
+                    ("Layer15/ASCIIArt",           lambda: Layer15ASCIIArt().run(adapter, model_name)),
+                    ("Layer16/IndirectInject",     lambda: Layer16IndirectInject().run(adapter, model_name)),
+                ]
+                _g2_total = len(_parallel_tasks_g2)
+                _g2_done = 0
+                # Use max_workers=5 to balance throughput vs. server load
+                with ThreadPoolExecutor(max_workers=5, thread_name_prefix="predetect-g2") as _ex2:
+                    _futures_g2 = {_ex2.submit(fn): name for name, fn in _parallel_tasks_g2}
+                    for _fut2 in as_completed(_futures_g2):
+                        _lname2 = _futures_g2[_fut2]
+                        _g2_done += 1
+                        try:
+                            _r2 = _fut2.result()
+                            layer_results.append(_r2)
+                            total_tokens += _r2.tokens_used
+                            self._log_layer_result(_lname2, _r2)
+                        except Exception as _e2:
+                            logger.warning(f"PreDetect parallel layer {_lname2} failed", error=str(_e2))
+                        _report_progress(
+                            f"parallel_L6b_L16({_g2_done}/{_g2_total})",
+                            evidence=[ev for r in layer_results for ev in r.evidence],
+                            tokens_used=total_tokens,
+                        )
+                logger.info("PreDetect: Parallel group 2 complete", layers_done=_g2_done, model=model_name)
 
-                # v7 Phase 3: Layer 8 — Semantic Fingerprint
-                _report_progress("Layer8/SemanticFP")
-                logger.info("PreDetect Layer8: Semantic fingerprint", model=model_name)
-                r8 = Layer8SemanticFingerprint().run(adapter, model_name)
-                layer_results.append(r8)
-                total_tokens += r8.tokens_used
-                self._log_layer_result("Layer8/SemanticFP", r8)
-                if r8.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r8, layer_results, total_tokens)
+                # After G2: check if any layer hit threshold
+                _conf_after_g2 = self._merge_confidences(layer_results)
+                if _conf_after_g2 >= CONFIDENCE_THRESHOLD:
+                    _best_g2 = max(layer_results, key=lambda r: r.confidence)
+                    return self._build_result(True, _best_g2, layer_results, total_tokens)
 
-                # v7 Phase 3: Layer 9 — Advanced Extraction v2
-                _report_progress("Layer9/AdvExtractionV2")
-                logger.info("PreDetect Layer9: Advanced extraction v2", model=model_name)
-                r9 = Layer7AdvancedExtraction().run(adapter, model_name, run_id=run_id)
-                layer_results.append(r9)
-                total_tokens += r9.tokens_used
-                self._log_layer_result("Layer9/AdvExtractionV2", r9)
-                if r9.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r9, layer_results, total_tokens)
-
-                # v7 Phase 3: Layer 10 — Differential Consistency Test
-                _report_progress("Layer10/Differential")
-                logger.info("PreDetect Layer10: Differential testing", model=model_name)
-                r10 = Layer8DifferentialTesting().run(adapter, model_name)
-                layer_results.append(r10)
-                total_tokens += r10.tokens_used
-                self._log_layer_result("Layer10/Differential", r10)
-                if r10.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r10, layer_results, total_tokens)
-
-                # v7 Phase 3: Layer 11 — Tool Use Capability
-                _report_progress("Layer11/ToolCapability")
-                logger.info("PreDetect Layer11: Tool capability", model=model_name)
-                r11 = Layer9ToolCapability().run(adapter, model_name)
-                layer_results.append(r11)
-                total_tokens += r11.tokens_used
-                self._log_layer_result("Layer11/ToolCapability", r11)
-                if r11.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r11, layer_results, total_tokens)
-
-                # v7 Phase 3: Layer 12 — Multi-turn Context Overload (second pass)
-                _report_progress("Layer12/MultiTurn")
-                logger.info("PreDetect Layer12: Multi-turn context overload", model=model_name)
-                r12 = Layer6MultiTurnProbes().run(adapter, model_name)
-                layer_results.append(r12)
-                total_tokens += r12.tokens_used
-                self._log_layer_result("Layer12/MultiTurn", r12)
-                if r12.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r12, layer_results, total_tokens)
-
-                # v7 Phase 3: Layer 13 — Adversarial Response Analysis
-                _report_progress("Layer13/Adversarial")
-                logger.info("PreDetect Layer13: Adversarial analysis", model=model_name)
-                r13 = Layer11AdversarialAnalysis().run(adapter, model_name)
-                layer_results.append(r13)
-                total_tokens += r13.tokens_used
-                self._log_layer_result("Layer13/Adversarial", r13)
-                if r13.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r13, layer_results, total_tokens)
-
-                # v11 Phase 3: Layer 14 — Multilingual Translation Attack
-                _report_progress("Layer14/Multilingual")
-                logger.info("PreDetect Layer14: Multilingual attack", model=model_name)
-                r14 = Layer14MultilingualAttack().run(adapter, model_name)
-                layer_results.append(r14)
-                total_tokens += r14.tokens_used
-                self._log_layer_result("Layer14/Multilingual", r14)
-                if r14.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r14, layer_results, total_tokens)
-
-                # v13 Phase 3: Layer 15 — ASCII Art attack (deep/extraction mode)
-                _report_progress("Layer15/ASCIIArt")
-                logger.info("PreDetect Layer15: ASCII Art attack", model=model_name)
-                r15 = Layer15ASCIIArt().run(adapter, model_name)
-                layer_results.append(r15)
-                total_tokens += r15.tokens_used
-                self._log_layer_result("Layer15/ASCIIArt", r15)
-                if r15.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r15, layer_results, total_tokens)
-
-                # v13 Phase 3: Layer 16 — Indirect injection (deep/extraction mode)
-                _report_progress("Layer16/IndirectInject")
-                logger.info("PreDetect Layer16: Indirect injection", model=model_name)
-                r16 = Layer16IndirectInject().run(adapter, model_name)
-                layer_results.append(r16)
-                total_tokens += r16.tokens_used
-                self._log_layer_result("Layer16/IndirectInject", r16)
-                if r16.confidence >= CONFIDENCE_THRESHOLD:
-                    return self._build_result(True, r16, layer_results, total_tokens)
-
-                # v14 Phase 3: Layer 17 — Identity Exposure (zero API tokens)
+                # v14 Phase 3: Layer 17 — Identity Exposure (zero API tokens, needs prior results)
                 _report_progress("Layer17/IdentityExposure")
                 logger.info("PreDetect Layer17: Identity exposure analysis", model=model_name)
                 r17 = Layer17IdentityExposure().run(

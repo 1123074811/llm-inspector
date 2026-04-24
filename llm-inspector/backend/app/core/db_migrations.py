@@ -184,7 +184,49 @@ class Migration004V14IdentityExposureColumn(Migration):
         logger.info("Added identity_exposure_result column (if not existed)")
 
 
+class Migration005V15PreflightReportColumn(Migration):
+    """v15 Phase 1: add preflight_report column to test_runs.
+
+    Stores the serialised PreflightReport JSON for each run.
+    Column is nullable TEXT (JSON); absent in runs completed before v15 Phase 1.
+    """
+    version = 5
+    description = "v15-phase1: add preflight_report column"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(test_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "preflight_report" not in columns:
+            conn.execute("ALTER TABLE test_runs ADD COLUMN preflight_report TEXT")
+            conn.commit()
+        logger.info("Added preflight_report column (if not existed)")
+
+
+class Migration006IdentityExposureColumnGuard(Migration):
+    """Guard migration: ensure identity_exposure_result column exists.
+
+    Versions 3 and 4 in the migrations table may refer to different historical
+    migrations depending on when the DB was first created (before or after
+    UPGRADE_PLAN_V14.md was merged). This migration unconditionally adds the
+    column when absent, regardless of what happened at v4.
+    """
+    version = 6
+    description = "v14-phase3-guard: ensure identity_exposure_result column exists"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(test_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "identity_exposure_result" not in columns:
+            conn.execute("ALTER TABLE test_runs ADD COLUMN identity_exposure_result TEXT")
+            conn.commit()
+            logger.info("Added identity_exposure_result column")
+        else:
+            logger.info("identity_exposure_result column already present, skipping")
+
+
 register_migration(Migration001InitialSchema())
 register_migration(Migration002JsonColumnsToColumns())
 register_migration(Migration003V14DropBenchmarkProfiles())
 register_migration(Migration004V14IdentityExposureColumn())
+register_migration(Migration005V15PreflightReportColumn())
+register_migration(Migration006IdentityExposureColumnGuard())

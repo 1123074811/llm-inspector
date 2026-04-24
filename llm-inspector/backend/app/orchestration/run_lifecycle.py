@@ -38,6 +38,11 @@ class RunLifecycleManager:
             if not self._initialize():
                 return
 
+            # 0. Preflight — must pass before any token consumption
+            pre_flight = self._step_preflight()
+            if pre_flight is not None and not pre_flight.passed:
+                return  # already set run status to preflight_failed
+
             # 1. Pre-detection
             pre_result = self._step_predetect()
             if not pre_result: # Error in pre-detect flow itself
@@ -119,6 +124,13 @@ class RunLifecycleManager:
         self.run_metadata = repo.get_run(self.run_id)
         if not self.run_metadata:
             logger.error("Run not found", run_id=self.run_id)
+            # Best-effort status update so the run doesn't stay "queued" forever.
+            try:
+                repo.update_run_status(self.run_id, "failed",
+                                       error_message="Run record missing at pipeline start",
+                                       error_code="E_RUN_NOT_FOUND")
+            except Exception:
+                pass
             remove_tracer(self.run_id)
             return False
 
@@ -139,6 +151,51 @@ class RunLifecycleManager:
             return False
         
         return True
+
+    def _step_preflight(self):
+        """Run preflight connection check before any actual testing (v15 Phase 1)."""
+        from app.core.events import emit, EventKind
+        from app.preflight.connection_check import run_preflight
+
+        emit(self.run_id, EventKind.PREFLIGHT_STARTED)
+        repo.update_run_status(self.run_id, "preflight_running")
+
+        try:
+            km = get_key_manager()
+            api_key = km.decrypt(self.run_metadata["api_key_encrypted"])
+            base_url = self.run_metadata["base_url"]
+            model_name = self.run_metadata["model_name"]
+
+            report = run_preflight(base_url, api_key, model_name)
+
+            # Save report to DB
+            import json
+            repo.update_run_field(self.run_id, "preflight_report", json.dumps(report.to_dict()))
+
+            if report.passed:
+                emit(self.run_id, EventKind.PREFLIGHT_PASSED,
+                     duration_ms=report.total_duration_ms)
+                logger.info("Preflight passed", run_id=self.run_id,
+                            duration_ms=report.total_duration_ms)
+                return report
+            else:
+                err = report.first_error
+                emit(self.run_id, EventKind.PREFLIGHT_FAILED,
+                     error_code=err.code if err else "E_UNKNOWN",
+                     retryable=err.retryable if err else True)
+                msg = err.user_message_zh if err else "连接预检失败"
+                code = err.code if err else "E_PREFLIGHT_FAILED"
+                repo.update_run_status(self.run_id, "preflight_failed",
+                                       error_message=msg, error_code=code)
+                remove_tracer(self.run_id)
+                return report
+        except Exception as e:
+            logger.error("Preflight exception", run_id=self.run_id, error=str(e))
+            repo.update_run_status(self.run_id, "preflight_failed",
+                                   error_message=f"预检测异常: {e}",
+                                   error_code="E_PREFLIGHT_EXCEPTION")
+            remove_tracer(self.run_id)
+            return None
 
     def _step_predetect(self) -> PreDetectionResult | None:
         """Runs pre-detection step."""
