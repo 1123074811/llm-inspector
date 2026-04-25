@@ -2,6 +2,217 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [v15.0.0] — 2026-04-25
+
+### Added
+- `docs/MIGRATION_v14_to_v15.md` — v14→v15 迁移指南（API 变更 / 新模块清单 / DB 迁移说明 / 测试文件索引）
+
+### Changed
+- `CLAUDE.md` / `README.md` / `CHANGELOG.md` — 同步所有 Phase 0–13 结构变更
+- 全量回归：`pytest backend/tests/ -q` → **825 passed, 4 skipped** ✅
+
+---
+
+## [v15.0.0-phase13] — 2026-04-25
+
+### Added
+- `backend/app/preflight/error_taxonomy.py` — 预检错误分类：`ErrorCode` StrEnum（15 个代码）、`ErrorDetail` dataclass、`_ERROR_DETAILS` 映射表（含 retryable 标志 + 中英双语消息）、`make_error()` 工厂函数（支持 `raw_status`/`raw_body` 摘录/`source_layer`）
+- `backend/app/preflight/connection_check.py` — 预检连通五步执行器：`PreflightStep`/`PreflightReport` dataclass（含 `to_dict()`）、`_check_inputs()` URL/Key/Model 静态校验、`_check_schema()` 响应 JSON 结构校验、`_note_capabilities()` 能力探针记录、`_http_status_to_error_code()` HTTP 状态→错误码映射（含 400 body 内容嗅探）、`run_preflight()` 全流程执行（超时控制、短路传播）
+- `backend/tests/test_v15_phase13.py` — 31 条验收测试（error_taxonomy + connection_check，全部通过）
+
+### Test Coverage
+- **825 passed, 4 skipped**（+31 vs Phase 12 的 794）
+
+---
+
+## [v15.0.0-phase12] — 2026-04-25
+
+### Added
+- `backend/app/_data/judge_registry.yaml` — 评判方法注册表 YAML：含 `exact_match`/`regex`/`semantic_v2` 等方法的 mode/description/applicable_for/biases/references 字段
+- `backend/app/analysis/judge_registry.py` — 注册中心模块：`list_methods()` / `get_method(name)` / `methods_by_mode(mode)` / `applicable_for(question_type)` / `registry_summary()`；PyYAML 加载 + stdlib fallback；`@lru_cache(maxsize=1)` 单例懒加载
+- `GET /api/v15/judge-registry` — 列出所有注册评判方法（`registry_summary()` 响应）
+- `GET /api/v15/judge-registry/{method}` — 单个方法详情（404 on unknown）
+- `backend/tests/test_v15_phase12.py` — 33 条验收测试（YAML 内容/模块函数/handler，全部通过）
+
+### Changed
+- `handlers/v15_handlers.py` — 新增 `handle_judge_registry` + `handle_judge_registry_method`
+- `main.py` — 注册两条新路由
+
+### Test Coverage
+- **794 passed, 4 skipped**（+33 vs Phase 11 的 761）
+
+---
+
+## [v15.0.0-phase11] — 2026-04-25
+
+### Added
+- `backend/app/runner/import_dataset.py` — 数据集导入管线：`ImportReport` dataclass（total_imported / skipped_duplicates / validation_errors / source_datasets / new_categories / to_dict()）、`DatasetImporter` 类（`SUITE_DIR` 类变量、`generate_id()` slug 生成、`validate_case()` 字段+类别+judge_method 校验、`load_suite()` / `save_suite()` 读写 suite_v*.json、`import_cases()` 支持 overwrite + 自动补全默认值）
+- `POST /api/v15/dataset/import` — 批量导入测试用例；返回 `ImportReport.to_dict()`
+- `POST /api/v15/dataset/validate` — 验证单条用例格式；返回 `{valid, error}`
+- `backend/tests/test_v15_phase11.py` — 37 条验收测试（全部通过）
+
+### Changed
+- `handlers/v15_handlers.py` — 新增 `handle_import_dataset` + `handle_validate_case`
+- `main.py` — 注册两条新路由
+
+### Test Coverage
+- **761 passed, 4 skipped**（+37 vs Phase 10 的 724）
+
+---
+
+## [v15.0.0-phase10] — 2026-04-25
+
+### Added
+- `backend/app/runner/cache_strategy.py` — 响应缓存策略：`CacheStrategy`（SHA-256 key = base_url+payload hash，仅缓存 `temperature=0`，按 category 配置 TTL，SQLite 持久化，`evict_expired()` 惰性清理）、`CacheMetrics` dataclass + `snapshot()`、`build_key()` / `get()` / `set()` 接口
+- `backend/app/analysis/narrative_builder.py` — 纯规则叙事生成器：`NarrativeBuilder.build(report_dict)` 从结构化报告生成中文摘要文本，零 Token 消耗
+- `GET /api/v15/cache-stats` — 全局缓存指标快照
+- `POST /api/v15/cache/evict` — 手动驱逐过期缓存条目
+- `GET /api/v15/runs/{id}/token-audit` — Token 效率审计（token_audit + cache_metrics）
+- `core/db_migrations.py Migration007V15CacheTable` — 幂等创建 `llm_response_cache` 表（cache_key / response_json / created_at / expires_at）
+- `backend/tests/test_v15_phase10.py` — 18 条验收测试（全部通过）
+
+### Changed
+- `runner/case_executor.py` — CacheStrategy 接入：temperature=0 时自动查缓存/写缓存（non-fatal try/except）
+- `tasks/seeder.py` — 新增加载 `suite_v13.json` 和 `suite_v15.json`
+- `_data/version.json` — 版本号更新为 `v15.0.0`，phases_complete 列表补全 phase10-13
+
+### Test Coverage
+- **724 passed, 4 skipped**（+18 vs Phase 9 的 706）
+
+---
+
+## [v15.0.0-phase9] — 2026-04-25
+
+### Added
+- `backend/app/analysis/judge_calibration.py` — 评判校准工具：`compute_fleiss_kappa(rating_matrix)` 多评判器 Fleiss's κ（Fleiss 1971）、`compute_cohen_kappa(a, b)` 双评判器 Cohen's κ（Cohen 1960）、`judge_bias_detection(predictions, labels)` 系统性偏差检测（precision/recall/F1 + 偏差类型分类）
+- `backend/tests/test_v15_phase9.py` — 24 条验收测试（全部通过）
+
+### Test Coverage
+- **706 passed, 4 skipped**（+24 vs Phase 8 的 682）
+
+---
+
+## [v15.0.0-phase8] — 2026-04-25
+
+### Added
+- `backend/app/analysis/uncertainty.py` — 不确定性量化：`bootstrap_ci(data, n_bootstrap, ci)` Bootstrap 置信区间、`sem(data)` 测量标准误、`hdi(data, credible_mass)` 最高密度区间（HDI）、`weighted_ci(data, weights, ci)` 加权置信区间
+- `backend/tests/test_v15_phase8.py` — 27 条验收测试（全部通过）
+
+### Test Coverage
+- **682 passed, 4 skipped**（+27 vs Phase 7 的 655）
+
+---
+
+## [v15.0.0-phase7] — 2026-04-25
+
+### Added
+- `backend/app/analysis/calibration_metrics.py` — 校准指标计算：`brier_score(probs, labels)` Brier 分（越低越好）、`log_loss(probs, labels)` 对数损失、`ece(probs, labels, n_bins)` 期望校准误差（ECE）、`reliability_curve(probs, labels, n_bins)` 可靠性曲线（bin 中点/平均概率/平均准确率）
+- `backend/tests/test_v15_phase7.py` — 25 条验收测试（全部通过）
+
+### Test Coverage
+- **655 passed, 4 skipped**（+25 vs Phase 6 的 630）
+
+---
+
+## [v15.0.0-phase6] — 2026-04-25
+
+### Added
+- `backend/app/predetect/layer_l20_self_paradox.py` — L20 自我矛盾探针：多轮对话诱导矛盾声明，贝叶斯后验估计一致性置信度；仅 Deep 模式运行
+- `backend/app/predetect/layer_l21_multistep_drift.py` — L21 多步漂移检测：上下文积压后检测答案语义偏移（余弦相似度 + Jaccard 重叠）；仅 Deep 模式
+- `backend/app/predetect/layer_l22_prompt_reconstruct.py` — L22 提示词重构：反推系统提示词结构关键词；仅 Deep 模式
+- `backend/app/predetect/layer_l23_adversarial_tools.py` — L23 对抗性 Tool-Call：注入恶意 tool schema 探测函数调用拦截能力；仅 Deep 模式；`extra_params={"tool_choice":"auto"}` 传递非标准字段
+- `backend/tests/test_v15_phase6.py` — 27 条验收测试（全部通过）
+
+### Changed
+- `predetect/pipeline.py` — Deep 模式新增 L20-L23 执行块（运行于 L19 之后）
+
+### Test Coverage
+- **630 passed, 4 skipped**（+27 vs Phase 5 的 603）
+
+---
+
+## [v15.0.0-phase5] — 2026-04-24
+
+### Added
+- `backend/app/preflight/__init__.py` — preflight 包初始化
+- `backend/app/preflight/connection_check.py`（初版）— A1-A5 预检连通五步基础框架
+- `GET /api/v15/runs/{id}/preflight` — 预检结果查询端点
+- `handlers/v15_handlers.py` `handle_get_preflight_result` — 对应 handler
+
+### Test Coverage
+- **603 passed, 4 skipped**（基础，含 Phase 0-4 测试）
+
+---
+
+## [v15.0.0-phase4] — 2026-04-24
+
+### Changed / Fixed
+- `predetect/layer_l23_adversarial_tools.py` — **Bug 修复**：`LLMRequest()` 错误传入 `tool_choice="auto"` 非法字段，改为 `extra_params={"tool_choice": "auto"}`
+- `core/schemas.py` `ScoreCard` — 多处 `None` 语义修正，消除 v14 遗留假数据兜底
+- 多处兼容性修复确保 Phase 0-3 测试在 v15 baseline 上全部通过
+
+### Test Coverage
+- **603 passed, 4 skipped**
+
+---
+
+## [v15.0.0-phase3] — 2026-04-24
+
+### Added
+- `backend/app/analysis/narrative_builder.py`（初版）— 纯规则叙事生成器核心逻辑
+
+### Test Coverage
+- **603 passed, 4 skipped**
+
+---
+
+## [v15.0.0-phase2] — 2026-04-24
+
+### Added
+- `backend/app/authenticity/model_card_diff.py` — 模型卡差异对比：`ModelCardDiff.build()` 对比声称模型 vs 疑似模型的能力声明差异，`risk_level`（low/medium/high/critical）、`wrapper_probability`、`diff_items` 列表
+- `GET /api/v15/runs/{id}/model-card-diff` — 返回 `ModelCardDiff.to_dict()`
+
+### Changed
+- `handlers/v15_handlers.py` — 新增 `handle_get_model_card_diff`
+- `main.py` — 注册新路由
+
+### Test Coverage
+- **603 passed, 4 skipped**
+
+---
+
+## [v15.0.0-phase1] — 2026-04-24
+
+### Added
+- `backend/app/authenticity/__init__.py` — authenticity 包初始化
+- `backend/app/authenticity/evidence_ledger.py` — 贝叶斯证据台账：`EvidenceItem` dataclass（signal/weight/confidence/source_layer）、`EvidenceLedger`（`add_evidence()` / `wrapper_probability()` 贝叶斯奇数融合 / `risk_level()` / `suspected_actual_model()` / `to_dict()`）、`extract_evidence_from_predetect()` 从 PreDetectionResult 提取证据
+- `GET /api/v15/runs/{id}/evidence-ledger` — 返回 `EvidenceLedger.to_dict()`
+
+### Changed
+- `handlers/v15_handlers.py` — 新增 `handle_get_evidence_ledger`
+- `main.py` — 注册新路由
+
+### Test Coverage
+- **603 passed, 4 skipped**
+
+---
+
+## [v15.0.0-phase0] — 2026-04-24
+
+### Added
+- `backend/app/fixtures/suite_v15.json` — v15 基础测试套件（初始 8 条用例，通过导入管线持续追加）
+- `backend/app/_data/version.json` — 版本文件（`{"version":"v15.0.0","phases_complete":[...],"built_at":"..."}`）
+- `GET /api/v15/health` — v15 命名空间健康检查（返回 `api_version: "v15"` + version.json 信息）
+
+### Changed
+- `core/db_migrations.py` — 注册 `Migration007V15CacheTable`（`llm_response_cache` 表，幂等建表）
+- `tasks/seeder.py` — 加载循环新增 `suite_v13.json` + `suite_v15.json`
+
+### Test Coverage
+- 基础建立，后续阶段累积至 **825 passed, 4 skipped**
+
+---
+
 ## [v14.0.0-phase9] — 2026-04-20
 
 ### Added

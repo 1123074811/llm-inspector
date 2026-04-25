@@ -1,4 +1,4 @@
-# LLM Inspector v14.0 — LLM 套壳检测与能力评估工具（v14.0.0 全部 9 阶段完成）
+# LLM Inspector v15.0 — LLM 套壳检测与能力评估工具（v15.0.0 全部 14 阶段完成）
 
 ## Quick Start
 - `cd llm-inspector && python -m backend.app.main` — 启动服务（默认 :8000）
@@ -18,7 +18,7 @@
 ## Architecture
 ```
 HTTP Handler (main.py) → Repository (repo.py) → Worker (worker.py)
-  → Orchestrator: PreDetect(16层；v14 Phase5 扩展至20层) → CaseExecutor → Judge(28+种) → Analysis Pipeline
+  → Orchestrator: PreflightCheck(5步) → PreDetect(24层；v15 Phase6 扩展至L23) → CaseExecutor(CacheStrategy) → Judge(31+种) → Analysis Pipeline
 ```
 
 ### 模块结构
@@ -40,7 +40,18 @@ backend/app/
 │   ├── elo.py              # ELO 排行榜
 │   ├── factor_analysis.py  # 因子分析
 │   ├── adaptive_testing.py # CAT 自适应测试
-│   └── stanine.py          # v13 Stanine-9 转换 + 百分位（Canfield 1951）
+│   ├── stanine.py          # v13 Stanine-9 转换 + 百分位（Canfield 1951）
+│   ├── calibration_metrics.py # v15 Brier分/对数损失/ECE/可靠性曲线（Phase 7）
+│   ├── uncertainty.py      # v15 Bootstrap CI/SEM/HDI/加权CI（Phase 8）
+│   ├── judge_calibration.py # v15 Fleiss κ/Cohen κ/偏差检测（Phase 9）
+│   ├── judge_registry.py   # v15 评判注册中心（Phase 12）
+│   └── narrative_builder.py # v15 纯规则叙事生成器，零Token消耗（Phase 3/10）
+├── authenticity/     # v15 真实性分析（Phase 1-2）
+│   ├── evidence_ledger.py  # 贝叶斯证据台账，包装器检测概率（EvidenceLedger）
+│   └── model_card_diff.py  # 模型卡差异对比（声称 vs 疑似模型）
+├── preflight/        # v15 预检连通验证（Phase 5/13）
+│   ├── error_taxonomy.py   # ErrorCode（15个）+ ErrorDetail + make_error()
+│   └── connection_check.py # A1-A5 五步执行器，run_preflight()，PreflightReport
 ├── api/              # v8 路由定义
 ├── benchmarks/       # 基准数据目录（当前为空）
 ├── config/           # YAML 配置（scoring_weights, prompt_compression）
@@ -74,7 +85,7 @@ backend/app/
 │   └── builtin_plugins.py   # 内置插件
 ├── knowledge/        # 知识图谱客户端（DBpedia/Wikidata SPARQL，已实现双源交叉验证）
 │   └── dbpedia_client.py    # v13 DBpedia SPARQL 客户端（并发fan-out，冲突标记）
-├── predetect/        # 预检测管道（v13：16层；v14 Phase3 扩展至17层；Phase5 规划至20层）
+├── predetect/        # 预检测管道（v15：24层 L0-L23）
 │   ├── pipeline.py   # 预检测主管线（452行）
 │   ├── bayesian_fusion.py   # 贝叶斯置信度融合
 │   ├── adversarial_analysis.py # 对抗性分析
@@ -87,6 +98,10 @@ backend/app/
 │   ├── identity_exposure.py # v14 Layer 17 真实模型暴露引擎（贝叶斯后验+16家族分类）
 │   ├── system_prompt_harvester.py # v14 系统提示词抽取与脱敏（Tier1/2双级检测）
 │   ├── layers_l18_l19.py   # v14 Layer 18（时序侧信道，TTFT/TPS KL散度）+ Layer 19（Token分布，Wasserstein距离）
+│   ├── layer_l20_self_paradox.py  # v15 Layer 20 自我矛盾探针（Deep专属，Phase 6）
+│   ├── layer_l21_multistep_drift.py # v15 Layer 21 多步漂移检测（Deep专属，Phase 6）
+│   ├── layer_l22_prompt_reconstruct.py # v15 Layer 22 提示词重构（Deep专属，Phase 6）
+│   ├── layer_l23_adversarial_tools.py  # v15 Layer 23 对抗工具调用（Deep专属，Phase 6）
 │   ├── tool_capability.py # 工具能力探测
 │   └── layers/       # 预检测层实现（逻辑在 pipeline.py 中）
 ├── repository/       # 数据持久层
@@ -95,10 +110,14 @@ backend/app/
 │   ├── orchestrator.py # 编排器（CAT自适应选题+Token预算控制）
 │   ├── adaptive_sampling.py # v14 IRT 信息量驱动动态 n_samples（Phase 6）
 │   ├── token_counter.py    # v14 tiktoken 精确计数 + fallback（Phase 6）
-│   └── retry_policy.py     # v14 分级重试策略（网络超时/429，指数退避，Phase 7）
+│   ├── retry_policy.py     # v14 分级重试策略（网络超时/429，指数退避，Phase 7）
+│   ├── cache_strategy.py   # v15 SHA-256键TTL响应缓存，temperature=0专用（Phase 10）
+│   └── import_dataset.py   # v15 DatasetImporter + ImportReport（Phase 11）
 └── docs/
+    ├── UPGRADE_PLAN_V15.md # v15 权威升级方案（14阶段）
     ├── UPGRADE_PLAN_V14.md # v14 权威升级方案（9阶段）
-    └── MIGRATION_v13_to_v14.md # v13→v14 迁移指南（Phase 9）
+    ├── MIGRATION_v14_to_v15.md # v14→v15 迁移指南（Phase 13）
+    └── MIGRATION_v13_to_v14.md # v13→v14 迁移指南（v14 Phase 9）
 │   ├── case_executor.py # 用例执行器
 │   ├── compression.py   # 提示词压缩
 │   ├── prompt_optimizer.py # v11 Phase 3 动态 Few-Shot 提示词优化（TF-IDF检索）
@@ -462,8 +481,21 @@ GET    /api/v10/runs/{id}/logs/stream
   - `test_v14_phase6.py` — v14 Phase 6 测试（Token效率+自适应采样+tiktoken，+37）
   - `test_v14_phase7.py` — v14 Phase 7 测试（进度修正+分级重试+Watchdog分页，+32）
   - `test_v14_phase8.py` — v14 Phase 8 测试（前端API验证+ScoreCard v14字段+排行榜分页，+16）
-- **总计: 471 passed, 4 skipped**（v14.0.0 全量；archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
-- 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http
+  - `test_v15_phase0.py` — v15 Phase 0 测试（version.json/suite_v15/v15 health端点）
+  - `test_v15_phase1.py` — v15 Phase 1 测试（EvidenceLedger + extract_evidence_from_predetect）
+  - `test_v15_phase2.py` — v15 Phase 2 测试（ModelCardDiff + build_model_card_diff）
+  - `test_v15_phase3.py` — v15 Phase 3 测试（NarrativeBuilder.build() + 报告字段）
+  - `test_v15_phase5.py` — v15 Phase 5 测试（preflight 框架 + handle_get_preflight_result）
+  - `test_v15_phase6.py` — v15 Phase 6 测试（L20/L21/L22/L23 层行为，+27）
+  - `test_v15_phase7.py` — v15 Phase 7 测试（brier_score/log_loss/ece/reliability_curve，+25）
+  - `test_v15_phase8.py` — v15 Phase 8 测试（bootstrap_ci/sem/hdi/weighted_ci，+27）
+  - `test_v15_phase9.py` — v15 Phase 9 测试（compute_fleiss_kappa/cohen_kappa/judge_bias_detection，+24）
+  - `test_v15_phase10.py` — v15 Phase 10 测试（NarrativeBuilder/CacheStrategy/Migration007/version.json，+18）
+  - `test_v15_phase11.py` — v15 Phase 11 测试（DatasetImporter全流程，+37）
+  - `test_v15_phase12.py` — v15 Phase 12 测试（judge_registry.py/YAML/handler，+33）
+  - `test_v15_phase13.py` — v15 Phase 13 测试（error_taxonomy/connection_check/run_preflight，+31）
+- **总计: 825 passed, 4 skipped**（v15.0.0 全量；archive/ 中 10 个 legacy 测试从 pytest 采集中排除）
+- 覆盖: config/security/db/seeder/judge/analysis/repo/predetect/executor/http/preflight/authenticity/cache/import
 
 ## Task Queue Architecture
 - 本地模式: ThreadPoolExecutor（默认，零配置）
@@ -484,3 +516,7 @@ GET    /api/v10/runs/{id}/logs/stream
 - `suite_v13.json` 所有用例含 `source_ref` + `license`，`calibrated=false` 等待实测数据拟合 IRT 参数
 - 双判定 κ < 0.60 时自动升级 transparent_judge 仲裁（dual_judge.py）
 - Run 进度保障：B-03 已修复，`run_watchdog` 守护线程每 5 分钟扫描超时 running 任务并标记 `partial_failed`
+- v15 CacheStrategy 仅缓存 `temperature=0` 的请求，key = SHA-256(base_url + payload JSON)；Migration007 幂等建表，升级无副作用
+- v15 L20-L23 仅在 Deep 模式运行；`layer_l23_adversarial_tools.py` 使用 `extra_params={"tool_choice":"auto"}` 传递非标准字段（`LLMRequest` 无该字段）
+- v15 judge_registry.py 使用 PyYAML 加载 `_data/judge_registry.yaml`，无 PyYAML 时自动 fallback 到 stdlib 解析器
+- v15 DatasetImporter 的 `SUITE_DIR` 是类变量，测试通过 `monkeypatch.setattr(DatasetImporter, "SUITE_DIR", tmp_path)` 隔离

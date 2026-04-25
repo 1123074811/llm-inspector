@@ -82,7 +82,12 @@ from app.handlers.v14_handlers import (
     handle_circuit_breaker_history,
 )
 from app.handlers.preflight_handlers import handle_get_preflight_result
-from app.handlers.v15_handlers import handle_get_evidence_ledger, handle_get_model_card_diff, handle_token_audit, handle_cache_stats, handle_evict_expired_cache
+from app.handlers.v15_handlers import (
+    handle_get_evidence_ledger, handle_get_model_card_diff,
+    handle_token_audit, handle_cache_stats, handle_evict_expired_cache,
+    handle_import_dataset, handle_validate_case,
+    handle_judge_registry, handle_judge_registry_method,
+)
 
 logger = get_logger(__name__)
 
@@ -205,6 +210,12 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v15/runs/[^/]+/token-audit$",            handle_token_audit),
     ("GET",    r"^/api/v15/cache-stats$",                       handle_cache_stats),
     ("POST",   r"^/api/v15/cache/evict$",                       handle_evict_expired_cache),
+    # -- v15 Phase 11: dataset import --
+    ("POST",   r"^/api/v15/dataset/import$",                    handle_import_dataset),
+    ("POST",   r"^/api/v15/dataset/validate$",                  handle_validate_case),
+    # -- v15 Phase 12: judge registry --
+    ("GET",    r"^/api/v15/judge-registry$",                    handle_judge_registry),
+    ("GET",    r"^/api/v15/judge-registry/[^/]+$",              handle_judge_registry_method),
 ]
 
 

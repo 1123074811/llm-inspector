@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -74,10 +75,15 @@ class PreflightReport:
 
 
 def run_preflight(base_url: str, api_key: str, model_name: str,
-                  timeout: float = 10.0) -> PreflightReport:
+                  timeout: float = 10.0,
+                  verify_ssl: bool = True) -> PreflightReport:
     """
     Run all preflight checks. Returns a PreflightReport.
     Stops at first hard failure (non-retryable) but continues for retryable ones.
+
+    Args:
+        verify_ssl: If False, skip TLS certificate verification. Use only in
+                    corporate/internal environments with self-signed certificates.
     """
     import datetime
     t_start = time.time()
@@ -115,15 +121,15 @@ def run_preflight(base_url: str, api_key: str, model_name: str,
 
     # --- A3: Auth + minimal completion probe ---
     t = time.time()
-    a3_err, probe_body, a3_notes = _check_auth_and_probe(base_url, api_key, model_name, timeout)
+    a3_err, probe_body, a3_notes = _check_auth_and_probe(base_url, api_key, model_name, timeout, verify_ssl)
     add_step(PreflightStep("A3", "auth_and_probe", a3_err is None,
                            (time.time() - t) * 1000, a3_err, a3_notes))
     if a3_err:
-        # A3 failed: skip A4 (schema check would always fail with empty probe_body,
-        # producing a misleading E_SCHEMA_MISSING_CHOICES cascading error).
+        # A3 failed: skip A4/A5 — schema check on an empty body would produce a
+        # misleading cascading E_SCHEMA_MISSING_CHOICES error.
         add_step(PreflightStep("A4", "response_schema", False, 0.0,
                                None, "skipped — A3 did not return a valid response"))
-        add_step(PreflightStep("A5", "capability_notes", True, 0.0,
+        add_step(PreflightStep("A5", "capability_notes", False, 0.0,
                                None, "skipped — A3 failed"))
         return PreflightReport(False, steps, first_error,
                                (time.time() - t_start) * 1000,
@@ -188,8 +194,36 @@ def _check_reachability(base_url: str, timeout: float) -> tuple[ErrorDetail | No
         return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=str(e)), str(e)
 
 
+def _build_ssl_context(verify: bool = True) -> ssl.SSLContext | None:
+    """
+    Return an SSLContext appropriate for the verify setting.
+
+    verify=True  → try certifi first (most up-to-date CA bundle), fall back to
+                   the system/Python default.  This fixes the common case where
+                   Python's bundled certs are outdated but certifi is installed.
+    verify=False → disable certificate verification entirely (CERT_NONE).
+                   Use only in private/corporate environments with self-signed certs.
+    """
+    if not verify:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    # Try certifi — provides an always-updated Mozilla CA bundle
+    try:
+        import certifi  # type: ignore[import]
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+
+    # Fall back to Python/OS default (may be outdated on some systems)
+    return None  # urllib uses its own default when context=None
+
+
 def _check_auth_and_probe(base_url: str, api_key: str, model_name: str,
-                           timeout: float) -> tuple[ErrorDetail | None, dict, str]:
+                           timeout: float,
+                           verify_ssl: bool = True) -> tuple[ErrorDetail | None, dict, str]:
     """Send a minimal chat/completions request (1 token) to verify auth."""
     url = base_url.rstrip("/") + "/chat/completions"
     payload = json.dumps({
@@ -209,8 +243,11 @@ def _check_auth_and_probe(base_url: str, api_key: str, model_name: str,
         },
     )
 
+    # Build SSL context
+    ssl_context: ssl.SSLContext | None = _build_ssl_context(verify_ssl)
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context) as resp:
             body_bytes = resp.read()
             try:
                 body = json.loads(body_bytes)
@@ -228,7 +265,9 @@ def _check_auth_and_probe(base_url: str, api_key: str, model_name: str,
         code = _http_status_to_error_code(e.code, raw_body)
         return make_error(code, raw_status=e.code, raw_body=raw_body), {}, f"HTTP {e.code}"
     except urllib.error.URLError as e:
-        msg = str(e.reason) if hasattr(e, "reason") else str(e)
+        # Preserve the full reason string for diagnostics (shown in UI raw_excerpt)
+        reason = e.reason if hasattr(e, "reason") else e
+        msg = str(reason)
         msg_lower = msg.lower()
         if "timed out" in msg_lower or "timeout" in msg_lower:
             return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=msg), {}, msg
@@ -237,7 +276,10 @@ def _check_auth_and_probe(base_url: str, api_key: str, model_name: str,
         if "dns" in msg_lower or "name resolution" in msg_lower or "getaddrinfo" in msg_lower:
             return make_error(ErrorCode.E_NET_DNS_FAIL, raw_body=msg), {}, msg
         if "ssl" in msg_lower or "certificate" in msg_lower or "tls" in msg_lower:
-            return make_error(ErrorCode.E_TLS_INVALID, raw_body=msg), {}, msg
+            # Capture the full SSL error (e.g. CERTIFICATE_VERIFY_FAILED, WRONG_VERSION_NUMBER)
+            # so users can see the exact Python SSL reason in the diagnostic panel.
+            full_reason = f"{type(reason).__name__}: {msg}" if not msg.startswith(type(reason).__name__) else msg
+            return make_error(ErrorCode.E_TLS_INVALID, raw_body=full_reason), {}, full_reason
         return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=msg), {}, msg
     except socket.timeout as e:
         return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=str(e) or f"timed out after {timeout}s"), {}, f"timeout after {timeout}s"

@@ -76,11 +76,16 @@ def handle_create_run(_path, _qs, body: dict) -> tuple:
     calibration_case_id = body.get("calibration_case_id")
     suite_version = settings.SUITE_VERSION
 
+    # SSL verification: default True; users behind corporate SSL-inspection proxies
+    # or with self-signed certs can pass verify_ssl=false to skip cert validation.
+    verify_ssl = bool(body.get("verify_ssl", True))
+
     run_metadata = {
         "evaluation_mode": evaluation_mode,
         "calibration_case_id": calibration_case_id,
         "scoring_profile_version": scoring_profile_version,
         "calibration_tag": "baseline-v1.0" if evaluation_mode == "calibration" else None,
+        "verify_ssl": verify_ssl,
     }
 
     run_id = repo.create_run(

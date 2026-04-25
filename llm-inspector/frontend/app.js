@@ -314,10 +314,11 @@ function clearSavedForm() {
 }
 
 async function submitRun() {
-  const url   = document.getElementById('f-url').value.trim();
-  const key   = document.getElementById('f-key').value.trim();
-  const model = document.getElementById('f-model').value.trim();
-  const mode  = document.getElementById('f-mode').value;
+  const url        = document.getElementById('f-url').value.trim();
+  const key        = document.getElementById('f-key').value.trim();
+  const model      = document.getElementById('f-model').value.trim();
+  const mode       = document.getElementById('f-mode').value;
+  const verifySsl  = document.getElementById('f-verify-ssl')?.checked ?? true;
   const hint  = document.getElementById('submit-hint');
   const btn   = document.getElementById('submit-btn');
 
@@ -329,7 +330,7 @@ async function submitRun() {
   hint.textContent = '';
 
   const {ok, data} = await api('POST', '/api/v1/runs', {
-    base_url: url, api_key: key, model, test_mode: mode
+    base_url: url, api_key: key, model, test_mode: mode, verify_ssl: verifySsl
   });
 
   btn.disabled = false;
@@ -732,9 +733,16 @@ function renderTaskProgress(data, responses = []) {
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
     </div>` : '';
 
+  // Extract raw SSL/network error from preflight report for diagnostics
+  const pfFirstErr = pf && pf.first_error ? pf.first_error : null;
+  const rawErrExcerpt = pfFirstErr ? (pfFirstErr.raw_excerpt || '') : '';
+  const pfHint = pfFirstErr ? (pfFirstErr.hint || '') : '';
+
   const errorHtml = data.error_message ? `<div class="card" style="border-color:#f0b8b8;background:var(--red-bg)">
-      <div style="color:var(--red);font-size:13px;font-weight:600">诊断错误 (Code: ${data.error_code || 'E_RUN_FAIL'})</div>
+      <div style="color:var(--red);font-size:13px;font-weight:600">诊断错误 (Code: ${escHtml(data.error_code || 'E_RUN_FAIL')})</div>
       <div style="color:var(--red);font-size:12px;margin-top:4px" id="error-msg-${data.run_id || 'current'}">${escHtml(data.error_message)}</div>
+      ${pfHint ? `<div style="font-size:11px;color:var(--ink3);margin-top:6px;white-space:pre-line">${escHtml(pfHint)}</div>` : ''}
+      ${rawErrExcerpt ? `<details style="margin-top:6px"><summary style="font-size:11px;color:var(--ink4);cursor:pointer">▸ 原始错误（用于排查）</summary><div style="margin-top:4px;font-size:10px;color:var(--ink3);font-family:var(--mono);word-break:break-all;background:rgba(0,0,0,.04);padding:6px;border-radius:4px">${escHtml(rawErrExcerpt)}</div></details>` : ''}
       <div style="margin-top:8px"><button class="btn" style="padding:2px 8px;font-size:11px" data-action="copyDiagnostic" data-run-id="${escAttr(data.run_id || 'current')}">复制诊断信息</button></div>
       </div>` : '';
 
@@ -1344,7 +1352,9 @@ function renderPreflightCard(pf) {
     let errHtml = '';
     if (s.error) {
       const e = s.error;
-      errHtml = `<div style="margin-top:3px;font-size:11px;color:var(--red)">${escHtml(e.user_message_zh || e.message || e.code || '')}</div>`;
+      const hint = e.hint || e.hint_zh || '';
+      const hintHtml = hint ? `<div style="margin-top:3px;font-size:11px;color:var(--ink3);white-space:pre-line">${escHtml(hint)}</div>` : '';
+      errHtml = `<div style="margin-top:3px;font-size:11px;color:var(--red)">${escHtml(e.user_message_zh || e.message || e.code || '')}</div>${hintHtml}`;
     } else if (s.notes && !s.notes.startsWith('skipped')) {
       errHtml = `<div style="margin-top:2px;font-size:11px;color:var(--ink4)">${escHtml(s.notes)}</div>`;
     }

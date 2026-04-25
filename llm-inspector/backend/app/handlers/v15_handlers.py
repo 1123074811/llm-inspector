@@ -144,3 +144,74 @@ def handle_evict_expired_cache(path: str, qs: dict, body: dict) -> dict:
     except Exception as e:
         logger.error("Error evicting cache", error=str(e))
         return {"status": 500, "body": {"error": str(e)}}
+
+
+# ---------------------------------------------------------------------------
+# v15 Phase 11: Dataset import
+# ---------------------------------------------------------------------------
+
+def handle_import_dataset(path: str, qs: dict, body: dict) -> dict:
+    """POST /api/v15/dataset/import — Import test cases into the v15 suite."""
+    cases = body.get("cases")
+    if not cases or not isinstance(cases, list):
+        return {"status": 400, "body": {"error": "Request body must contain 'cases' list"}}
+
+    target_version = body.get("target_version", "v15")
+    overwrite = bool(body.get("overwrite", False))
+
+    try:
+        from app.runner.import_dataset import DatasetImporter
+        report = DatasetImporter.import_cases(cases, target_version, overwrite)
+        return {"status": 200, "body": report.to_dict()}
+    except Exception as e:
+        logger.error("Error importing dataset", error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
+
+
+def handle_validate_case(path: str, qs: dict, body: dict) -> dict:
+    """POST /api/v15/dataset/validate — Validate a single test case dict."""
+    case = body.get("case")
+    if not case or not isinstance(case, dict):
+        return {"status": 400, "body": {"error": "Request body must contain 'case' dict"}}
+
+    try:
+        from app.runner.import_dataset import DatasetImporter
+        error = DatasetImporter.validate_case(case)
+        if error:
+            return {"status": 200, "body": {"valid": False, "error": error}}
+        return {"status": 200, "body": {"valid": True, "error": None}}
+    except Exception as e:
+        logger.error("Error validating case", error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
+
+
+# ---------------------------------------------------------------------------
+# v15 Phase 12: Judge registry
+# ---------------------------------------------------------------------------
+
+def handle_judge_registry(path: str, qs: dict, body: dict) -> dict:
+    """GET /api/v15/judge-registry — List all registered judge methods."""
+    try:
+        from app.analysis.judge_registry import registry_summary
+        return {"status": 200, "body": registry_summary()}
+    except Exception as e:
+        logger.error("Error fetching judge registry", error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}
+
+
+def handle_judge_registry_method(path: str, qs: dict, body: dict) -> dict:
+    """GET /api/v15/judge-registry/{method} — Detail for a single judge method."""
+    parts = path.split("/")
+    method_name = parts[-1] if parts else None
+    if not method_name:
+        return {"status": 400, "body": {"error": "method name required"}}
+
+    try:
+        from app.analysis.judge_registry import get_method
+        entry = get_method(method_name)
+        if entry is None:
+            return {"status": 404, "body": {"error": f"Method '{method_name}' not found"}}
+        return {"status": 200, "body": {"method": method_name, "detail": entry}}
+    except Exception as e:
+        logger.error("Error fetching judge method", method=method_name, error=str(e))
+        return {"status": 500, "body": {"error": str(e)}}

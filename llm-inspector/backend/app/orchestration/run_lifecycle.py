@@ -166,7 +166,9 @@ class RunLifecycleManager:
             base_url = self.run_metadata["base_url"]
             model_name = self.run_metadata["model_name"]
 
-            report = run_preflight(base_url, api_key, model_name)
+            meta = self.run_metadata.get("metadata") or {}
+            verify_ssl = meta.get("verify_ssl", True)
+            report = run_preflight(base_url, api_key, model_name, verify_ssl=verify_ssl)
 
             # Save report to DB
             import json

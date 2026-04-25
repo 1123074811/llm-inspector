@@ -53,7 +53,7 @@ _ERROR_DETAILS: dict[str, tuple[bool, str, str, str]] = {
     ErrorCode.E_NET_DNS_FAIL:        (True,  "无法解析主机名，请检查 Base URL 是否正确", "DNS resolution failed", "确认主机名拼写无误，检查网络连接"),
     ErrorCode.E_NET_CONN_REFUSED:    (True,  "连接被拒绝，目标端口未开放或防火墙阻断", "Connection refused", "确认服务正在运行，检查端口和防火墙设置"),
     ErrorCode.E_NET_TIMEOUT:         (True,  "连接超时，网络延迟过大", "Connection timed out", "稍后重试；若持续出现，检查网络或上游服务状态"),
-    ErrorCode.E_TLS_INVALID:         (False, "TLS 证书验证失败，请检查是否应使用 http:// 而非 https://", "TLS certificate error", ""),
+    ErrorCode.E_TLS_INVALID:         (False, "TLS/SSL 连接失败（常见原因：企业代理 SSL 审查、系统证书库过旧、网络防火墙阻断）", "TLS/SSL connection failed", "排查步骤：① pip install --upgrade certifi 更新 CA 证书库后重试 ② 若在企业内网，尝试取消勾选「验证 SSL 证书」后重试 ③ 设置代理：HTTPS_PROXY=http://代理地址:端口 后重启服务 ④ 展开「原始错误」查看具体原因"),
     ErrorCode.E_AUTH_INVALID_KEY:    (False, "API Key 无效或已过期（上游返回 401）", "Invalid API Key (401 from upstream)", "重新检查 API Key，确认未过期"),
     ErrorCode.E_AUTH_FORBIDDEN:      (False, "API Key 无此模型访问权限（上游返回 403）", "Forbidden (403 from upstream)", "确认 Key 有访问该模型的权限"),
     ErrorCode.E_MODEL_NOT_FOUND:     (False, "模型名不存在或未部署（上游返回 404）", "Model not found (404)", "检查模型名拼写，查阅上游支持的模型列表"),
