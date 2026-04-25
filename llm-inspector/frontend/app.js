@@ -1752,13 +1752,6 @@ function renderReport(r) {
            data-scorecard="${escHtml(JSON.stringify(r.scorecard || {}))}"></div>
     </div>`;
 
-  // Case results
-  if (cases.length) {
-    html += '<div class="card"><h2>题目详情</h2>';
-    html += cases.map(c => renderCaseItem(c)).join('');
-    html += '</div>';
-  }
-
   // Extraction Audit
   const extAudit = r.extraction_audit || null;
   if (extAudit) {
@@ -2574,6 +2567,7 @@ function renderV14Cards(report, runId) {
   const ta = sc.token_analysis || null;
   const completeness = (sc.v13 && sc.v13.completeness != null) ? sc.v13.completeness : sc.completeness;
   const pre = (report && report.predetect_result) || null;
+  const cases = (report && report.case_results) || [];
 
   let html = '';
 
@@ -2597,6 +2591,13 @@ function renderV14Cards(report, runId) {
         <div class="v14-progress-bar"><div style="width:${pct}%"></div></div>
         <p style="font-size:12px;color:var(--ink3);margin-top:6px">${pct}% 维度有效数据</p>
       </div>`;
+  }
+
+  // Case results (题目详情) - moved to bottom
+  if (cases.length) {
+    html += '<div class="card"><h2>题目详情</h2>';
+    html += cases.map(c => renderCaseItem(c)).join('');
+    html += '</div>';
   }
 
   // PreDetect layer status dots
