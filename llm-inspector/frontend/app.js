@@ -1561,17 +1561,31 @@ function renderReport(r) {
   }
 
   if (verdict && verdict.level) {
-    const cls = verdict.level === 'trusted' ? 'low' : verdict.level === 'suspicious' ? 'medium' : 'high';
+    const cls = verdict.level === 'trusted' ? 'low'
+              : verdict.level === 'suspicious' ? 'medium'
+              : verdict.level === 'uncertain' ? 'medium'
+              : 'high';
+    // uncertain gets a distinct visual treatment (grey/amber, not red)
+    const levelStyle = verdict.level === 'uncertain'
+      ? 'style="color:#b45309;background:#fef3c7;border-radius:4px;padding:2px 8px;"'
+      : '';
     html += `
       <div class="risk-block ${cls}">
         <div class="card-label">真实性结论</div>
-        <div class="risk-level ${cls}">${escHtml(verdict.label || verdict.level)}</div>
+        <div class="risk-level ${cls}" ${levelStyle}>${escHtml(verdict.label || verdict.level)}</div>
         <ul class="evidence-list">
           ${(verdict.reasons||[]).map(r2 => `<li>${escHtml(r2)}</li>`).join('')}
         </ul>`;
+    if (verdict.level === 'uncertain') {
+      html += `<div style="margin-top:8px;padding:8px 12px;background:#fef3c7;border-radius:6px;font-size:12px;color:#92400e;">
+        ⚠ 证据不足：参考库中暂无该模型的基准数据，无法进行相似度比对。这<strong>不代表该 API 是假的</strong>，只是说明系统目前无法给出可信度判断。<br>
+        建议：① 完成本次检测后，将结果「标记为基准」，下次评测该模型时即可进行对比；② 或等待库更新收录该模型。
+      </div>`;
+    }
     if (verdict.confidence_real !== undefined) {
       const cr = Number(verdict.confidence_real || 0);
-      const crColor = cr >= 80 ? '#16a34a' : cr >= 60 ? '#d97706' : '#dc2626';
+      const crColor = verdict.level === 'uncertain' ? '#b45309'
+                    : cr >= 80 ? '#16a34a' : cr >= 60 ? '#d97706' : '#dc2626';
       const sd = verdict.signal_details || {};
       const SIGNAL_LABELS = {
         behavioral_similarity: '行为相似度',

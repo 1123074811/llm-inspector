@@ -312,10 +312,9 @@ def analyze_responses(
         if top_family != claimed_family and top_posterior >= _COLLISION_POSTERIOR_THRESHOLD:
             identity_collision = True
             collision_confidence = top_posterior
-        elif top_family != claimed_family and top3[0].raw_score >= 5.0:
-            # Raw score threshold fallback when posteriors are flat
-            identity_collision = True
-            collision_confidence = min(0.79, top_posterior)
+        # NOTE: raw_score fallback removed (v15 fix) — flat posteriors mean insufficient
+        # evidence, not a collision. The fallback caused high false-positive rates for
+        # library-unknown models where all family scores are low/equal.
 
     report = IdentityExposureReport(
         claimed_model=claimed_model,

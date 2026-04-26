@@ -54,12 +54,21 @@ class VerdictEngine:
         "fingerprint_mismatch_cap": "verdict.fingerprint_mismatch_cap",
     }
     # v6: Default TOP_MODELS as fallback (will be overridden by dynamic loading)
+    # v15 fix: expanded to cover 2025 model releases (deepseek-v4, qwen3, etc.)
     DEFAULT_TOP_MODELS = [
-        "gpt-4o", "gpt-4-turbo", "gpt-4o-mini",
-        "claude-3-5", "claude-3-7", "claude-4",
-        "deepseek-v3", "deepseek-r1",
-        "qwen2.5", "qwen-max",
-        "gemini-1.5", "gemini-2",
+        # OpenAI
+        "gpt-4o", "gpt-4-turbo", "gpt-4o-mini", "gpt-4.1", "gpt-5",
+        # Anthropic
+        "claude-3-5", "claude-3-7", "claude-4", "claude-4-5",
+        # DeepSeek
+        "deepseek-v3", "deepseek-r1", "deepseek-v4", "deepseek-r2",
+        # Qwen
+        "qwen2.5", "qwen-max", "qwen3", "qwen3-235b",
+        # Google
+        "gemini-1.5", "gemini-2", "gemini-2.5",
+        # Other frontier
+        "llama-3.1", "llama-3.3", "llama-4", "mistral-large",
+        "glm-4", "glm-4.5", "yi-large", "moonshot",
     ]
 
     def __init__(self):
@@ -293,9 +302,12 @@ class VerdictEngine:
         difficulty_ceiling = f("difficulty_ceiling", 0.5)
         claimed = (predetect.identified_as or "").lower() if predetect else ""
         top_models = self.TOP_MODELS
+        # v15: track whether any evidence-backed hard rule fires (used for uncertain verdict)
+        _hard_rule_fired = False
 
         if any(m in claimed for m in top_models) and difficulty_ceiling < float(self._rule("difficulty_ceiling_min")):
             confidence_real = min(confidence_real, float(self._rule("difficulty_cap")))
+            _hard_rule_fired = True
             reasons.append(
                 f"声称为顶级模型但能力天花板仅 {difficulty_ceiling:.2f}，"
                 f"梯度难度测试显示推理能力与声称不符"
@@ -305,6 +317,7 @@ class VerdictEngine:
         beh_inv = scorecard.behavioral_invariant_score
         if beh_inv is not None and beh_inv < float(self._rule("behavioral_invariant_min")):
             confidence_real = min(confidence_real, float(self._rule("behavioral_invariant_cap")))
+            _hard_rule_fired = True
             reasons.append(
                 f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
                 f"疑似模板匹配而非真实推理"
@@ -313,6 +326,7 @@ class VerdictEngine:
         # ── 硬规则：编程能力与声称等级不符 ──
         if scorecard.coding_score is not None and scorecard.coding_score < 10 and any(m in claimed for m in top_models):
             confidence_real = min(confidence_real, float(self._rule("coding_zero_cap")))
+            _hard_rule_fired = True
             reasons.append("编程能力评分接近零，与声称的模型等级严重不符")
 
         # ── v3 硬规则：提取攻击泄露真实模型名 ──
@@ -332,20 +346,52 @@ class VerdictEngine:
 
         if _found_identity_mismatch:
             confidence_real = min(confidence_real, float(self._rule("identity_exposed_cap")))
+            _hard_rule_fired = True
             reasons.append("提取攻击暴露了与声称不同的真实模型身份，置信度强制下调")
         elif extraction_resistance < float(self._rule("extraction_weak_threshold")):
             # Very weak resistance but no identity mismatch — suspicious but not definitive
             confidence_real = min(confidence_real, float(self._rule("extraction_weak_cap")))
+            _hard_rule_fired = True
             reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取")
 
         # ── v3 硬规则：tokenizer 指纹不匹配 ──
+        # v15 fix: only apply when claimed model is in TOP_MODELS; for library-unknown models
+        # a low fingerprint_match simply means we have no reference, not that it's fake.
         fingerprint_match = getattr(scorecard, 'breakdown', {}).get('fingerprint_match', 100)
-        if fingerprint_match < float(self._rule("fingerprint_mismatch_threshold")) and claimed:
+        _claimed_is_known = bool(claimed) and any(m in claimed for m in top_models)
+        if fingerprint_match < float(self._rule("fingerprint_mismatch_threshold")) and _claimed_is_known:
             confidence_real = min(confidence_real, float(self._rule("fingerprint_mismatch_cap")))
+            _hard_rule_fired = True
             reasons.append("tokenizer/行为指纹与声称模型不符")
 
         t = self.VERDICT_THRESHOLDS
-        if confidence_real >= t["trusted"]:
+
+        # ── v15 fix: uncertain verdict when evidence is insufficient ──
+        # Condition: no hard rule fired AND similarity has no strong match AND
+        # predetect couldn't identify the model. This means "don't know" ≠ "high risk".
+        _no_baseline_match = sim_score < 40.0 and not similarities
+        _sim_no_match = sim_score < 40.0  # even with baselines, very low similarity
+        _predetect_no_id = not (predetect and predetect.success and predetect.confidence
+                                and predetect.confidence >= 0.5)
+        _is_uncertain = (
+            not _hard_rule_fired
+            and _sim_no_match
+            and _predetect_no_id
+            and confidence_real < t["suspicious"]
+        )
+
+        if _is_uncertain:
+            level, label = "uncertain", "证据不足 / Insufficient Evidence"
+            signal_details["uncertain_reason"] = (
+                "相似度库中无匹配基准，预检测无法识别模型家族，"
+                "无法给出可信度判断（非高风险信号）"
+            )
+            if not any("证据不足" in r or "无法识别" in r for r in reasons):
+                reasons.append(
+                    "参考库中无该模型的基准数据，无法完成相似度比对；"
+                    "建议将本次结果标记为基准后重新评测，或等待库更新"
+                )
+        elif confidence_real >= t["trusted"]:
             level, label = "trusted", "可信 / Trusted"
         elif confidence_real >= t["suspicious"]:
             level, label = "suspicious", "轻度可疑 / Suspicious"
