@@ -1,5 +1,4 @@
 {
-  "version": "v16.0.0",
   "phases_complete": [
     "phase0",
     "phase1",
@@ -27,8 +26,22 @@
     "phase8_v16",
     "phase9_v16",
     "phase10_v16",
-    "phase11_v16"
+    "phase11_v16",
+    "phase0_v17",
+    "phase1_v17",
+    "phase2_v17",
+    "phase3_v17",
+    "phase4_v17",
+    "phase5_v17",
+    "phase6_v17",
+    "phase7_v17",
+    "phase8_v17",
+    "phase9_v17",
+    "phase10_v17",
+    "phase11_v17",
+    "phase12_v17"
   ],
-  "built_at": "2026-04-27T00:00:00Z",
-  "changelog": "https://github.com/llm-inspector/CHANGELOG.md"
+  "built_at": "2026-04-27T15:08:59Z",
+  "changelog": "https://github.com/llm-inspector/CHANGELOG.md",
+  "version": "v17.0.0"
 }

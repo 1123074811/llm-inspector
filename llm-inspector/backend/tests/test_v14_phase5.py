@@ -22,6 +22,28 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# v17 Phase 4 compatibility: layers_l18_l19 now refuse to compute KL /
+# Wasserstein when *every* reference family carries ``sampled: False``
+# (placeholder data).  These v14-era tests were written before that gate
+# existed and supply prior-layer data without first populating real
+# baselines.  We mark all loaded references as ``sampled: True`` for the
+# duration of this module so the gate does not short-circuit; the actual
+# KL / Wasserstein arithmetic remains unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _force_sampled_baselines(monkeypatch):
+    from app.predetect import layers_l18_l19 as ll
+    real_timing = ll._load_timing_refs()
+    real_dist = ll._load_dist_refs()
+    fake_timing = {k: {**v, "sampled": True} for k, v in real_timing.items()}
+    fake_dist = {k: {**v, "sampled": True} for k, v in real_dist.items()}
+    monkeypatch.setattr(ll, "_load_timing_refs", lambda: fake_timing)
+    monkeypatch.setattr(ll, "_load_dist_refs", lambda: fake_dist)
+
+
+# ---------------------------------------------------------------------------
 # EventKind
 # ---------------------------------------------------------------------------
 

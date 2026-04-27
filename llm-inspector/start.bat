@@ -1,6 +1,6 @@
 @echo off
 echo ====================================
-echo LLM Inspector v16.0
+echo LLM Inspector v17.0
 echo ====================================
 
 REM Activate virtual environment
@@ -14,6 +14,15 @@ if exist ".venv\Scripts\activate.bat" (
 REM Enable asyncio-native concurrent pipeline
 REM Set to 0 to fall back to ThreadPoolExecutor mode
 SET ASYNCIO_MODE=1
+
+REM v17 Phase 12.x: opt-in periodic maintenance daemon.
+REM Runs four background jobs:
+REM   - model_registry_sync   (every 6h)  pulls fresh model intel from OpenAI/Anthropic/Google/xAI/OpenRouter
+REM   - changelog_harvester   (every 1d)  parses official RSS/changelog pages for new models
+REM   - dataset_sync          (every 7d)  ingests new LiveBench / SWE-bench / HLE rows
+REM   - pruner_job            (every 1h)  flags ceiling/floor cases + emits suite_exhaustion warnings
+REM Set to 0 to disable.
+SET MAINTENANCE_JOBS_ENABLED=1
 
 REM Change to backend directory
 cd backend

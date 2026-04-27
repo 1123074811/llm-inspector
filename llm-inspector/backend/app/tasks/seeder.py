@@ -44,7 +44,9 @@ def _seed_test_cases() -> None:
     # composite in repo.load_cases(). Until real prompts are imported, leaving
     # them enabled would cause 0% pass on coding/safety/knowledge/reasoning.
     _STUB_SUITE_FILES = frozenset({"suite_v16_test_comm.json", "suite_v16_test_nc.json"})
-    for suite_file in ("suite_v1.json", "suite_extraction.json", "suite_v2.json", "suite_v3.json", "suite_v10.json", "suite_v13.json", "suite_v15.json", "suite_v16_test_comm.json", "suite_v16_test_nc.json"):
+    # v17 Phase 0: dropped suite_v1/v2/v3/extraction/v10 (legacy, archived to fixtures/archive).
+    # Active suites: v13 (HELM-aligned), v15 (calibrated 90 items), v16 stub suites (force-disabled).
+    for suite_file in ("suite_v13.json", "suite_v15.json", "suite_v16_test_comm.json", "suite_v16_test_nc.json"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             continue

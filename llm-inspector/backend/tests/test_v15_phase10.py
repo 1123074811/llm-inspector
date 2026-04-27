@@ -364,7 +364,9 @@ def test_version_json_is_valid():
 def test_version_json_version_string():
     version_path = pathlib.Path(__file__).parent.parent / "app" / "_data" / "version.json"
     data = json.loads(version_path.read_text(encoding="utf-8"))
-    assert data["version"].startswith("v16"), f"Expected v16*, got {data['version']}"
+    # v17+: accept v16 or any later major version.
+    major = int(data["version"][1:].split(".")[0])
+    assert major >= 16, f"Expected major >= 16, got {data['version']}"
 
 
 def test_version_json_all_phases_complete():

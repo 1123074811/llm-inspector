@@ -112,9 +112,8 @@ class Settings:
     # Phase C: benchmark cache TTL (seconds)
     BENCHMARK_CACHE_TTL_SEC: int = int(os.getenv("BENCHMARK_CACHE_TTL_SEC", "120"))
 
-    # Phase D: async pipeline rollout controls
-    ASYNC_PIPELINE_ENABLED: bool = os.getenv("ASYNC_PIPELINE_ENABLED", "false").lower() == "true"
-    ASYNC_PIPELINE_FALLBACK_SYNC: bool = os.getenv("ASYNC_PIPELINE_FALLBACK_SYNC", "true").lower() == "true"
+    # v17 Phase 0: ASYNC_PIPELINE_* settings removed (feature flag was always false,
+    # async_pipeline.py module deleted). Local sync pipeline is the only path.
 
     # Verdict engine overrides (JSON string of threshold overrides)
     VERDICT_TRUSTED_THRESHOLD: int = int(os.getenv("VERDICT_TRUSTED_THRESHOLD", "80"))

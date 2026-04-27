@@ -39,6 +39,15 @@ class VerdictEngine:
         "extraction_weak_threshold": 15,        # SRC: verdict.extraction_weak_threshold
         "fingerprint_mismatch_cap": 55.0,       # SRC: verdict.fingerprint_mismatch_cap
         "fingerprint_mismatch_threshold": 30,   # SRC: verdict.fingerprint_mismatch_threshold
+        # v17 Phase 1: protocol-level hard caps (Layer 0.5 contract violations)
+        "protocol_error_schema_cap": 50.0,           # error envelope wrong shape
+        "protocol_id_prefix_cap": 55.0,              # chat completion id prefix wrong
+        "protocol_auth_pollution_cap": 35.0,         # cross-family Bearer/x-api-key accepted
+        # v17 Phase 2: field-level hard cap (Layer 0.6 malformed vendor fields)
+        "field_malformed_fingerprint_cap": 50.0,     # claims fp_… shape but fails regex
+        # v17 Phase 3: price-level hard caps (claimed vs official ratio)
+        "price_below_30pct_cap": 30.0,               # claimed < 30% of official → fake_high_confidence
+        "price_below_60pct_cap": 60.0,               # 30% ≤ claimed < 60% → suspicious
     }
     _SRC_KEY_MAP = {
         "adv_spoof_cap": "verdict.adv_spoof_cap",
@@ -169,6 +178,7 @@ class VerdictEngine:
         predetect: PreDetectionResult | None,
         features: dict[str, float],
         case_results: list[CaseResult] | None = None,
+        pricing: object | None = None,  # v17 Phase 3: PriceEvidence|None
     ) -> TrustVerdict:
         f = features.get
         reasons: list[str] = []
@@ -342,6 +352,103 @@ class VerdictEngine:
         # v15: track whether any evidence-backed hard rule fires (used for uncertain verdict)
         _hard_rule_fired = False
 
+        # ── v17 Phase 1 硬规则：协议层证据（Layer 0.5） ──
+        # Extract ProtocolEvidence dict from PreDetect layer_results, if available.
+        protocol_ev: dict | None = None
+        if predetect and getattr(predetect, "layer_results", None):
+            for _lr in predetect.layer_results:
+                if getattr(_lr, "layer", "") == "protocol":
+                    for _e in (_lr.evidence or []):
+                        if isinstance(_e, dict) and "protocol_evidence" in _e:
+                            protocol_ev = _e["protocol_evidence"]
+                            break
+                    break
+
+        if protocol_ev:
+            signal_details["protocol_evidence"] = protocol_ev
+            if protocol_ev.get("error_schema_match") is False:
+                cap = float(self._rule("protocol_error_schema_cap"))
+                if official_verified:
+                    cap = min(100.0, cap + 15.0)
+                confidence_real = min(confidence_real, cap)
+                _hard_rule_fired = True
+                reasons.append(
+                    "协议层证据：错误响应体 schema 不符合声称厂商的契约"
+                    + ("（官方API已验证，cap放宽）" if official_verified else "")
+                )
+            if protocol_ev.get("response_id_prefix_match") is False:
+                cap = float(self._rule("protocol_id_prefix_cap"))
+                if official_verified:
+                    cap = min(100.0, cap + 15.0)
+                confidence_real = min(confidence_real, cap)
+                _hard_rule_fired = True
+                reasons.append(
+                    "协议层证据：响应 id 前缀（chatcmpl-/msg_）与声称厂商不符"
+                )
+            if protocol_ev.get("cross_family_auth_pollution"):
+                cap = float(self._rule("protocol_auth_pollution_cap"))
+                # No official_verified relaxation: contamination is a strong wrapper signal
+                confidence_real = min(confidence_real, cap)
+                _hard_rule_fired = True
+                reasons.append(
+                    "协议层证据：跨家族鉴权污染（同一端点同时接受 Bearer 与 x-api-key），"
+                    "强烈提示中转/聚合代理而非官方上游"
+                )
+
+        # ── v17 Phase 2 硬规则：字段级证据（Layer 0.6） ──
+        field_ev: dict | None = None
+        if predetect and getattr(predetect, "layer_results", None):
+            for _lr in predetect.layer_results:
+                if getattr(_lr, "layer", "") == "field_evidence":
+                    for _e in (_lr.evidence or []):
+                        if isinstance(_e, dict) and "field_evidence" in _e:
+                            field_ev = _e["field_evidence"]
+                            break
+                    break
+
+        if field_ev:
+            signal_details["field_evidence"] = field_ev
+            # Malformed system_fingerprint = active fakery (cargo-culted wrapper).
+            if (
+                field_ev.get("has_system_fingerprint") is True
+                and field_ev.get("system_fingerprint_valid") is False
+            ):
+                cap = float(self._rule("field_malformed_fingerprint_cap"))
+                if official_verified:
+                    cap = min(100.0, cap + 15.0)
+                confidence_real = min(confidence_real, cap)
+                _hard_rule_fired = True
+                reasons.append(
+                    f"字段级证据：system_fingerprint 字段格式不符合 fp_[a-f0-9]{{10,}}"
+                    f"（值: {field_ev.get('system_fingerprint_value')!r}）"
+                )
+
+        # ── v17 Phase 3 硬规则：价格层证据（PriceEvidence） ──
+        # Pricing object is duck-typed: any object exposing `.severity`,
+        # `.blended_ratio`, `.reasons`, `.to_dict()` works.  We avoid an
+        # import-time dependency on authenticity.price_evidence to keep
+        # verdicts.py decoupled.
+        if pricing is not None and hasattr(pricing, "severity"):
+            try:
+                signal_details["price_evidence"] = (
+                    pricing.to_dict() if hasattr(pricing, "to_dict") else {}
+                )
+                sev = getattr(pricing, "severity", "none")
+                if sev == "fake_high_confidence":
+                    cap = float(self._rule("price_below_30pct_cap"))
+                    confidence_real = min(confidence_real, cap)
+                    _hard_rule_fired = True
+                    for _r in (getattr(pricing, "reasons", []) or []):
+                        reasons.append(f"价格层证据：{_r}")
+                elif sev == "suspicious":
+                    cap = float(self._rule("price_below_60pct_cap"))
+                    confidence_real = min(confidence_real, cap)
+                    _hard_rule_fired = True
+                    for _r in (getattr(pricing, "reasons", []) or []):
+                        reasons.append(f"价格层证据：{_r}")
+            except Exception:
+                pass
+
         if any(m in claimed for m in top_models) and difficulty_ceiling < float(self._rule("difficulty_ceiling_min")):
             confidence_real = min(confidence_real, float(self._rule("difficulty_cap")))
             _hard_rule_fired = True
@@ -383,7 +490,9 @@ class VerdictEngine:
             if hasattr(r, 'case') and r.case.category == "extraction":
                 for s in r.samples:
                     d = s.judge_detail or {}
-                    if d.get("leak_type") == "real_model_name_exposed":
+                    # v17 Phase 2: wrapper_disguise_pattern is treated equivalently
+                    # to a real-model-name leak — both expose identity manipulation.
+                    if d.get("leak_type") in ("real_model_name_exposed", "wrapper_disguise_pattern"):
                         _found_identity_mismatch = True
                         break
 

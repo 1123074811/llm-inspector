@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v16.0 - Unix/Linux/Mac Startup Script
+# LLM Inspector v17.0 - Unix/Linux/Mac Startup Script
 # Idempotent dependency check + provenance validation + server start
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v16.0"
+echo "LLM Inspector v17.0"
 echo "===================================="
 
 # Colors for output
@@ -24,6 +24,15 @@ fi
 
 # Enable asyncio mode
 export ASYNCIO_MODE=1
+
+# v17 Phase 12.x: opt-in periodic maintenance daemon.
+# Runs four background jobs:
+#   - model_registry_sync   (every 6h)  pulls fresh model intel from OpenAI/Anthropic/Google/xAI/OpenRouter
+#   - changelog_harvester   (every 1d)  parses official RSS/changelog pages for new models
+#   - dataset_sync          (every 7d)  ingests new LiveBench / SWE-bench / HLE rows
+#   - pruner_job            (every 1h)  flags ceiling/floor cases + emits suite_exhaustion warnings
+# Set to 0 to disable.
+export MAINTENANCE_JOBS_ENABLED=1
 
 # Change to backend directory
 cd backend

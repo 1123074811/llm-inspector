@@ -326,14 +326,14 @@ def test_handler_health(setup_database):
 
 
 # ═══════════════════════════════════════════════════════════════
-# SECTION 10: Mode level validation (v13: updated to suite_v10)
+# SECTION 10: Mode level validation (v17: suite_v10 archived to fixtures/archive/)
 # Note: suite_v1/v2/v3 archived to docs/archive/fixtures_legacy/
 # ═══════════════════════════════════════════════════════════════
 
 def test_mode_level_in_suite():
-    """Verify all cases in suite_v10 have a valid mode_level assigned."""
+    """Verify all cases in archived suite_v10 have a valid mode_level assigned."""
     import json, pathlib
-    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v10.json"
+    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "archive" / "suite_v10.json"
     with open(suite_path, encoding="utf-8") as f:
         suite = json.load(f)
     VALID_LEVELS = {"quick", "standard", "deep"}
@@ -350,9 +350,9 @@ def test_mode_level_in_suite():
 
 
 def test_mode_level_counts():
-    """Verify mode_level distribution is reasonable in suite_v10."""
+    """Verify mode_level distribution is reasonable in archived suite_v10."""
     import json, pathlib
-    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "suite_v10.json"
+    suite_path = pathlib.Path(__file__).parent.parent / "app" / "fixtures" / "archive" / "suite_v10.json"
     with open(suite_path, encoding="utf-8") as f:
         suite = json.load(f)
     counts: dict[str, int] = {"quick": 0, "standard": 0, "deep": 0, "other": 0}

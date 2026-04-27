@@ -18,7 +18,9 @@ class TestVersionJson:
         import json
         vp = _BACKEND / "app" / "_data" / "version.json"
         data = json.loads(vp.read_text(encoding="utf-8"))
-        assert data["version"].startswith("v16"), f"Expected v16*, got {data['version']}"
+        # v17+: accept v16 or any later major version.
+        major = int(data["version"][1:].split(".")[0])
+        assert major >= 16, f"Expected major >= 16, got {data['version']}"
 
     def test_phase0_v16_in_phases_complete(self):
         import json
@@ -60,16 +62,21 @@ class TestConfigV16:
 
 class TestStartupScripts:
     def test_bat_version_v16(self):
+        # v17+: accept any v16+ version string in the launch banner.
+        import re
         bp = _BACKEND.parent / "start.bat"
         if bp.exists():
             content = bp.read_text(encoding="utf-8")
-            assert "v16.0" in content
+            m = re.search(r"v(\d+)\.\d+", content)
+            assert m and int(m.group(1)) >= 16, f"Expected v16+, got {content[:120]!r}"
 
     def test_sh_version_v16(self):
+        import re
         sp = _BACKEND.parent / "start.sh"
         if sp.exists():
             content = sp.read_text(encoding="utf-8")
-            assert "v16.0" in content
+            m = re.search(r"v(\d+)\.\d+", content)
+            assert m and int(m.group(1)) >= 16, f"Expected v16+, got {content[:120]!r}"
 
     def test_bat_dep_check_includes_tiktoken(self):
         bp = _BACKEND.parent / "start.bat"

@@ -247,6 +247,112 @@ class Migration007V15CacheTable(Migration):
         logger.info("Ensured llm_response_cache table exists")
 
 
+class Migration008V17ModelRegistry(Migration):
+    """v17 Phase 5: model_registry + model_registry_audit tables.
+
+    Phase 5 introduces a single-source-of-truth registry for the models the
+    inspector knows about (and their canonical metadata).  Phase 6/7 sync
+    daemons keep the table fresh from upstream ``/v1/models`` endpoints,
+    OpenRouter, and changelog-harvested LLM extractions.  Phase 11 refers
+    to ``model_registry`` to compute the eligible-baseline pool used by
+    ``analysis/similarity_engine.py``.
+
+    The audit table records per-field changes for traceability across syncs
+    (eg. when an official_api source overrides a self_probed entry).
+    """
+
+    version = 8
+    description = "v17-phase5: create model_registry + model_registry_audit tables"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS model_registry (
+                model_id              TEXT PRIMARY KEY,
+                vendor                TEXT NOT NULL,
+                family                TEXT,
+                status                TEXT NOT NULL,
+                first_seen_at         INTEGER NOT NULL,
+                last_seen_at          INTEGER NOT NULL,
+                deprecated_at         INTEGER,
+                sunset_at             INTEGER,
+                cutoff_date           TEXT,
+                context_window        INTEGER,
+                max_output_tokens     INTEGER,
+                modality              TEXT,
+                supports_thinking     INTEGER,
+                supports_tools        INTEGER,
+                input_price_usd       REAL,
+                output_price_usd      REAL,
+                cache_read_price_usd  REAL,
+                ttft_p50_ms           REAL,
+                tps_p50               REAL,
+                tokenizer_id          TEXT,
+                self_report_id        TEXT,
+                fingerprint_sha256    TEXT,
+                data_source           TEXT NOT NULL,
+                confidence            REAL NOT NULL DEFAULT 1.0,
+                last_synced_at        INTEGER NOT NULL,
+                raw_metadata_json     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_registry_vendor_status
+                ON model_registry(vendor, status);
+            CREATE INDEX IF NOT EXISTS idx_registry_last_seen
+                ON model_registry(last_seen_at);
+
+            CREATE TABLE IF NOT EXISTS model_registry_audit (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id      TEXT NOT NULL,
+                field         TEXT NOT NULL,
+                old_value     TEXT,
+                new_value     TEXT,
+                data_source   TEXT NOT NULL,
+                changed_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_registry_audit_model
+                ON model_registry_audit(model_id, changed_at);
+            """
+        )
+        conn.commit()
+        logger.info("Created model_registry + model_registry_audit tables (v17 Phase 5)")
+
+
+class Migration009V17CaseQualityFlags(Migration):
+    """v17 Phase 10: case_quality_flags table.
+
+    Stores per-case ceiling/floor/discrimination flags computed by
+    ``tasks.pruner_job`` and consulted by CAT-style selection so that
+    items with no discriminative power can be skipped.  Designed as a
+    side-table (not a mutation of ``test_cases``) to keep suite
+    immutability and audit history simple.
+    """
+
+    version = 9
+    description = "v17-phase10: create case_quality_flags table"
+
+    def apply(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS case_quality_flags (
+                case_id                TEXT PRIMARY KEY,
+                discriminative_valid   INTEGER NOT NULL DEFAULT 1,
+                ceiling_effect         INTEGER NOT NULL DEFAULT 0,
+                floor_effect           INTEGER NOT NULL DEFAULT 0,
+                low_discrimination     INTEGER NOT NULL DEFAULT 0,
+                pass_rate              REAL,
+                discrimination_a       REAL,
+                n_responses            INTEGER NOT NULL DEFAULT 0,
+                flags_json             TEXT,
+                last_evaluated_at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_quality_valid
+                ON case_quality_flags(discriminative_valid);
+            """
+        )
+        conn.commit()
+        logger.info("Created case_quality_flags table (v17 Phase 10)")
+
+
 register_migration(Migration001InitialSchema())
 register_migration(Migration002JsonColumnsToColumns())
 register_migration(Migration003V14DropBenchmarkProfiles())
@@ -254,3 +360,5 @@ register_migration(Migration004V14IdentityExposureColumn())
 register_migration(Migration005V15PreflightReportColumn())
 register_migration(Migration006IdentityExposureColumnGuard())
 register_migration(Migration007V15CacheTable())
+register_migration(Migration008V17ModelRegistry())
+register_migration(Migration009V17CaseQualityFlags())

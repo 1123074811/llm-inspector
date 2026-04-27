@@ -34,6 +34,10 @@ from app.predetect.signatures import CONFIDENCE_THRESHOLD
 
 # Layer implementations
 from app.predetect.layers_l0_l2 import Layer0HTTP, Layer1SelfReport, Layer2Identity
+# v17 Phase 1: Protocol-level hard evidence (Layer 0.5)
+from app.predetect.protocol_validator import Layer0_5ProtocolValidator
+# v17 Phase 2: Field-level hard evidence (Layer 0.6)
+from app.predetect.field_evidence import Layer0_6FieldEvidence
 from app.predetect.layers_l3_l5 import Layer3Knowledge, Layer4Bias, Layer5Tokenizer
 from app.predetect.layers_l6_l7 import (
     Layer6ActiveExtraction,
@@ -194,6 +198,35 @@ class PreDetectionPipeline:
         if r0.confidence >= CONFIDENCE_THRESHOLD:
             return self._build_result(True, r0, layer_results, total_tokens)
 
+        # v17 Phase 1: Layer 0.5 — Protocol contract validator
+        # Verifies error envelope schema + cross-family auth pollution.
+        # Cross-family probe is gated to deep/extraction mode to avoid
+        # adding latency to Quick scans.
+        _report_progress("Layer0.5/Protocol")
+        logger.info("PreDetect Layer0.5: Protocol validator", model=model_name)
+        try:
+            r0_5 = Layer0_5ProtocolValidator().run(
+                adapter,
+                claimed_family_hint=r0.identified_as,
+                deep_probe=bool(extraction_mode),
+            )
+            layer_results.append(r0_5)
+            total_tokens += r0_5.tokens_used
+            self._log_layer_result("Layer0.5/Protocol", r0_5)
+            _write_predetect_trace(
+                run_id,
+                r0_5.to_dict() if hasattr(r0_5, "to_dict") else {
+                    "layer": "protocol",
+                    "confidence": r0_5.confidence,
+                    "evidence": r0_5.evidence,
+                    "tokens": r0_5.tokens_used,
+                },
+            )
+            if r0_5.confidence >= CONFIDENCE_THRESHOLD:
+                return self._build_result(True, r0_5, layer_results, total_tokens)
+        except Exception as exc:
+            logger.warning("Layer0.5 protocol validator failed", error=str(exc))
+
         # Quick connectivity check: send a minimal chat request with the actual
         # model name. If this fails (error_type set), API is likely unreachable
         # or misconfigured — skip expensive identity probes.
@@ -238,6 +271,31 @@ class PreDetectionPipeline:
                 routing_info["probe_usage"] = usage
             if probe.latency_ms:
                 routing_info["probe_latency_ms"] = probe.latency_ms
+
+        # v17 Phase 2: Layer 0.6 — Field-level hard evidence (zero tokens)
+        # Reuses the just-issued quick probe; extracts system_fingerprint,
+        # reasoning_tokens, cache_read_input_tokens, thinking.signature.
+        _report_progress("Layer0.6/FieldEvidence")
+        try:
+            r0_6 = Layer0_6FieldEvidence().run(
+                adapter,
+                prefetched_response=probe,
+                claimed_family_hint=r0.identified_as,
+            )
+            layer_results.append(r0_6)
+            total_tokens += r0_6.tokens_used
+            self._log_layer_result("Layer0.6/FieldEvidence", r0_6)
+            _write_predetect_trace(
+                run_id,
+                {
+                    "layer": "field_evidence",
+                    "confidence": r0_6.confidence,
+                    "evidence": r0_6.evidence,
+                    "tokens": r0_6.tokens_used,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Layer0.6 field evidence failed", error=str(exc))
 
         # Layer 1 — Self-report (reuse quick probe response)
         _report_progress("Layer1/SelfReport")

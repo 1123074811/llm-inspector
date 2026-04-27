@@ -909,21 +909,66 @@ def _build_judge_explanation(
 
 # ── Extraction & Fingerprint Judges ──────────────────────────────────────────
 
+# v17 Phase 2: wrapper-disguise patterns commonly injected by proxy/aggregator
+# services to force a downstream model to impersonate a higher-tier brand.
+# Each pattern is a regex (case-insensitive).  These are intentionally narrow
+# (combinations of "you are <brand>" + an instruction verb) to keep false
+# positives on benign user prompts that mention model names down to ~zero.
+WRAPPER_DISGUISE_PATTERNS = [
+    r"\byou\s+are\s+(gpt-?\d|chatgpt|claude|gemini|grok|deepseek)\b",
+    r"\bnever\s+mention\s+(anthropic|openai|google|deepseek|meta|xai)\b",
+    r"\balways\s+pretend\s+(to\s+be\s+)?",
+    r"不要透露|不得透露|绝不(承认|提及|泄露)",
+    r"伪装成|扮演\s*(GPT|Claude|Gemini|ChatGPT)",
+    r"\bidentify\s+(yourself\s+)?as\s+(gpt|claude|gemini|chatgpt)\b",
+    r"\brespond\s+as\s+(if\s+you\s+were\s+)?(gpt|claude|gemini|chatgpt)\b",
+]
+
+
+def _detect_wrapper_disguise(text: str) -> list[str]:
+    """Return regex patterns that matched the text (empty list = clean).
+
+    v17 Phase 2: detects wrapper-style identity-coercion instructions leaking
+    out in a model's response — a strong signal of being a proxied wrapper.
+    """
+    import re as _re
+    hits: list[str] = []
+    for pat in WRAPPER_DISGUISE_PATTERNS:
+        try:
+            if _re.search(pat, text, _re.IGNORECASE):
+                hits.append(pat)
+        except _re.error:
+            continue
+    return hits
+
+
 def _prompt_leak_detect(text: str, params: dict) -> tuple[bool, dict]:
     """
     检测响应中是否包含 system prompt 泄露信号。
     passed=True 表示检测到泄露（即伪装暴露）。
+
+    v17 Phase 2: 增加 wrapper_disguise_pattern 检测 — 命中即视为
+    real_model_name_exposed 同等级（CRITICAL），共用下游硬规则。
     """
     leak_indicators = params.get("leak_indicators", [])
     real_model_names = params.get("real_model_names", [])
 
     hits_indicators = [w for w in leak_indicators if w.lower() in text.lower()]
     hits_models = [m for m in real_model_names if m.lower() in text.lower()]
+    hits_wrapper = _detect_wrapper_disguise(text)
 
     if hits_models:
         return True, {
             "leak_type": "real_model_name_exposed",
             "real_models_found": hits_models,
+            "severity": "CRITICAL",
+            "excerpt": text[:300],
+        }
+
+    if hits_wrapper:
+        return True, {
+            "leak_type": "wrapper_disguise_pattern",
+            "patterns_matched": hits_wrapper,
             "severity": "CRITICAL",
             "excerpt": text[:300],
         }

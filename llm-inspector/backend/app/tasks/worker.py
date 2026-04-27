@@ -1,20 +1,15 @@
 """
 Task worker — runs pipelines in a background thread pool.
-Supports local (ThreadPoolExecutor) and distributed (Redis/Celery) backends.
 
-To enable distributed mode, set:
-    CELERY_BROKER_URL=redis://localhost:6379/0
-    CELERY_RESULT_BACKEND=redis://localhost:6379/0
-Then implement CeleryTaskQueue in tasks/queue.py and call init_queue(CeleryTaskQueue()).
+v17 Phase 0: removed async pipeline branch (ASYNC_PIPELINE_ENABLED was always
+false) and Celery distributed queue path (no celery dependency in pyproject).
+Local ThreadPoolExecutor via app.tasks.queue is the only execution backend.
 """
 from __future__ import annotations
 
-import asyncio
 import threading
-import os
 
 from app.core.logging import get_logger
-from app.core.config import settings
 from app.tasks.queue import get_queue, submit_task
 from app.tasks.watchdog import start_background_watchdog
 
@@ -28,36 +23,26 @@ _local_running: dict[str, bool] = {}
 # even after a server restart.
 start_background_watchdog(interval_sec=300)
 
+# v17 Phase 12.x: opt-in periodic maintenance daemon.
+# Controlled by env var MAINTENANCE_JOBS_ENABLED — start.bat / start.sh set
+# it to 1 by default, but existing deployments stay opt-in.
+try:
+    from app.tasks.maintenance_jobs import start_maintenance_jobs
+    start_maintenance_jobs()
+except Exception as _maint_exc:
+    logger.warning("maintenance jobs failed to start", error=str(_maint_exc))
+
 
 def submit_run(run_id: str) -> None:
-    """Submit a run pipeline to the background task queue.
-
-    v10: Replaced raw ThreadPoolExecutor with unified TaskQueue abstraction
-    that natively supports Celery.
-    """
-    use_async = settings.ASYNC_PIPELINE_ENABLED
+    """Submit a run pipeline to the background task queue."""
 
     def _task():
         with _local_lock:
             _local_running[run_id] = True
         try:
-            if use_async:
-                from app.runner.orchestrator import run_pipeline_async
-                try:
-                    asyncio.run(run_pipeline_async(run_id))
-                    logger.info("Run finished with async pipeline", run_id=run_id)
-                    return
-                except Exception as async_err:
-                    logger.error("Async pipeline exception", run_id=run_id, error=str(async_err))
-                    if not settings.ASYNC_PIPELINE_FALLBACK_SYNC:
-                        from app.repository import repo
-                        repo.update_run_status(run_id, "failed", error_message=str(async_err)[:500])
-                        return
-                    logger.warning("Falling back to sync pipeline", run_id=run_id)
-
             from app.runner.orchestrator import run_pipeline
             run_pipeline(run_id)
-            logger.info("Run finished with sync pipeline", run_id=run_id)
+            logger.info("Run finished", run_id=run_id)
         except Exception as e:
             logger.error("Pipeline exception", run_id=run_id, error=str(e))
             from app.repository import repo
@@ -67,12 +52,7 @@ def submit_run(run_id: str) -> None:
                 _local_running.pop(run_id, None)
 
     submit_task(run_id, _task)
-    logger.info(
-        "Run submitted to task queue",
-        run_id=run_id,
-        async_enabled=use_async,
-        async_fallback_sync=settings.ASYNC_PIPELINE_FALLBACK_SYNC,
-    )
+    logger.info("Run submitted to task queue", run_id=run_id)
 
 
 
@@ -174,23 +154,3 @@ def active_count() -> int:
         return len(_local_running)
 
 
-def init_distributed_queue() -> bool:
-    """
-    Initialize distributed queue if CELERY_BROKER_URL is configured.
-    Returns True if distributed mode is enabled.
-    """
-    broker_url = os.environ.get("CELERY_BROKER_URL")
-    if not broker_url:
-        logger.info("Using local task queue (set CELERY_BROKER_URL for distributed mode)")
-        return False
-
-    try:
-        from app.tasks.celery_queue import CeleryTaskQueue
-        from app.tasks.queue import init_queue
-        init_queue(CeleryTaskQueue(broker_url))
-        logger.info("Distributed task queue initialized", broker_url=broker_url)
-        return True
-    except ImportError as e:
-        logger.warning("Celery not available, falling back to local queue", error=str(e))
-        return False
-    logger.info("Task queue initialized")

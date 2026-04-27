@@ -17,7 +17,9 @@ class TestVersionJson:
     def test_version_starts_with_v16(self):
         import json
         data = json.loads((_DATA / "version.json").read_text(encoding="utf-8"))
-        assert data["version"].startswith("v16")
+        # v17+: accept v16 or any later major version.
+        major = int(data["version"][1:].split(".")[0])
+        assert major >= 16
 
     def test_all_v16_phases_complete(self):
         import json

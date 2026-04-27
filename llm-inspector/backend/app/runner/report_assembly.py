@@ -50,7 +50,12 @@ def _build_and_save_report(
     similarities = precomputed_similarities
     if similarities is None:
         from app.runner.orchestrator import _load_benchmarks
+        from app.analysis.baseline_pool import filter_eligible_baselines
         benchmarks = _load_benchmarks(suite_version)
+        # v17 Phase 11: prune deprecated/sunset/self-probed/stale models
+        # from the comparison pool using the model_registry filter.
+        # Cold-start fallback (registry empty) passes the list through.
+        benchmarks = filter_eligible_baselines(benchmarks)
         similarity_engine = SimilarityEngine()
         similarities = similarity_engine.compare(features, benchmarks)
     if similarities:
@@ -90,6 +95,25 @@ def _build_and_save_report(
         claimed_model=run.get("model_name"),
         theta_report=theta_report,
     )
+    # v17 Phase 3: build optional PriceEvidence from run config (if user supplied claimed price)
+    pricing_evidence = None
+    try:
+        from app.authenticity.price_evidence import evaluate_pricing
+        _claimed_in = run.get("claimed_input_per_mtok_usd")
+        _claimed_out = run.get("claimed_output_per_mtok_usd")
+        if _claimed_in is not None or _claimed_out is not None:
+            pricing_evidence = evaluate_pricing(
+                model_id=run.get("model_name") or "",
+                claimed_input_usd_per_mtok=(
+                    float(_claimed_in) if _claimed_in is not None else None
+                ),
+                claimed_output_usd_per_mtok=(
+                    float(_claimed_out) if _claimed_out is not None else None
+                ),
+            )
+    except Exception:
+        pricing_evidence = None
+
     verdict_engine = VerdictEngine()
     verdict = verdict_engine.assess(
         scorecard=scorecard,
@@ -97,6 +121,7 @@ def _build_and_save_report(
         predetect=pre_result,
         features=features,
         case_results=case_results,
+        pricing=pricing_evidence,
     )
 
     # v14 Phase 3: Identity Exposure Engine

@@ -186,8 +186,37 @@ class Layer18TimingSideChannel:
                 "evidence": [],
             }
 
+        # v17 Phase 4: gate confidence on whether the reference baseline is real.
+        # If *every* loaded family has sampled=False (placeholder data from
+        # v15/v16), KL distance has no scientific meaning — return zero
+        # confidence with a clear explanation so the verdict engine treats
+        # the layer as informational rather than evidentiary.
+        any_sampled = any(
+            ref.get("sampled") is True for ref in timing_refs.values()
+        )
+
         closest_family = min(kl_scores, key=kl_scores.get)
         min_kl = kl_scores[closest_family]
+
+        if not any_sampled:
+            return {
+                "layer": self.LAYER,
+                "name": self.NAME,
+                "tokens": 0,
+                "skipped": True,
+                "reason": "all_baselines_placeholder",
+                "confidence": 0.0,
+                "ttft_samples": n,
+                "mean_ttft_ms": round(mean_ttft, 2),
+                "std_ttft_ms": round(std_ttft, 2),
+                "evidence": [
+                    f"mean_ttft={mean_ttft:.1f}ms",
+                    "All timing baselines are placeholder values; "
+                    "run scripts/sample_timing_references.py to populate real data "
+                    "(see UPGRADE_PLAN_V17.md Phase 4).",
+                ],
+                "reference_data_sampled": False,
+            }
 
         # Confidence capped at 0.50
         raw_confidence = 1.0 / (1.0 + min_kl)
@@ -315,8 +344,29 @@ class Layer19TokenDistribution:
                 "evidence": [],
             }
 
+        # v17 Phase 4: same placeholder gate as L18.
+        any_sampled = any(ref.get("sampled") is True for ref in dist_refs.values())
         closest_family = min(w_scores, key=w_scores.get)
         min_w = w_scores[closest_family]
+
+        if not any_sampled:
+            return {
+                "layer": self.LAYER,
+                "name": self.NAME,
+                "tokens": 0,
+                "skipped": True,
+                "reason": "all_baselines_placeholder",
+                "confidence": 0.0,
+                "samples": n,
+                "avg_response_len": round(avg_len, 1),
+                "evidence": [
+                    f"avg_response_len={avg_len:.1f} chars (n={n})",
+                    "All distribution baselines are placeholder values; "
+                    "run scripts/sample_timing_references.py to populate real data "
+                    "(see UPGRADE_PLAN_V17.md Phase 4).",
+                ],
+                "reference_data_sampled": False,
+            }
 
         # Confidence capped at 0.45
         raw_confidence = 1.0 / (1.0 + min_w * 2.0)

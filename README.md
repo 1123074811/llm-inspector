@@ -1,10 +1,12 @@
-# LLM Inspector v15.0
+# LLM Inspector v17.0
 
-> 套壳检测 · 能力评估 · 数据溯源 · 24 层对抗探针 · 预检连通验证 · 评判注册中心（v15.0 全部 14 阶段完成）
+> 套壳检测 · 能力评估 · 协议层硬证据 · 字段层硬证据 · 价格硬规则 · model_registry 实时新陈代谢 · 题库实时同步 · 后台守护任务（v17 全部 13 阶段完成）
 
-**v15.0.0 全部 14 阶段（Phase 0–13）已完成**。v14.0.0 全部 9 个阶段亦已完成。详见 [CHANGELOG.md](CHANGELOG.md) 和 [迁移指南](docs/MIGRATION_v14_to_v15.md)。
+**v17.0.0 全部 13 阶段（Phase 0–12）已完成**，1219 passed / 4 skipped / 0 failed。在 v16 基础上落地了 11 个真空（G-01..G-11）：协议字段层硬证据 + 模型情报与题库的实时新陈代谢 + 后台守护任务。
 
-> 📖 [v15 升级方案](docs/UPGRADE_PLAN_V15.md) · 📖 [v14 升级方案](docs/UPGRADE_PLAN_V14.md)
+> 📖 [v17 升级方案](docs/UPGRADE_PLAN_V17.md) · [v17 变更日志](docs/CHANGELOG_v17.md) · [v16 → v17 迁移](docs/MIGRATION_v16_to_v17.md)
+>
+> 历史：v15 升级方案 [`docs/UPGRADE_PLAN_V15.md`](docs/UPGRADE_PLAN_V15.md) · v14 升级方案 [`docs/UPGRADE_PLAN_V14.md`](docs/UPGRADE_PLAN_V14.md)
 
 LLM Inspector 是一款面向 OpenAI 兼容 API 的**模型真伪鉴别与能力评估工具**。它通过渐进式指纹识别、多维度测试套件和统计学评分系统，帮助用户判断所接入的 LLM API 是否是其声称的模型。
 
@@ -166,6 +168,9 @@ POST /api/v15/dataset/import             # 导入测试用例到 suite_v15
 POST /api/v15/dataset/validate           # 验证单条测试用例格式
 GET  /api/v15/judge-registry             # 列出所有注册的评判方法
 GET  /api/v15/judge-registry/{method}    # 单个评判方法详情
+
+# v17 新增
+GET  /api/v17/maintenance/status         # 守护线程 + 4 个 job 的实时健康状态
 ```
 
 ## v15 新特性（全部完成）
@@ -187,10 +192,132 @@ GET  /api/v15/judge-registry/{method}    # 单个评判方法详情
 | 评判注册中心 | ✅ Phase 12 | `analysis/judge_registry.py` + `_data/judge_registry.yaml` |
 | 预检错误分类 | ✅ Phase 13 | `preflight/error_taxonomy.py`：15 个 ErrorCode + `preflight/connection_check.py` |
 
+## v17 新特性（全部完成，详见 [`docs/CHANGELOG_v17.md`](docs/CHANGELOG_v17.md)）
+
+| 主题 | 阶段 | 模块 | 说明 |
+|---|---|---|---|
+| 死代码 + 套件归档 | ✅ Phase 0 | — | 删除 `adaptive_testing` / `factor_analysis` / `async_pipeline` / `celery_*` / `benchmarks/` (~1.7k LOC)；`suite_v10` → `archive/` |
+| **协议级硬证据 L0.5** | ✅ Phase 1 | `predetect/protocol_validator.py` + `adapters/contamination_probe.py` | SSE 帧 / id 前缀 (`chatcmpl-`/`msg_`) / error schema / 跨家族鉴权污染 → 3 条硬规则 cap |
+| **字段级硬证据 L0.6** | ✅ Phase 2 | `predetect/field_evidence.py` + `judge/methods.py` | `system_fingerprint` 正则 / `reasoning_tokens` / `cache_read_input_tokens` / `thinking.signature` + 6 条 wrapper 反模式正则 |
+| **价格层硬规则** | ✅ Phase 3 | `_data/official_prices.yaml` (30 模型) + `authenticity/price_evidence.py` | claimed vs 官方价：`<30%` cap=30, `<60%` cap=60 |
+| **timing 基线真值化** | ✅ Phase 4 | `scripts/sample_timing_references.py` 增强 + L18/L19 placeholder gate | p10/p25/p50/p75/p90 + raw-data SHA256 + 全 placeholder 时强制 confidence=0 |
+| **model_registry Schema** | ✅ Phase 5 | Migration 008 + `repository/registry_repo.py` | 28 列单一真相源 + audit log + 优先级合并 (`official_api > openrouter > changelog > self_probed > manual`) |
+| **Tier 1+2 实时同步** | ✅ Phase 6 | `runner/model_registry_sync.py` | OpenAI/Anthropic/Google/xAI/DeepSeek/Mistral `/v1/models` + OpenRouter（200+ 模型，免 key） |
+| **Tier 3 文档解析** | ✅ Phase 7 | `runner/changelog_harvester.py` | RSS+LLM 抽取 + **anti-hallucination gate**（evidence_quote verbatim 校验） |
+| **Tier 4 自注册探针** | ✅ Phase 8 | `runner/self_probe_register.py` | 4 阶段 ≤1k token 探针：cutoff 二分定位 / tokenizer 指纹 / timing / self-report |
+| **题库实时同步** | ✅ Phase 9 | `runner/dataset_sync.py` | LiveBench / SWE-bench Verified / HLE 增量 ingest，仅插入新 case_id |
+| **suite_pruner + 枯竭告警** | ✅ Phase 10 | Migration 009 + `tasks/pruner_job.py` | `case_quality_flags` 表 + ceiling/floor 标记 + `suite_exhaustion_warning` SSE |
+| **基线池清洗** | ✅ Phase 11 | `analysis/baseline_pool.py` | similarity 比对仅用 registry-eligible（active ∧ aged≥30d ∧ fresh≤14d ∧ 来源 ∈ {官方API, openrouter, changelog}），冷启动 fallback |
+| **守护任务 + 状态端点** | ✅ Phase 12 | `tasks/maintenance_jobs.py` + `/api/v17/maintenance/status` | 单守护线程跑 4 个周期任务（6h/24h/7d/1h），错峰启动 + 失败隔离 |
+
+### v17 新硬规则矩阵
+
+VerdictEngine 新增 **6 条 v17 硬规则**（按 cap 严重度排列）：
+
+| 规则 | Cap | 触发条件 |
+|---|---|---|
+| `protocol_auth_pollution_cap` | 35 | 跨家族鉴权污染（同端点接受 Bearer + x-api-key） |
+| `price_below_30pct_cap` | 30 | 声称价 < 官方价 30% |
+| `protocol_error_schema_cap` | 50 | 错误体 schema 不符合声称厂商契约 |
+| `field_malformed_fingerprint_cap` | 50 | `system_fingerprint` 字段格式畸形（主动伪造） |
+| `protocol_id_prefix_cap` | 55 | `chatcmpl-` / `msg_` 前缀不匹配 |
+| `price_below_60pct_cap` | 60 | 声称价 < 官方价 60% |
+
+## 后台守护任务（v17 默认开启）
+
+`start.bat` / `start.sh` 默认 `MAINTENANCE_JOBS_ENABLED=1`，启动后单守护线程自动跑：
+
+| Job | 频率 | 行为 | 模块 |
+|---|---|---|---|
+| `model_registry_sync` | **6h** | OpenRouter + 各家 `/v1/models` 拉新 + 价格 + sweep_deprecated | `runner/model_registry_sync.py` |
+| `changelog_harvester` | **24h** | RSS / 公告页 + LLM 抽取（anti-hallucination gate） | `runner/changelog_harvester.py` |
+| `dataset_sync` | **7d** | LiveBench / SWE-bench Verified / HLE 新题 ingest | `runner/dataset_sync.py` |
+| `pruner_job` | **1h** | ceiling/floor 标记 + suite_exhaustion 告警 | `tasks/pruner_job.py` |
+
+**错峰**：初始延迟 60s / 300s / 600s / 120s，避免冷启动同时打外部 API。
+**失败隔离**：任意 job 抛异常仅自己计 `failures += 1`，不影响其他 job 重新调度。
+**禁用**：把 env 设为 `0` 或删掉那行即可，老部署默认仍然 opt-in。
+
+### 实时观察守护线程健康
+
+```bash
+curl http://localhost:9999/api/v17/maintenance/status
+```
+
+返回示例：
+
+```json
+{
+  "status": "ok", "api_version": "v17",
+  "enabled": true, "running": true,
+  "jobs": [
+    {"name": "model_registry_sync", "interval_sec": 21600, "successes": 12,
+     "failures": 0, "last_error": null,
+     "next_run_at": 1777310407.521, "next_run_in_sec": 4823},
+    {"name": "changelog_harvester", "...": "..."},
+    {"name": "dataset_sync",        "...": "..."},
+    {"name": "pruner_job",          "...": "..."}
+  ]
+}
+```
+
+## 一次性命令（手动触发，**不**进守护线程）
+
+### `sample_timing_references.py` — 时序基线实测
+
+**作用**：给 L18 (Timing KL 散度) / L19 (Token 分布 Wasserstein) 提供可信的官方时序基线。不跑这个脚本时基线是 placeholder，L18/L19 强制 `confidence=0`，时序证据完全停用。
+
+**何时跑**：
+
+- 第一次部署完成
+- 每次发新版前（建议 CI release 步骤）
+- 怀疑某家厂商网络/边缘节点变更后
+
+**怎么跑**：
+
+```bash
+# 准备 key（配几家就跑几家，缺失的家族会跳过）
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GOOGLE_API_KEY=...
+export XAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
+export MISTRAL_API_KEY=...
+
+# 跑 6 家族，每家 100 次实测
+python -m backend.scripts.sample_timing_references --all --samples 100
+
+# 验证 provenance 已升级
+python -c "import json; \
+  d=json.load(open('llm-inspector/backend/app/_data/timing_references.json')); \
+  print(d['_provenance']['note'])"
+# 期望输出：v17.0-self-measurement
+```
+
+**成本**：约 5–10 分钟 + 每家 ~$0.05–0.10 token 费用（短 prompt）。
+
+**为什么没进守护线程**：基线不应频繁刷新，否则会把短期网络抖动固化进基线；且要 API key（守护线程跑时 key 可能没配会刷错误日志）。
+
+### 其他手动命令
+
+```bash
+# 立即跑一次 model_registry_sync（不影响守护轮次）
+python -m app.runner.model_registry_sync --once --sweep-deprecated
+
+# 立即拉一次 LiveBench / SWE-bench / HLE
+python -m app.runner.dataset_sync --pull --max-rows 1000
+
+# 立即跑 pruner（按 case 计算 pass-rate + ceiling/floor）
+python -m app.tasks.pruner_job --once
+
+# 解析 RSS / 公告页（需 LLM 抽取器，默认 noop）
+python -m app.runner.changelog_harvester --once
+```
+
 ## 开发
 
 ```bash
-# 运行测试（825 passed, 4 skipped）
+# 运行测试（v17.0：1219 passed, 4 skipped）
 pytest backend/tests/ -q
 
 # 验证 SOURCES.yaml 完整性

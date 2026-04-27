@@ -75,7 +75,9 @@ class TestHealthEndpoints:
         _, body, _ = _handle_v14_health("", {}, {})
         data = json.loads(body)
         assert "version" in data
-        assert data["version"].startswith("v16")
+        # v17+: accept v16 or any later major version (v16, v17, ...).
+        major = int(data["version"][1:].split(".")[0])
+        assert major >= 16, f"Expected major >= 16, got {data['version']}"
 
     def test_v14_health_contains_phases_complete(self):
         from app.main import _handle_v14_health

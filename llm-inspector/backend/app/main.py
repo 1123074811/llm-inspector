@@ -127,6 +127,16 @@ def _handle_v15_health(path: str, qs: dict, body: dict):
     return _json({"status": "ok", "api_version": "v15", **info})
 
 
+def _handle_v17_maintenance_status(path: str, qs: dict, body: dict):
+    """v17 Phase 12.x: maintenance daemon status.
+
+    Returns the live state of every registered background job so operators
+    can verify the daemon is healthy and see when each job will next run.
+    """
+    from app.tasks.maintenance_jobs import get_status
+    return _json({"status": "ok", "api_version": "v17", **get_status()})
+
+
 ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v1/health$",                  handle_health),
     ("GET",    r"^/api/v1/runs$",                    handle_list_runs),
@@ -204,6 +214,8 @@ ROUTES: list[tuple[str, str, callable]] = [
     ("GET",    r"^/api/v14/circuit-breaker/history$",           handle_circuit_breaker_history),
     # -- v15 namespace ----
     ("GET",    r"^/api/v15/health$",                            _handle_v15_health),
+    # -- v17 namespace ----
+    ("GET",    r"^/api/v17/maintenance/status$",                _handle_v17_maintenance_status),
     ("GET",    r"^/api/v15/runs/[^/]+/preflight$",              handle_get_preflight_result),
     ("GET",    r"^/api/v15/runs/[^/]+/evidence-ledger$",        handle_get_evidence_ledger),
     ("GET",    r"^/api/v15/runs/[^/]+/model-card-diff$",        handle_get_model_card_diff),
