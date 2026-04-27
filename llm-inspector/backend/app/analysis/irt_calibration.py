@@ -595,3 +595,110 @@ def load_suite_calibration(cache_path: Optional[str] = None) -> None:
 
 # Initialize on module load
 load_suite_calibration()
+
+
+# ── v16 Phase 5: IRT Cold Start Prior ────────────────────────────────────────
+
+# Prior table for IRT parameters by category and difficulty.
+# Registered in SOURCES.yaml as irt.prior.<category>.<difficulty>.
+# References:
+#   - GPQA Diamond: Rein et al. (2023) Table 2, b≈1.5 for expert-level
+#   - AIME: Historical pass rates ~10-15% → b≈2.0
+#   - Baker & Kim (2004) "Item Response Theory: Parameter Estimation Techniques"
+_COLD_START_PRIORS: dict[str, dict[str, tuple[float, float, float]]] = {
+    # category -> {difficulty_level -> (a, b, c)}
+    "reasoning": {
+        "easy": (0.8, -0.5, 0.0),
+        "medium": (1.0, 0.5, 0.0),
+        "hard": (1.2, 1.5, 0.0),
+        "expert": (1.5, 2.0, 0.0),
+    },
+    "coding": {
+        "easy": (0.7, -0.3, 0.0),
+        "medium": (0.9, 0.5, 0.0),
+        "hard": (1.1, 1.5, 0.0),
+        "expert": (1.3, 2.0, 0.0),
+    },
+    "knowledge": {
+        "easy": (0.6, -1.0, 0.25),
+        "medium": (0.8, 0.0, 0.25),
+        "hard": (1.0, 1.0, 0.25),
+        "expert": (1.2, 1.5, 0.20),
+    },
+    "safety": {
+        "easy": (0.7, -0.5, 0.0),
+        "medium": (0.9, 0.3, 0.0),
+        "hard": (1.1, 1.0, 0.0),
+        "expert": (1.3, 1.5, 0.0),
+    },
+    "instruction": {
+        "easy": (0.8, -0.5, 0.0),
+        "medium": (1.0, 0.3, 0.0),
+        "hard": (1.2, 1.0, 0.0),
+        "expert": (1.4, 1.5, 0.0),
+    },
+    "adversarial": {
+        "easy": (0.9, 0.0, 0.0),
+        "medium": (1.1, 0.8, 0.0),
+        "hard": (1.3, 1.5, 0.0),
+        "expert": (1.5, 2.0, 0.0),
+    },
+    # Default for any category not listed
+    "default": {
+        "easy": (0.7, -0.5, 0.0),
+        "medium": (0.9, 0.5, 0.0),
+        "hard": (1.1, 1.5, 0.0),
+        "expert": (1.3, 2.0, 0.0),
+    },
+}
+
+
+def _difficulty_to_level(difficulty: float) -> str:
+    """Map numeric difficulty [0,1] to level string."""
+    if difficulty < 0.3:
+        return "easy"
+    elif difficulty < 0.6:
+        return "medium"
+    elif difficulty < 0.85:
+        return "hard"
+    else:
+        return "expert"
+
+
+def cold_start_prior(
+    category: str,
+    difficulty: float | None = None,
+    difficulty_meta: dict | None = None,
+) -> IRTParameters:
+    """
+    v16 Phase 5: Return IRT prior parameters for cold-start cases.
+
+    When a test case has no empirical calibration data (< 50 samples),
+    use these priors instead of hardcoded fallbacks.
+
+    Args:
+        category: Test case category (e.g. "reasoning", "coding").
+        difficulty: Numeric difficulty [0, 1] from suite JSON.
+        difficulty_meta: Optional metadata dict with 'level' key.
+
+    Returns:
+        IRTParameters with prior (a, b, c) values.
+    """
+    # Resolve difficulty level
+    if difficulty_meta and "level" in difficulty_meta:
+        level = difficulty_meta["level"]
+    elif difficulty is not None:
+        level = _difficulty_to_level(difficulty)
+    else:
+        level = "medium"
+
+    # Look up prior table
+    cat_priors = _COLD_START_PRIORS.get(category, _COLD_START_PRIORS["default"])
+    a, b, c = cat_priors.get(level, cat_priors.get("medium", (1.0, 0.5, 0.0)))
+
+    return IRTParameters(
+        a=a,
+        b=b,
+        c=c,
+        data_source=f"cold_start_prior:{category}:{level}",
+    )

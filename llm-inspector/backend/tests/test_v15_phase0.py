@@ -75,7 +75,7 @@ class TestHealthEndpoints:
         _, body, _ = _handle_v14_health("", {}, {})
         data = json.loads(body)
         assert "version" in data
-        assert data["version"].startswith("v15")
+        assert data["version"].startswith("v16")
 
     def test_v14_health_contains_phases_complete(self):
         from app.main import _handle_v14_health

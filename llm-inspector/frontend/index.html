@@ -9,18 +9,46 @@
 
 <!-- v8_components.js / v8_styles.css archived in frontend/archive/ (v14 cleanup) -->
 
-<!-- v14 Phase 3: 疑似实际模型 卡片 (hidden until identity_collision=true or system prompt found) -->
-<template id="identity-exposure-tpl">
-<div id="identity-exposure-card" class="card" style="display:none; border-left: 3px solid #e74c3c; margin-top: 1rem;">
-  <div class="card-header" style="background: #fdf2f2; padding: 0.75rem 1rem; cursor: pointer;" onclick="toggleIdentityCard()">
-    <span style="color: #e74c3c; font-weight: bold;">⚠️ 疑似实际模型</span>
-    <span id="identity-collision-badge" style="margin-left: 0.5rem; font-size: 0.85em;"></span>
-    <span style="float: right; font-size: 0.8em; color: #999;">点击展开 ▼</span>
-  </div>
-  <div id="identity-exposure-body" class="card-body" style="padding: 1rem;">
-    <div id="identity-exposure-content">加载中…</div>
-  </div>
-</div>
+<!-- v16 Phase 9: Real Model Card (replaces v14 identity-exposure-tpl) -->
+<template id="report-real-model-card">
+<section id="real-model-card" class="card hidden">
+  <h2>实际模型卡片 <span class="risk-badge"></span></h2>
+  <div class="rmc-row"><span>声称模型</span><strong id="rmc-claimed"></strong></div>
+  <div class="rmc-row"><span>疑似实际</span><strong id="rmc-suspected"></strong></div>
+  <div class="rmc-row"><span>后验概率</span><span id="rmc-posterior"></span></div>
+  <div class="rmc-row"><span>官方端点</span><span id="rmc-official"></span></div>
+  <details><summary>证据 (<span id="rmc-evidence-count"></span>)</summary>
+    <ul id="rmc-evidence"></ul>
+  </details>
+  <details><summary>泄露的系统提示词（已脱敏）</summary>
+    <pre id="rmc-leaked-prompt"></pre>
+    <small>来源：Phase 4 系统提示词抽取链（Perez 2022 / Greshake 2023）</small>
+  </details>
+  <details><summary>API 模型列表</summary>
+    <pre id="rmc-model-list"></pre>
+  </details>
+</section>
+</template>
+
+<!-- v16 Phase 11: Verdict Explainer Panel -->
+<template id="verdict-explainer-tpl">
+<section id="verdict-explainer" class="card hidden">
+  <h2>判定解释 <span id="ve-tier-badge" class="risk-badge"></span></h2>
+  <div class="ve-row"><span>P(套壳)</span><strong id="ve-p-fake"></strong></div>
+  <div class="ve-row"><span>置信区间 95%</span><span id="ve-ci95"></span></div>
+  <div class="ve-row"><span>样本覆盖</span><span id="ve-coverage"></span></div>
+  <div id="ve-borderline-warn" class="ve-warn hidden">⚠ 判定处于边界，CI 跨越阈值，建议用 Standard/Deep 复测</div>
+  <div id="ve-inconclusive-warn" class="ve-warn hidden">⚠ 测试样本不足，无法给出可靠判定</div>
+  <details open><summary>推升"真实"的证据 (<span id="ve-up-count"></span>)</summary>
+    <ul id="ve-up-evidence"></ul>
+  </details>
+  <details open><summary>推升"套壳"的证据 (<span id="ve-down-count"></span>)</summary>
+    <ul id="ve-down-evidence"></ul>
+  </details>
+  <details><summary>概率分布</summary>
+    <div id="ve-tier-probs" class="ve-tier-probs"></div>
+  </details>
+</section>
 </template>
 
 <!-- ECharts 5 for radar chart rendering -->

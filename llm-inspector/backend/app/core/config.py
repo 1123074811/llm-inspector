@@ -30,9 +30,13 @@ class Settings:
     CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
     # Database (SQLite for portability; swap DATABASE_URL for PostgreSQL)
+    # Use absolute path anchored to project root so DB location is CWD-independent.
+    _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent  # backend/
+    _DATA_DIR = _PROJECT_ROOT / "_data"
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "sqlite:///./llm_inspector.db"
+        f"sqlite:///{_DATA_DIR / 'llm_inspector.db'}"
     )
 
     # Security
@@ -85,7 +89,7 @@ class Settings:
     THETA_DELTA_STOP: float = float(os.getenv("THETA_DELTA_STOP", "0.45"))
     THETA_SCALE_FOR_WIN_PROB: float = float(os.getenv("THETA_SCALE_FOR_WIN_PROB", "0.6"))
     CALIBRATION_VERSION: str = os.getenv("CALIBRATION_VERSION", "v1")
-    SUITE_VERSION: str = os.getenv("SUITE_VERSION", "v10")
+    SUITE_VERSION: str = os.getenv("SUITE_VERSION", "v16")
 
     # Golden baseline compare thresholds (display-score units)
     BASELINE_MATCH_COSINE_THRESHOLD: float = float(
@@ -120,6 +124,24 @@ class Settings:
     # v12 Phase 2: Semantic Judge V3 and Hallucination Detector V3
     USE_EXTERNAL_LLM: bool = os.getenv("USE_EXTERNAL_LLM", "false").lower() == "true"
     USE_KNOWLEDGE_GRAPH: bool = os.getenv("USE_KNOWLEDGE_GRAPH", "false").lower() == "true"
+
+    # v16 Phase 1: Preflight configuration
+    PREFLIGHT_TIMEOUT_S: float = float(os.getenv("PREFLIGHT_TIMEOUT_S", "10.0"))
+    PREFLIGHT_VERIFY_SSL: bool = os.getenv("PREFLIGHT_VERIFY_SSL", "true").lower() == "true"
+
+    # v16 Phase 1.5: Official endpoint fast-path
+    OFFICIAL_ENDPOINT_ENABLED: bool = os.getenv("OFFICIAL_ENDPOINT_ENABLED", "true").lower() == "true"
+    OFFICIAL_ENDPOINT_REGISTRY: str = os.getenv("OFFICIAL_ENDPOINT_REGISTRY", "_data/official_endpoints.yaml")
+    OFFICIAL_ENDPOINT_TIMEOUT_S: float = float(os.getenv("OFFICIAL_ENDPOINT_TIMEOUT_S", "8.0"))
+    OFFICIAL_ENDPOINT_MIN_CONFIDENCE: float = float(os.getenv("OFFICIAL_ENDPOINT_MIN_CONFIDENCE", "0.85"))
+
+    # v16 Phase 2: Retry policy extensions
+    RETRY_MAX_5XX: int = int(os.getenv("RETRY_MAX_5XX", "3"))
+    RETRY_MAX_TRUNCATION: int = int(os.getenv("RETRY_MAX_TRUNCATION", "2"))
+
+    # v16 Phase 3: Weight and scoring configuration
+    WEIGHTS_FILE: str = os.getenv("WEIGHTS_FILE", "weights/total_v16.yaml")
+    PROMPT_COMPRESS_SYSTEM_ONLY: bool = os.getenv("PROMPT_COMPRESS_SYSTEM_ONLY", "true").lower() == "true"
 
     # v13 Phase 4: Data directory for traces and other persisted artifacts
     DATA_DIR: str = os.getenv(

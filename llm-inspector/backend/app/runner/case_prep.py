@@ -51,8 +51,31 @@ def _load_suite(suite_version: str, test_mode: str) -> list[TestCase]:
 _benchmark_cache: dict[str, tuple[float, list[dict]]] = {}
 
 
+def invalidate_benchmark_cache(suite_version: str | None = None) -> None:
+    """Drop the in-process benchmark cache.
+
+    Must be called by handlers that mutate ``golden_baselines`` (create / delete /
+    activate / deactivate). Otherwise a run started within
+    ``BENCHMARK_CACHE_TTL_SEC`` of a baseline change will silently use the
+    *previous* baseline list and ignore the user's edit, which produced the
+    "set baseline → next run doesn't see it" bug observed in v16 acceptance.
+    """
+    global _benchmark_cache
+    if suite_version is None:
+        _benchmark_cache.clear()
+    else:
+        _benchmark_cache.pop(suite_version, None)
+
+
 def _load_benchmarks(suite_version: str) -> list[dict]:
-    """Load benchmarks with a short TTL cache to avoid repeated DB reads."""
+    """Load benchmarks with a short TTL cache to avoid repeated DB reads.
+
+    The TTL is intentionally short (default 120 s) because benchmarks change
+    only when a user marks a run as baseline — and on that path we explicitly
+    call ``invalidate_benchmark_cache()`` so a stale cache cannot survive a
+    baseline mutation. The TTL exists only to coalesce many reads inside a
+    single run (predetect → similarity → reporting all hit it).
+    """
     now = time.time()
     cached = _benchmark_cache.get(suite_version)
     ttl = max(1, settings.BENCHMARK_CACHE_TTL_SEC)

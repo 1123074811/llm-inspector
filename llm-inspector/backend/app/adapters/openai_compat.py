@@ -40,6 +40,9 @@ def _with_retry(fn, max_retries: int = _MAX_RETRIES):
                 is_retryable = True
             elif _RETRY_ON_TIMEOUT and result.error_type == "timeout":
                 is_retryable = True
+            elif result.error_type == "ssl_error":
+                # v16 fix: SSL UNEXPECTED_EOF is often transient (proxy/reset)
+                is_retryable = True
                 
         if not is_retryable:
             return result
@@ -55,8 +58,18 @@ def _with_retry(fn, max_retries: int = _MAX_RETRIES):
         latency_ms=0,
     )
 
-# Build a permissive SSL context (some self-hosted APIs use self-signed certs)
-_SSL_CTX = ssl.create_default_context()
+# Build SSL context with certifi CA bundle (v16 fix: UNEXPECTED_EOF_WHILE_READING)
+# Some self-hosted APIs use self-signed certs; certifi provides up-to-date Mozilla CA bundle.
+def _build_adapter_ssl_ctx() -> ssl.SSLContext:
+    """Build SSL context preferring certifi, matching connection_check.py logic."""
+    try:
+        import certifi  # type: ignore[import]
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    return ssl.create_default_context()
+
+_SSL_CTX = _build_adapter_ssl_ctx()
 
 
 class OpenAICompatibleAdapter:
@@ -345,17 +358,49 @@ class OpenAICompatibleAdapter:
                 except Exception:
                     body = {}
                 error_type = "rate_limit" if e.code == 429 else "http_error"
+                # v16 Phase 1: Preserve upstream error payload for retry logic
+                error_payload = body.get("error") if isinstance(body.get("error"), dict) else body
+                error_message = body.get("error", {}).get("message", e.reason) \
+                    if isinstance(body.get("error"), dict) else str(body)[:300]
+                # v16 Phase 1: Detect content_filter finish_reason
+                finish_reason = None
+                if isinstance(body.get("error"), dict):
+                    finish_reason = body["error"].get("type")  # e.g. "content_filter"
                 return LLMResponse(
                     status_code=e.code, latency_ms=latency,
                     headers=dict(e.headers),
                     error_type=error_type,
-                    error_message=body.get("error", {}).get("message", e.reason)
-                    if isinstance(body.get("error"), dict) else str(body)[:300],
+                    error_message=error_message,
+                    error_payload=error_payload,
+                    http_status=e.code,
+                    finish_reason=finish_reason,
                 )
             except TimeoutError:
                 return LLMResponse(
                     error_type="timeout",
                     error_message=f"Timed out after {req.timeout_sec}s",
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                )
+            except ssl.SSLError as e:
+                # v16 fix: classify SSL errors (UNEXPECTED_EOF, CERTIFICATE_VERIFY_FAILED, etc.)
+                return LLMResponse(
+                    error_type="ssl_error",
+                    error_message=f"SSL error: {str(e)[:300]}",
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                )
+            except urllib.error.URLError as e:
+                # v16 fix: classify URL errors that may wrap SSL errors
+                reason = getattr(e, 'reason', e)
+                msg = str(reason).lower()
+                if 'ssl' in msg or 'certificate' in msg or 'eof' in msg:
+                    return LLMResponse(
+                        error_type="ssl_error",
+                        error_message=f"SSL/URL error: {str(e)[:300]}",
+                        latency_ms=int((time.monotonic() - t0) * 1000),
+                    )
+                return LLMResponse(
+                    error_type="connection_error",
+                    error_message=str(e)[:300],
                     latency_ms=int((time.monotonic() - t0) * 1000),
                 )
             except Exception as e:

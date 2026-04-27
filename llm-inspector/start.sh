@@ -1,11 +1,11 @@
 #!/bin/bash
-# LLM Inspector v15.0 - Unix/Linux/Mac Startup Script
+# LLM Inspector v16.0 - Unix/Linux/Mac Startup Script
 # Idempotent dependency check + provenance validation + server start
 
 set -e
 
 echo "===================================="
-echo "LLM Inspector v15.0"
+echo "LLM Inspector v16.0"
 echo "===================================="
 
 # Colors for output
@@ -33,7 +33,7 @@ echo ""
 echo "===================================="
 echo "Checking Dependencies..."
 echo "===================================="
-if python -c "import yaml, numpy, scipy, cryptography" 2>/dev/null; then
+if python -c "import yaml, numpy, scipy, cryptography, certifi, tiktoken" 2>/dev/null; then
     echo -e "${GREEN}[OK]${NC} Core dependencies already satisfied"
 else
     echo "[INFO] Installing missing core dependencies..."

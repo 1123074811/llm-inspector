@@ -44,6 +44,17 @@ def handle_create_baseline(_path, _qs, body: dict) -> tuple:
             )
         except ValueError as e:
             return _error(str(e), 400)
+        # Critical: invalidate the in-process benchmark cache so the next run
+        # actually sees the just-created baseline. Without this, runs started
+        # within BENCHMARK_CACHE_TTL_SEC of the call below will silently use
+        # the previous benchmark list (root cause of v16 acceptance bug:
+        # "set deepseek-v4-flash run #1 as baseline → run #2 still ranks
+        # qianfan-code-latest #1 because run #2 saw the stale baseline list").
+        try:
+            from app.runner.case_prep import invalidate_benchmark_cache
+            invalidate_benchmark_cache()
+        except Exception as e:
+            logger.warning("Failed to invalidate benchmark cache after baseline create", error=str(e))
         logger.info("Baseline created from run", display_name=display_name, run_id=run_id)
         return _json({"baseline_id": result["id"], "status": "created"}, 201)
 
@@ -85,6 +96,11 @@ def handle_create_baseline(_path, _qs, body: dict) -> tuple:
     )
 
     repo.create_baseline(run_id=run_id, model_name=body["model"], display_name=body["name"])
+    try:
+        from app.runner.case_prep import invalidate_benchmark_cache
+        invalidate_benchmark_cache()
+    except Exception as e:
+        logger.warning("Failed to invalidate benchmark cache after baseline create (mode2)", error=str(e))
     submit_run(run_id)
     logger.info("Baseline created", name=body["name"], run_id=run_id)
     return _json({"baseline_id": run_id, "status": "queued"}, 201)
@@ -279,6 +295,11 @@ def handle_delete_baseline(path, _qs, _body) -> tuple:
     if not baseline_id:
         return _error("Invalid baseline ID", 400)
     repo.delete_baseline(baseline_id)
+    try:
+        from app.runner.case_prep import invalidate_benchmark_cache
+        invalidate_benchmark_cache()
+    except Exception as e:
+        logger.warning("Failed to invalidate benchmark cache after baseline delete", error=str(e))
     return _json({"deleted": baseline_id})
 
 

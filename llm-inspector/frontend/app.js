@@ -1231,6 +1231,37 @@ function renderPredetectCard(pre, runId, status) {
       </div>
     </div>`;
 
+  // ── v16 Phase 1.5: OFFICIAL endpoint badge ─────────────────────────────────
+  // Rendered when routing_info.official_endpoint.verified === true, so users
+  // can immediately see that a +2.0 log-odds "verified official" boost was
+  // applied (root cause of the v15 "official API → high_risk" false positive).
+  let officialHtml = '';
+  const oep = routing.official_endpoint;
+  if (oep && oep.verified) {
+    const evasion = (oep.evasion_signals || []).filter(s => !!s);
+    officialHtml = `
+      <div style="margin-top:10px;padding:10px 12px;background:rgba(22,163,74,.08);border:1px solid rgba(22,163,74,.25);border-radius:6px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:8px;font-weight:700;color:#16a34a;margin-bottom:6px">
+          <span>✅ 官方 API · ${escHtml(oep.display_name || oep.provider || 'Verified')}</span>
+          <span style="margin-left:auto;font-weight:500;color:var(--ink3);font-size:11px">置信度 ${Math.round((oep.confidence||0)*100)}%</span>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;color:var(--ink3);font-size:11px">
+          <span>${oep.url_matched ? '✓' : '✗'} URL 匹配</span>
+          <span>${oep.tls_consistent ? '✓' : '✗'} TLS 证书一致</span>
+          <span>${oep.headers_consistent ? '✓' : '✗'} 响应头一致</span>
+          <span>${oep.model_prefix_matched ? '✓' : '○'} 模型前缀匹配</span>
+        </div>
+        ${evasion.length ? `<div style="margin-top:6px;color:var(--ink4);font-size:11px">软信号：${evasion.map(escHtml).join(' · ')}</div>` : ''}
+      </div>`;
+  } else if (oep && oep.url_matched && !oep.verified) {
+    // URL matched but other checks failed — possible reverse-proxy
+    officialHtml = `
+      <div style="margin-top:10px;padding:8px 12px;background:rgba(217,119,6,.08);border:1px solid rgba(217,119,6,.25);border-radius:6px;font-size:12px;color:var(--ink3)">
+        <div style="font-weight:600;color:#d97706;margin-bottom:4px">⚠ URL 命中 ${escHtml(oep.display_name || oep.provider || '官方')} 注册表，但完整一致性校验未通过</div>
+        <div style="font-size:11px">置信度 ${Math.round((oep.confidence||0)*100)}% · TLS=${oep.tls_consistent?'OK':'FAIL'} · 响应头=${oep.headers_consistent?'OK':'FAIL'}</div>
+      </div>`;
+  }
+
   // ── Routing info ─────────────────────────────────────────────────────────────
   let routingHtml = '';
   if (routing.is_routed) {
@@ -1332,6 +1363,7 @@ function renderPredetectCard(pre, runId, status) {
         </div>
       </div>
       ${confBar}
+      ${officialHtml}
       ${routingHtml}
       ${layersHtml}
       ${actionHtml}
@@ -2412,14 +2444,24 @@ async function deleteBaseline(baselineId) {
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
-// Show toast notification (v14: supports type='info'|'error'|'warn')
-function showToast(message, type = 'info', duration = 3500) {
+// Show toast notification (v16 Phase 9: supports level, hint, actions)
+function showToast(message, type = 'info', duration = 3500, hint = '', actions = null) {
   // Legacy call signature: showToast(msg, number) — treat as duration
   if (typeof type === 'number') { duration = type; type = 'info'; }
+  const container = document.getElementById('toast-container') || document.body;
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  document.body.appendChild(toast);
+  let html = `<span>${escHtml(message)}</span>`;
+  if (hint) html += `<div class="toast-hint">${escHtml(hint)}</div>`;
+  if (actions && actions.length) {
+    html += '<div class="toast-actions">';
+    for (const act of actions) {
+      html += `<button onclick="${act.onclick}">${escHtml(act.label)}</button>`;
+    }
+    html += '</div>';
+  }
+  toast.innerHTML = html;
+  container.appendChild(toast);
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
 }
 
@@ -2667,4 +2709,115 @@ function setNavStatus(status) {
 
 // Init
 restoreForm();
+
+// ── v16 Phase 9: Real Model Card Rendering ──────────────────────────────────
+
+function renderRealModelCard(rmc) {
+  if (!rmc) return;
+  const section = document.getElementById('real-model-card');
+  if (!section) return;
+
+  section.classList.remove('hidden');
+
+  // Risk badge
+  const badge = section.querySelector('.risk-badge');
+  if (badge) {
+    const p = rmc.posterior || 0;
+    let tier = 'trusted', label = '可信';
+    if (p >= 0.70) { tier = 'fake'; label = '伪造'; }
+    else if (p >= 0.40) { tier = 'high_risk'; label = '高风险'; }
+    else if (p >= 0.15) { tier = 'suspicious'; label = '可疑'; }
+    badge.className = `risk-badge ${tier}`;
+    badge.textContent = label;
+  }
+
+  // Fields
+  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '–'; };
+  setEl('rmc-claimed', rmc.claimed_model);
+  setEl('rmc-suspected', rmc.suspected_family || '未识别');
+  setEl('rmc-posterior', rmc.posterior != null ? (rmc.posterior * 100).toFixed(1) + '%' : '–');
+  setEl('rmc-official', rmc.is_official ? `✓ ${rmc.official_vendor || '官方'}` : '✗ 非官方');
+
+  // Evidence list
+  const evList = document.getElementById('rmc-evidence');
+  const evCount = document.getElementById('rmc-evidence-count');
+  if (evList && rmc.evidence) {
+    evList.innerHTML = rmc.evidence.map(e =>
+      `<li><strong>[${escHtml(e.source_layer)}]</strong> ${escHtml(e.snippet)} <span style="color:var(--ink4)">(${(e.confidence*100).toFixed(0)}%)</span></li>`
+    ).join('');
+    if (evCount) evCount.textContent = rmc.evidence.length;
+  }
+
+  // Leaked system prompt
+  const promptEl = document.getElementById('rmc-leaked-prompt');
+  if (promptEl) promptEl.textContent = rmc.leaked_system_prompt || '（未检测到泄露）';
+
+  // Model list
+  const listEl = document.getElementById('rmc-model-list');
+  if (listEl && rmc.model_list_report) {
+    const avail = rmc.model_list_report.available || [];
+    listEl.textContent = avail.length ? avail.join('\n') : '（无法获取）';
+  }
+}
+
+// ── v16 Phase 11: Verdict Explainer Rendering ────────────────────────────
+
+function renderVerdictExplainer(vr) {
+  if (!vr) return;
+  const section = document.getElementById('verdict-explainer');
+  if (!section) return;
+  section.classList.remove('hidden');
+
+  // Tier badge
+  const badge = document.getElementById('ve-tier-badge');
+  if (badge) {
+    const tier = vr.tier || 'inconclusive';
+    const labels = {trusted:'可信',suspicious:'可疑',high_risk:'高风险',fake:'伪造',inconclusive:'证据不足'};
+    badge.className = `risk-badge ${tier}`;
+    badge.textContent = labels[tier] || tier;
+  }
+
+  // Core metrics
+  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setEl('ve-p-fake', vr.p_fake != null ? (vr.p_fake * 100).toFixed(1) + '%' : '–');
+  if (vr.log_odds_ci95) {
+    const lo = (Math.exp(vr.log_odds_ci95[0]) / (1 + Math.exp(vr.log_odds_ci95[0])) * 100).toFixed(1);
+    const hi = (Math.exp(vr.log_odds_ci95[1]) / (1 + Math.exp(vr.log_odds_ci95[1])) * 100).toFixed(1);
+    setEl('ve-ci95', `[${lo}%, ${hi}%]`);
+  }
+  setEl('ve-coverage', vr.coverage != null ? (vr.coverage * 100).toFixed(0) + '%' : '–');
+
+  // Borderline warning
+  const bw = document.getElementById('ve-borderline-warn');
+  if (bw) { vr.is_borderline ? bw.classList.remove('hidden') : bw.classList.add('hidden'); }
+
+  // Inconclusive warning
+  const iw = document.getElementById('ve-inconclusive-warn');
+  if (iw) { vr.tier === 'inconclusive' ? iw.classList.remove('hidden') : iw.classList.add('hidden'); }
+
+  // Evidence lists
+  const evidence = vr.dominant_evidence || [];
+  const upEv = evidence.filter(e => e.direction === 'up');
+  const downEv = evidence.filter(e => e.direction === 'down');
+
+  const renderList = (ulId, countId, items) => {
+    const ul = document.getElementById(ulId);
+    const cnt = document.getElementById(countId);
+    if (ul) ul.innerHTML = items.map(e =>
+      `<li><strong>${escHtml(e.rule_id)}</strong>: ${e.direction==='up'?'−':'+'}${Math.abs(e.effective_delta||e.log_odds_delta).toFixed(2)} log-odds <span style="color:var(--ink4)">[${e.sources?.join(', ')||''}]</span></li>`
+    ).join('');
+    if (cnt) cnt.textContent = items.length;
+  };
+  renderList('ve-up-evidence', 've-up-count', upEv);
+  renderList('ve-down-evidence', 've-down-count', downEv);
+
+  // Tier probability bars
+  const probsEl = document.getElementById('ve-tier-probs');
+  if (probsEl && vr.tier_probabilities) {
+    const tp = vr.tier_probabilities;
+    probsEl.innerHTML = ['trusted','suspicious','high_risk','fake'].map(t =>
+      `<div class="ve-prob ${t}"><div class="ve-prob-val">${((tp[t]||0)*100).toFixed(0)}%</div><div class="ve-prob-label">${{trusted:'可信',suspicious:'可疑',high_risk:'高风险',fake:'伪造'}[t]}</div></div>`
+    ).join('');
+  }
+}
 showPage('home');

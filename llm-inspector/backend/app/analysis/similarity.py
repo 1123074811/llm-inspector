@@ -173,7 +173,24 @@ class SimilarityEngine:
                 valid_feature_count=valid_count,
             ))
 
-        results.sort(key=lambda r: r.similarity_score, reverse=True)
+        # Tiered ranking: confidence_level dominates similarity_score so a
+        # baseline with rich coverage (e.g. 23 dims overlap, "high"/"medium"
+        # confidence) cannot be out-ranked by an old baseline with only ~10
+        # dims overlap that happens to score high purely because cosine over
+        # a small subspace is inflated.
+        # Root cause of v16 acceptance bug "deepseek-v4-flash run #2 ranked
+        # qianfan-code-latest #1 above its own just-set baseline":
+        # qianfan baseline (created 2026-04-06, FV=57 features → ~10 dims of
+        # FEATURE_ORDER overlap) reported sim=0.8595 while the freshly-set
+        # deepseek baseline (FV=128 features → 23 dims overlap) reported 0.8409.
+        # Cosine over 10 dims is statistically less informative than over 23.
+        # Reference: van der Linden & Glas (2010) — measurement reliability
+        # scales with the number of independent informative items.
+        _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1, "insufficient": 0}
+        results.sort(
+            key=lambda r: (_CONFIDENCE_RANK.get(r.confidence_level, 0), r.similarity_score),
+            reverse=True,
+        )
         for i, r in enumerate(results):
             r.rank = i + 1
 

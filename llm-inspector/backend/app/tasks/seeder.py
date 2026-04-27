@@ -37,7 +37,14 @@ def _difficulty_to_irt_b(difficulty: float | None) -> float:
 
 def _seed_test_cases() -> None:
     total = 0
-    for suite_file in ("suite_v1.json", "suite_extraction.json", "suite_v2.json", "suite_v3.json", "suite_v10.json", "suite_v13.json", "suite_v15.json"):
+    # NOTE: suite_v16_test_comm.json and suite_v16_test_nc.json shipped with stub
+    # prompts ("GPQA #1", "LCB #1", "MMLU #1", "TQ #1" — i.e. ID placeholders, not
+    # real questions). They are still parsed for schema completeness but each case
+    # is force-disabled (enabled=0) on seed, and they are excluded from the v16
+    # composite in repo.load_cases(). Until real prompts are imported, leaving
+    # them enabled would cause 0% pass on coding/safety/knowledge/reasoning.
+    _STUB_SUITE_FILES = frozenset({"suite_v16_test_comm.json", "suite_v16_test_nc.json"})
+    for suite_file in ("suite_v1.json", "suite_extraction.json", "suite_v2.json", "suite_v3.json", "suite_v10.json", "suite_v13.json", "suite_v15.json", "suite_v16_test_comm.json", "suite_v16_test_nc.json"):
         suite_path = _FIXTURES / suite_file
         if not suite_path.exists():
             continue
@@ -48,8 +55,11 @@ def _seed_test_cases() -> None:
             continue
         cases = data.get("cases", [])
         version = data.get("version", "v1")
+        is_stub_suite = suite_file in _STUB_SUITE_FILES
         seeded_in_file = 0
         for case in cases:
+            if is_stub_suite:
+                case["enabled"] = False  # force-disable stub cases
             case.setdefault("suite_version", version)
             case.setdefault("dimension", case.get("category", "general"))
             case.setdefault("tags", [case.get("category", "general")])

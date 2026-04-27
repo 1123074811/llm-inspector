@@ -146,3 +146,66 @@ def reliability_curve(
         counts.append(len(in_bin))
 
     return (confs, accs, counts)
+
+
+def weighted_ece(
+    probs: list[float],
+    outcomes: list[int],
+    weights: list[float] | None = None,
+    n_bins: int = 10,
+) -> float | None:
+    """v16 Phase 3: Weighted Expected Calibration Error.
+
+    Like ECE but each prediction is weighted by its importance weight
+    (e.g., IRT discrimination parameter or item information).
+
+    Args:
+        probs: Predicted probabilities (0-1).
+        outcomes: Binary outcomes (0 or 1).
+        weights: Per-prediction importance weights. If None, falls back
+                 to uniform weights (equivalent to standard ECE).
+        n_bins: Number of bins.
+
+    Returns:
+        Weighted ECE value, or None if inputs are empty.
+
+    Reference: Nuñez et al. (2024) "Calibration of Probabilistic Predictions".
+    """
+    if not probs or not outcomes or len(probs) != len(outcomes):
+        return None
+    n = len(probs)
+    if n_bins < 2:
+        n_bins = 10
+
+    # Default to uniform weights
+    if weights is None:
+        weights = [1.0] * n
+    if len(weights) != n:
+        return None
+
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return None
+
+    bin_boundaries = [i / n_bins for i in range(n_bins + 1)]
+    w_ece = 0.0
+
+    for i in range(n_bins):
+        lo = bin_boundaries[i]
+        hi = bin_boundaries[i + 1]
+        in_bin = [
+            j for j in range(n)
+            if (lo <= probs[j] < hi) or (i == n_bins - 1 and probs[j] == 1.0)
+        ]
+        if not in_bin:
+            continue
+
+        bin_weight = sum(weights[j] for j in in_bin)
+        if bin_weight <= 0:
+            continue
+
+        bin_conf = sum(probs[j] * weights[j] for j in in_bin) / bin_weight
+        bin_acc = sum(outcomes[j] * weights[j] for j in in_bin) / bin_weight
+        w_ece += (bin_weight / total_weight) * abs(bin_acc - bin_conf)
+
+    return w_ece

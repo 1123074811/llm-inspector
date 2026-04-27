@@ -1,0 +1,150 @@
+# v16 Phase 1.5: Official API Endpoint Registry
+# Used by OfficialEndpointChecker for TLS triple-consistency verification.
+# Format: provider -> list of official base_url patterns + expected TLS fingerprints.
+
+providers:
+  openai:
+    display_name: "OpenAI"
+    base_urls:
+      - "https://api.openai.com"
+      - "https://api.openai.com/v1"
+    tls_fingerprints:
+      # SHA-256 of DER-encoded server certificate (last known good)
+      # Updated periodically; empty = skip TLS cert pin check
+      cert_sha256: ""
+    expected_headers:
+      - "x-request-id"
+      - "openai-organization"
+    model_prefixes:
+      - "gpt-"
+      - "o1-"
+      - "o3-"
+      - "dall-e-"
+      - "whisper-"
+      - "tts-"
+
+  anthropic:
+    display_name: "Anthropic"
+    base_urls:
+      - "https://api.anthropic.com"
+      - "https://api.anthropic.com/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers:
+      - "request-id"
+      - "anthropic-ratelimit-"
+    model_prefixes:
+      - "claude-"
+
+  google:
+    display_name: "Google AI / Gemini"
+    base_urls:
+      - "https://generativelanguage.googleapis.com"
+      - "https://generativelanguage.googleapis.com/v1beta"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "gemini-"
+
+  deepseek:
+    display_name: "DeepSeek"
+    base_urls:
+      - "https://api.deepseek.com"
+      - "https://api.deepseek.com/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "deepseek-"
+
+  zhipu:
+    display_name: "ZhipuAI (GLM)"
+    base_urls:
+      - "https://open.bigmodel.cn"
+      - "https://open.bigmodel.cn/api/paas/v4"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "glm-"
+
+  alibaba_qwen:
+    display_name: "Alibaba Qwen (DashScope)"
+    base_urls:
+      - "https://dashscope.aliyuncs.com"
+      - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "qwen-"
+
+  moonshot:
+    display_name: "Moonshot AI (Kimi)"
+    base_urls:
+      - "https://api.moonshot.cn"
+      - "https://api.moonshot.cn/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "moonshot-"
+
+  baidu_qianfan:
+    display_name: "Baidu Qianfan"
+    base_urls:
+      - "https://qianfan.baidubce.com"
+      - "https://aip.baidubce.com"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "ernie-"
+
+  minimax:
+    display_name: "MiniMax"
+    base_urls:
+      - "https://api.minimax.chat"
+      - "https://api.minimax.chat/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "abab-"
+
+  mistral:
+    display_name: "Mistral AI"
+    base_urls:
+      - "https://api.mistral.ai"
+      - "https://api.mistral.ai/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "mistral-"
+      - "mixtral-"
+      - "codestral-"
+
+  cohere:
+    display_name: "Cohere"
+    base_urls:
+      - "https://api.cohere.ai"
+      - "https://api.cohere.com/v1"
+    tls_fingerprints:
+      cert_sha256: ""
+    expected_headers: []
+    model_prefixes:
+      - "command-"
+
+# Anti-evasion: patterns that strongly indicate a reverse-proxy / wrapper
+evasion_indicators:
+  - header_mismatches: 3   # >=3 expected headers missing from official provider
+  - cert_chain_depth_gt: 3 # Intermediate CA chain deeper than expected
+  # TLS 1.3 handshake is 1-RTT (RFC 8446 §2). Observed wall-clock includes TCP SYN
+  # + TLS ClientHello/ServerHello + Finished. With cross-continent RTT 200-350 ms
+  # (Cloudflare Radar 2024 medians), normal first-handshake total: 600-1100 ms.
+  # Anything >2000 ms is genuinely abnormal (queueing / proxy / re-handshake).
+  # Source: RFC 8446 §2; Cloudflare Radar https://radar.cloudflare.com/quality
+  - response_latency_anomaly_ms: 2000
+  - missing_openai_compat_fields: ["id", "object", "created", "model"]

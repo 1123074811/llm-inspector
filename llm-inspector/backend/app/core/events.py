@@ -74,6 +74,16 @@ class EventKind(str, enum.Enum):
     EVIDENCE_ADDED       = "authenticity.evidence_added"
     JUDGE_FALLBACK       = "judge.fallback"
 
+    # v16 Phase 8: Extended event kinds
+    RETRY_TRUNCATION     = "retry.truncation"
+    RETRY_5XX            = "retry.5xx"
+    RETRY_DECODE         = "retry.decode"
+    EXCLUDED_SAMPLE      = "sample.excluded"
+    IDENTITY_EXPOSURE    = "identity.exposure_detected"
+    SYSTEM_PROMPT_LEAKED = "system_prompt.leaked"
+    MODEL_LIST_PROBED    = "model_list.probed"
+    JUDGE_CHAIN_STEP     = "judge_chain.step"
+
 
 # ── Event dataclass ───────────────────────────────────────────────────────────
 

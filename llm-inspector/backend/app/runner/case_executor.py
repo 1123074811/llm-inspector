@@ -210,19 +210,41 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
                 "Response truncated (finish_reason=length)",
                 case_id=case.id, sample=i, max_tokens=case.max_tokens,
             )
-            # Mark as failed with truncation detail — don't waste judge on
-            # incomplete text that will almost certainly miss key signals.
-            result.samples.append(SampleResult(
-                sample_index=i,
-                response=resp,
-                judge_passed=False,
-                judge_detail={
-                    "truncated": True,
-                    "reason": "response truncated (finish_reason=length), "
-                              "output incomplete — judge skipped",
-                    "max_tokens": case.max_tokens,
-                },
-            ))
+
+            # v16 fix: Some APIs (e.g. deepseek) don't strictly honor max_tokens
+            # and return more tokens than requested, then mark finish_reason=length.
+            # For content-rich judge methods, the response may still contain
+            # enough information to judge. Only skip for format-strict methods.
+            _FORMAT_STRICT_JUDGES = {
+                "exact_match", "regex_match", "json_schema", "line_count",
+                "text_constraints", "tokenizer_fingerprint",
+            }
+            if case.judge_method in _FORMAT_STRICT_JUDGES:
+                # Format-strict: truncation likely invalidates the result
+                result.samples.append(SampleResult(
+                    sample_index=i,
+                    response=resp,
+                    judge_passed=False,
+                    judge_detail={
+                        "truncated": True,
+                        "reason": "response truncated (finish_reason=length), "
+                                  "format-strict judge skipped",
+                        "max_tokens": case.max_tokens,
+                    },
+                ))
+            else:
+                # Content-rich: still attempt judging with truncation note
+                passed, detail = judge(case.judge_method, resp.content, case.params)
+                if detail is None:
+                    detail = {}
+                detail["truncated"] = True
+                detail["max_tokens"] = case.max_tokens
+                result.samples.append(SampleResult(
+                    sample_index=i,
+                    response=resp,
+                    judge_passed=passed,
+                    judge_detail=detail,
+                ))
         else:
             consecutive_truncations = 0
             passed, detail = judge(case.judge_method, resp.content, case.params)
@@ -251,6 +273,139 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
                 judge_passed=passed,
                 judge_detail=detail,
             ))
+
+    # v16 Phase 2: Rescue round — if all samples failed, try one more with adjusted params
+    result = _rescue_round(adapter, model_name, case, result)
+
+    return result
+
+
+def _rescue_round(adapter, model_name: str, case: TestCase, result: CaseResult) -> CaseResult:
+    """
+    v16 Phase 2: Case-level rescue round.
+
+    If ALL samples in a case failed (error or judge_failed), attempt one
+    rescue retry with adjusted parameters:
+      - Truncated responses: double max_tokens
+      - Error responses: retry with simplified prompt
+      - Content-filtered: mark excluded_from_scoring
+    """
+    # Check if rescue is needed
+    has_any_pass = any(s.judge_passed for s in result.samples if s.judge_passed is not None)
+    if has_any_pass:
+        return result  # No rescue needed
+
+    # Determine rescue strategy from failure patterns
+    truncation_failures = [s for s in result.samples if s.judge_detail.get("truncated")]
+    error_failures = [s for s in result.samples if s.response.error_type is not None]
+    content_filtered = [s for s in result.samples
+                        if s.response.finish_reason == "content_filter"
+                        or (s.response.error_payload or {}).get("type") == "content_filter"]
+
+    # Mark content-filtered samples as excluded from scoring
+    for s in content_filtered:
+        s.excluded_from_scoring = True
+        s.retry_type = "content_filter"
+
+    rescue_max_tokens = case.max_tokens
+    rescue_prompt = case.user_prompt
+    rescue_type: str | None = None
+
+    if truncation_failures:
+        # Double max_tokens for truncation rescue
+        rescue_max_tokens = min(case.max_tokens * 2, 4096)
+        rescue_type = "truncation"
+    elif error_failures:
+        # Simplify prompt for error rescue (shorter, more direct)
+        rescue_prompt = case.user_prompt[:200] if len(case.user_prompt) > 200 else case.user_prompt
+        rescue_type = "error"
+    else:
+        # All judge-failed but no clear pattern — try once with doubled tokens
+        rescue_max_tokens = min(case.max_tokens * 2, 4096)
+        rescue_type = "generic"
+
+    # Perform rescue attempt
+    messages = []
+    if case.system_prompt:
+        sys_content = case.system_prompt
+        if case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+            sys_content = sys_content + "\n" + _PLAIN_TEXT_INSTRUCTION
+        messages.append(Message("system", sys_content))
+    elif case.category not in _SKIP_PLAIN_TEXT_CATEGORIES:
+        messages.append(Message("system", _PLAIN_TEXT_INSTRUCTION))
+    messages.append(Message("user", rescue_prompt))
+
+    req = LLMRequest(
+        model=model_name,
+        messages=messages,
+        temperature=case.temperature,
+        max_tokens=rescue_max_tokens,
+        timeout_sec=TIMEOUT_MAP.get(case.category, 60),
+    )
+
+    logger.info(
+        "Rescue round attempt",
+        case_id=case.id,
+        rescue_type=rescue_type,
+        max_tokens=rescue_max_tokens,
+    )
+
+    try:
+        resp = adapter.chat(req)
+    except Exception as e:
+        logger.error(
+            "Rescue round adapter failed",
+            case_id=case.id,
+            error=str(e),
+        )
+        from app.core.schemas import LLMResponse
+        resp = LLMResponse(
+            content="",
+            finish_reason="error",
+            status_code=500,
+            error_type=type(e).__name__,
+            error_message=str(e),
+            latency_ms=0,
+            usage_total_tokens=0,
+        )
+
+    if resp.finish_reason == "length":
+        # Still truncated — exclude from scoring
+        result.samples.append(SampleResult(
+            sample_index=len(result.samples),
+            response=resp,
+            judge_passed=False,
+            judge_detail={"truncated": True, "rescue_attempt": True, "reason": "still truncated after rescue"},
+            excluded_from_scoring=True,
+            retry_type=rescue_type,
+        ))
+    elif resp.error_type:
+        # Still error — exclude from scoring
+        result.samples.append(SampleResult(
+            sample_index=len(result.samples),
+            response=resp,
+            judge_passed=False,
+            judge_detail={"error": True, "rescue_attempt": True, "reason": "still error after rescue"},
+            excluded_from_scoring=True,
+            retry_type=rescue_type,
+        ))
+    else:
+        # Rescue succeeded — judge normally
+        passed, detail = judge(case.judge_method, resp.content, case.params)
+        result.samples.append(SampleResult(
+            sample_index=len(result.samples),
+            response=resp,
+            judge_passed=passed,
+            judge_detail=detail or {},
+            retry_type=rescue_type,
+        ))
+        if passed:
+            result.rescued = True
+            logger.info(
+                "Rescue round succeeded",
+                case_id=case.id,
+                rescue_type=rescue_type,
+            )
 
     return result
 

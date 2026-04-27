@@ -110,9 +110,10 @@ class CacheStrategy:
         except Exception as e:
             logger.warning("Cache set error", error=str(e))
 
-    def build_key(self, base_url: str, payload: dict) -> str:
+    def build_key(self, base_url: str, payload: dict, model_name: str = "") -> str:
+        """Build cache key including model_name (v16 Phase 7) to avoid cross-model pollution."""
         payload_str = json.dumps(payload, sort_keys=True)
-        key_src = base_url + ":" + payload_str
+        key_src = f"{base_url}:{model_name}:{payload_str}" if model_name else f"{base_url}:{payload_str}"
         return hashlib.sha256(key_src.encode()).hexdigest()
 
     def warm(self, base_url: str, payload: dict, response: LLMResponse, category: str = "") -> None:

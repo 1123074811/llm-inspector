@@ -187,9 +187,13 @@ def _check_reachability(base_url: str, timeout: float) -> tuple[ErrorDetail | No
         return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=str(e)), str(e)
     except socket.timeout as e:
         return make_error(ErrorCode.E_NET_TIMEOUT, raw_body=str(e)), str(e)
+    except ssl.SSLError as e:
+        # v16 fix: catch UNEXPECTED_EOF_WHILE_READING etc.
+        full_reason = f"{type(e).__name__}: {str(e)}"
+        return make_error(ErrorCode.E_TLS_INVALID, raw_body=full_reason), full_reason
     except OSError as e:
         msg = str(e).lower()
-        if "ssl" in msg or "certificate" in msg:
+        if "ssl" in msg or "certificate" in msg or "eof" in msg:
             return make_error(ErrorCode.E_TLS_INVALID, raw_body=str(e)), str(e)
         return make_error(ErrorCode.E_NET_CONN_REFUSED, raw_body=str(e)), str(e)
 

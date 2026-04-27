@@ -196,7 +196,7 @@ class TestWithRetryNetworkError:
         def _fn():
             raise TimeoutError("timed out")
 
-        cfg = RetryConfig(max_retries_network=3, backoff_base_s=1.0, backoff_max_s=10.0)
+        cfg = RetryConfig(max_retries_network=3, backoff_base_s=1.0, backoff_max_s=10.0, jitter_ratio=0.0)
         with mock.patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
             with_retry(_fn, config=cfg)
 
@@ -233,7 +233,7 @@ class TestWithRetry429:
         def _fn():
             raise Exception("429 rate_limit — Retry-After: 5")
 
-        cfg = RetryConfig(max_retries_429=1, backoff_base_s=0.0, backoff_max_s=60.0)
+        cfg = RetryConfig(max_retries_429=1, backoff_base_s=0.0, backoff_max_s=60.0, jitter_ratio=0.0)
         with mock.patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
             with_retry(_fn, config=cfg)
 

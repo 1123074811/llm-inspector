@@ -1,6 +1,6 @@
 @echo off
 echo ====================================
-echo LLM Inspector v13.0
+echo LLM Inspector v16.0
 echo ====================================
 
 REM Activate virtual environment
@@ -23,7 +23,7 @@ echo.
 echo ====================================
 echo Checking Dependencies...
 echo ====================================
-python -c "import yaml, numpy, scipy, cryptography" 2>nul
+python -c "import yaml, numpy, scipy, cryptography, certifi, tiktoken" 2>nul
 if %errorlevel% neq 0 (
     echo [INFO] Installing missing core dependencies...
     python scripts\setup_dependencies.py --skip-optional

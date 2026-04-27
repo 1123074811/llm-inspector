@@ -989,3 +989,109 @@ prompt_optimizer = PromptOptimizer()
 def get_optimizer() -> PromptOptimizer:
     """Get the global prompt optimizer instance."""
     return prompt_optimizer
+
+
+# ── v16 Phase 7: Prompt Compression ──────────────────────────────────────────
+
+# Stop words for lightweight compression (LLMLingua-2 spirit, Pan et al. 2024 ACL)
+# Only removes filler / redundancy — NEVER modifies the test question stem.
+_COMPRESS_STOP_WORDS = frozenset({
+    "please", "kindly", "note", "that", "the", "a", "an", "is", "are", "was",
+    "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "will", "would", "shall", "should", "may", "might", "must", "can", "could",
+    "of", "in", "on", "at", "to", "for", "with", "by", "from", "as", "into",
+    "about", "also", "very", "really", "just", "quite", "rather", "always",
+    "sometimes", "often", "perhaps", "maybe", "basically", "essentially",
+    "simply", "merely", "actually", "literally", "definitely", "certainly",
+    "probably", "likely", "apparently", "seemingly", "hence", "thus",
+    "therefore", "accordingly", "consequently", "furthermore", "moreover",
+    "nevertheless", "nonetheless", "notwithstanding", "otherwise", "regardless",
+    # Chinese filler
+    "请", "注意", "也就是说", "另外", "当然", "实际上", "基本上",
+})
+
+# Synonym merge map: long form → short form
+_SYNONYM_MERGE = {
+    "in order to": "to",
+    "due to the fact that": "because",
+    "at this point in time": "now",
+    "for the purpose of": "for",
+    "in the event that": "if",
+    "it is important to note that": "",
+    "it should be noted that": "",
+    "as a matter of fact": "",
+    "in other words": "",
+    "that is to say": "",
+    "to put it simply": "",
+}
+
+
+def compress(
+    prompt: str,
+    target_tokens: int | None = None,
+    protect_stem: bool = True,
+) -> str:
+    """
+    v16 Phase 7: Lightweight prompt compression.
+
+    Based on LLMLingua-2 (Pan et al. 2024) principles but uses only
+    stop-word removal + synonym merging — no external model calls.
+
+    **Never compresses the test question stem** (last sentence or after
+    the last newline when protect_stem=True).
+
+    Args:
+        prompt: Input prompt text.
+        target_tokens: Approximate target token count (1 token ≈ 4 chars).
+                       None = no target, just compress.
+        protect_stem: If True, preserve the last sentence/question intact.
+
+    Returns:
+        Compressed prompt string.
+    """
+    if not prompt or len(prompt) < 50:
+        return prompt
+
+    # Split into prefix (compressible) and stem (protected)
+    prefix = prompt
+    stem = ""
+    if protect_stem:
+        # Last sentence after final period/question mark/newline
+        for sep in ["\n", "? ", ". "]:
+            idx = prefix.rfind(sep)
+            if idx > len(prefix) * 0.5:  # Stem should be < 50% of prompt
+                stem = prefix[idx:].strip()
+                prefix = prefix[:idx + len(sep)].strip()
+                break
+
+    # Step 1: Synonym merging (long → short)
+    for long_form, short_form in _SYNONYM_MERGE.items():
+        prefix = prefix.replace(long_form, short_form)
+
+    # Step 2: Remove stop words (only standalone, not inside other words)
+    words = prefix.split()
+    compressed_words = []
+    for w in words:
+        w_lower = w.lower().strip(".,;:!?")
+        if w_lower not in _COMPRESS_STOP_WORDS:
+            compressed_words.append(w)
+
+    result = " ".join(compressed_words)
+
+    # Step 3: Collapse multiple spaces
+    import re
+    result = re.sub(r"\s{2,}", " ", result).strip()
+
+    # Re-attach stem
+    if stem:
+        result = result + " " + stem
+
+    # Step 4: If target_tokens specified, truncate prefix (not stem)
+    if target_tokens and len(result) > target_tokens * 4:
+        if stem:
+            max_prefix_len = target_tokens * 4 - len(stem) - 1
+            result = result[:max_prefix_len] + " " + stem
+        else:
+            result = result[:target_tokens * 4]
+
+    return result

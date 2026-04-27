@@ -218,10 +218,37 @@ class RunLifecycleManager:
         except Exception as e:
             logger.warning("Pre-detection failed, falling back", error=str(e))
             circuit_breaker.record_failure(self.base_url, str(e))
-            return PreDetectionResult(
+            # v16 fix: Still try official endpoint check (pure HTTP/TLS, no LLM needed)
+            # and save result to DB so VerdictEngine can use it
+            routing_info: dict = {}
+            try:
+                if settings.OFFICIAL_ENDPOINT_ENABLED:
+                    from app.authenticity.official_endpoint import check_official_endpoint
+                    official_result = check_official_endpoint(
+                        base_url=self.base_url,
+                        api_key=getattr(self.adapter, "_api_key", ""),
+                        model_name=self.run_metadata["model_name"],
+                    )
+                    routing_info["official_endpoint"] = official_result.to_dict()
+                    if official_result.verified:
+                        logger.info(
+                            "OfficialEndpoint verified (post-predetect-failure fallback)",
+                            provider=official_result.provider,
+                            confidence=official_result.confidence,
+                        )
+            except Exception as oe_err:
+                logger.warning("Official endpoint check also failed", error=str(oe_err))
+
+            fallback_result = PreDetectionResult(
                 success=False, identified_as=None, confidence=0.0,
                 layer_stopped=None, should_proceed_to_testing=True,
+                routing_info=routing_info,
             )
+            try:
+                repo.save_predetect_result(self.run_id, fallback_result.to_dict())
+            except Exception:
+                pass
+            return fallback_result
 
     def _step_connectivity(self) -> bool:
         """Checks API connectivity."""

@@ -131,6 +131,59 @@ class PreDetectionPipeline:
                     tokens_used=tokens_used,
                 )
 
+        # ── v16 Phase 1: Hard preflight before any LLM calls ──
+        from app.preflight.connection_check import run_preflight
+        from app.core.config import settings as _settings
+        pf = run_preflight(
+            base_url=getattr(adapter, "base_url", ""),
+            api_key=getattr(adapter, "_api_key", ""),
+            model_name=model_name,
+            timeout=_settings.PREFLIGHT_TIMEOUT_S,
+            verify_ssl=_settings.PREFLIGHT_VERIFY_SSL,
+        )
+        # Write preflight trace
+        if run_id:
+            try:
+                import json as _json
+                _trace_dir = pathlib.Path(_settings.DATA_DIR) / "traces" / run_id
+                _trace_dir.mkdir(parents=True, exist_ok=True)
+                with open(_trace_dir / "preflight.jsonl", "a", encoding="utf-8") as _fh:
+                    for _step in pf.steps:
+                        _fh.write(_json.dumps(_step.to_dict(), ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        if not pf.passed:
+            logger.warning(
+                "Preflight check failed, aborting PreDetect",
+                first_error=pf.first_error.to_dict() if pf.first_error else None,
+            )
+            return PreDetectionResult(
+                success=False,
+                identified_as=None,
+                confidence=0.0,
+                layer_stopped="preflight",
+                layer_results=layer_results,
+                total_tokens_used=0,
+                should_proceed_to_testing=False,
+                routing_info={"preflight_report": pf.to_dict()},
+            )
+
+        # ── v16 Phase 1.5: Official Endpoint Fast-Path ──
+        official_result = None
+        if _settings.OFFICIAL_ENDPOINT_ENABLED:
+            from app.authenticity.official_endpoint import check_official_endpoint
+            official_result = check_official_endpoint(
+                base_url=getattr(adapter, "base_url", ""),
+                api_key=getattr(adapter, "_api_key", ""),
+                model_name=model_name,
+            )
+            if official_result.verified:
+                logger.info(
+                    "OfficialEndpoint verified, adding to routing_info",
+                    provider=official_result.provider,
+                    confidence=official_result.confidence,
+                )
+
         # Layer 0 — HTTP
         _report_progress("Layer0/HTTP")
         logger.info("PreDetect Layer0: HTTP fingerprint", model=model_name)
@@ -171,6 +224,9 @@ class PreDetectionPipeline:
 
         # Extract routing info from quick probe for detailed reporting
         routing_info: dict = {}
+        # v16 Phase 1.5: Include official endpoint verification result
+        if official_result is not None:
+            routing_info["official_endpoint"] = official_result.to_dict()
         if probe.ok and probe.raw_json:
             returned_model = probe.raw_json.get("model", "")
             if returned_model:

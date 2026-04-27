@@ -171,6 +171,12 @@ def judge(method: str, response_text: str | None, params: dict) -> tuple[bool | 
     elif method == "semantic_entailment":
         # v14 Phase 4: NLI-based semantic entailment (Reimers & Gurevych 2019)
         passed, detail = semantic_entailment_judge(text, params)
+    elif method == "semantic":
+        # v16 alias: GPQA/TruthfulQA use "semantic" → map to semantic_entailment
+        passed, detail = semantic_entailment_judge(text, params)
+    elif method == "semantic_match":
+        # v16 alias: reasoning cases use "semantic_match" → map to semantic_judge
+        passed, detail = _semantic_judge(text, params)
     else:
         passed, detail = None, {"error": f"unknown judge method: {method}"}
 
@@ -810,8 +816,25 @@ def _identity_consistency(text: str, params: dict) -> tuple[bool | None, dict]:
         clean = text.strip().strip('"').strip("'").strip('.')
         # v6 fix: Use word boundary matching to avoid substring false positives
         # e.g., "claude" should not match "I'm not claude, I'm GPT-4"
-        pattern = r'\\b' + re.escape(expected.lower()) + r'\\b'
+        # v16 fix: r'\\b' was double-escaped (literal \\b), must be r'\b'
+        pattern = r'\b' + re.escape(expected.lower()) + r'\b'
         match = bool(re.search(pattern, clean.lower()))
+        # v16 fix: Negation detection — if the identity appears in a negated
+        # context (e.g. "I'm not Claude", "I am not GPT-4"), it should NOT pass.
+        if match:
+            negation_patterns = [
+                r"i'm\s+not\s+\w*\s*" + re.escape(expected.lower()),
+                r"i\s+am\s+not\s+\w*\s*" + re.escape(expected.lower()),
+                r"not\s+(?:a\s+|an\s+)?" + re.escape(expected.lower()),
+                r"don't\s+(?:claim|identify|call)\s+.*" + re.escape(expected.lower()),
+                r"我不是" + re.escape(expected.lower()),
+                r"并非" + re.escape(expected.lower()),
+            ]
+            for neg_pat in negation_patterns:
+                if re.search(neg_pat, clean.lower()):
+                    match = False
+                    detail["negation_detected"] = True
+                    break
         detail["expected"] = expected
         detail["got"] = clean[:100]
         detail["match"] = match

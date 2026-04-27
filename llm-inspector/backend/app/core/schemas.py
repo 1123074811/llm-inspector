@@ -70,6 +70,9 @@ class LLMResponse:
     error_type: str | None = None
     error_message: str | None = None
     logprobs: list | None = None  # token-level logprobs from API (list of {token, logprob, top_logprobs})
+    # v16 Phase 1: Upstream error transparency
+    error_payload: dict | None = None      # Upstream raw error object (preserved for retry logic)
+    http_status: int | None = None         # HTTP status code (separate from status_code for compatibility)
 
     @property
     def ok(self) -> bool:
@@ -91,6 +94,8 @@ class LLMResponse:
             "error_type": self.error_type,
             "error_message": self.error_message,
             "logprobs": self.logprobs,
+            "error_payload": self.error_payload,
+            "http_status": self.http_status,
         }
 
 
@@ -212,6 +217,9 @@ class SampleResult:
     response: LLMResponse
     judge_passed: bool | None = None
     judge_detail: dict = field(default_factory=dict)
+    # v16 Phase 2: Retry and scoring exclusion metadata
+    excluded_from_scoring: bool = False   # True = this sample doesn't count toward pass_rate
+    retry_type: str | None = None         # "5xx" / "truncation" / "decode" / None
 
 
 @dataclass
@@ -220,10 +228,13 @@ class CaseResult:
     samples: list[SampleResult] = field(default_factory=list)
     # v15 Phase 2: failure layer for error categorization
     failure_layer: str | None = None  # None / preflight / network / upstream_http / parse / judge / analysis
+    # v16 Phase 2: Rescue round tracking
+    rescued: bool = False              # True = at least one sample was recovered via rescue retry
 
     @property
     def pass_rate(self) -> float:
-        judged = [s for s in self.samples if s.judge_passed is not None]
+        # v16 Phase 2: Exclude samples marked excluded_from_scoring
+        judged = [s for s in self.samples if s.judge_passed is not None and not s.excluded_from_scoring]
         if not judged:
             return 0.0
         return sum(1 for s in judged if s.judge_passed) / len(judged)
@@ -374,6 +385,11 @@ class ScoreCard:
     measurement_completeness: dict | None = None  # {measured_dims, total_dims, ratio}
     judge_agreement: dict | None = None    # {fleiss_kappa: float, pairwise_kappas: list}
     calibration_quality: dict | None = None  # {brier: float, ece: float}
+    # v16 Phase 3: Score refinement metadata
+    coverage: float | None = None              # Fraction of cases with usable (non-excluded) samples
+    weight_provenance_trace: dict | None = None  # {dimension: {source: str, version: str, method: str}}
+    weighted_ece: float | None = None          # Weighted ECE from calibration_metrics
+    excluded_case_count: int | None = None     # Number of cases with all samples excluded_from_scoring
 
     def to_dict(self) -> dict:
         # v15 Phase 3: helper — return None for unmeasured, integer percentage for measured
@@ -433,6 +449,11 @@ class ScoreCard:
             "measurement_completeness": self.measurement_completeness,
             "judge_agreement": self.judge_agreement,
             "calibration_quality": self.calibration_quality,
+            # v16 Phase 3: Score refinement
+            "coverage": round(self.coverage, 3) if self.coverage is not None else None,
+            "weight_provenance_trace": self.weight_provenance_trace,
+            "weighted_ece": round(self.weighted_ece, 4) if self.weighted_ece is not None else None,
+            "excluded_case_count": self.excluded_case_count,
         }
 
 
@@ -626,4 +647,54 @@ class PreflightReportSchema:
     first_error: dict | None = None
     total_duration_ms: float = 0.0
     capabilities: dict = field(default_factory=dict)
-    checked_at: str = ""
+
+
+# ── v16 Phase 4: Real Model Card ──────────────────────────────────────────────
+
+@dataclass
+class Evidence:
+    """Single piece of evidence for model identity analysis."""
+    source_layer: str          # e.g. "model_discovery", "identity_exposure", "system_prompt_harvester"
+    snippet: str               # Short excerpt
+    confidence: float = 0.0
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "source_layer": self.source_layer,
+            "snippet": self.snippet[:200],
+            "confidence": round(self.confidence, 3),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class RealModelCard:
+    """v16 Phase 4: Structured model identity analysis card."""
+    claimed_model: str
+    suspected_family: str | None = None       # e.g. "qwen2", "zhipu"
+    posterior: float = 0.0                    # Bayesian posterior [0,1]
+    evidence: list[Evidence] = field(default_factory=list)
+    model_list_report: dict | None = None     # ModelListReport.to_dict()
+    leaked_system_prompt: str | None = None   # Already sanitized
+    leaked_system_prompt_confidence: float = 0.0
+    diff_with_claimed: list[str] = field(default_factory=list)
+    # Phase 1.5: Official endpoint integration
+    is_official: bool = False
+    official_vendor: str | None = None
+    official_source_url: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "claimed_model": self.claimed_model,
+            "suspected_family": self.suspected_family,
+            "posterior": round(self.posterior, 4),
+            "evidence": [e.to_dict() for e in self.evidence],
+            "model_list_report": self.model_list_report,
+            "leaked_system_prompt": self.leaked_system_prompt,
+            "leaked_system_prompt_confidence": round(self.leaked_system_prompt_confidence, 3),
+            "diff_with_claimed": self.diff_with_claimed,
+            "is_official": self.is_official,
+            "official_vendor": self.official_vendor,
+            "official_source_url": self.official_source_url,
+        }

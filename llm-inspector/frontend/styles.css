@@ -366,3 +366,53 @@ body>*{position:relative;z-index:1}
 /* v14 Completeness progress bar */
 .v14-progress-bar { background:#e5e7eb; border-radius:4px; height:8px; overflow:hidden; }
 .v14-progress-bar > div { background:#2563eb; height:100%; transition:width .3s; }
+
+/* ── v16 Phase 9: Real Model Card ──────────────────────────────────────── */
+.rmc-row { display:flex; justify-content:space-between; padding:0.4rem 0; border-bottom:1px solid var(--rule); }
+.rmc-row:last-child { border-bottom:none; }
+.risk-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:600; }
+.risk-badge.trusted   { background:var(--green-bg); color:var(--green); }
+.risk-badge.suspicious { background:var(--amber-bg); color:var(--amber); }
+.risk-badge.high_risk  { background:var(--red-bg); color:var(--red); }
+.risk-badge.fake       { background:#dc2626; color:#fff; }
+#real-model-card pre { background:var(--bg2); padding:0.75rem; border-radius:6px; font-size:0.85em; overflow-x:auto; max-height:300px; overflow-y:auto; }
+#real-model-card details { margin:0.5rem 0; }
+#real-model-card details summary { cursor:pointer; color:var(--blue); font-weight:500; }
+
+/* v16 Phase 9: Toast improvements */
+#toast-container { position:fixed; top:20px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+.toast { padding:12px 20px; border-radius:8px; color:#fff; font-size:0.9em; animation:fadeInUp 0.3s ease; max-width:400px; box-shadow:0 4px 12px rgba(0,0,0,0.15); }
+.toast-info    { background:#2563eb; }
+.toast-success { background:#16a34a; }
+.toast-warn    { background:#d97706; }
+.toast-error   { background:#dc2626; }
+.toast-fatal   { background:#7f1d1d; }
+.toast .toast-hint { font-size:0.8em; opacity:0.85; margin-top:4px; }
+.toast .toast-actions { margin-top:6px; display:flex; gap:8px; }
+.toast .toast-actions button { background:rgba(255,255,255,0.2); border:none; color:#fff; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:0.85em; }
+.toast .toast-actions button:hover { background:rgba(255,255,255,0.35); }
+
+/* v16 Phase 9: Mobile breakpoint */
+@media (max-width: 768px) {
+  .report-grid { grid-template-columns: 1fr !important; }
+  .rmc-row { flex-direction:column; gap:2px; }
+  #toast-container { right:10px; left:10px; max-width:none; }
+  .toast { max-width:none; }
+}
+
+/* ── v16 Phase 11: Verdict Explainer ──────────────────────────────────── */
+.ve-row { display:flex; justify-content:space-between; padding:0.4rem 0; border-bottom:1px solid var(--rule); }
+.ve-row:last-child { border-bottom:none; }
+.ve-warn { background:var(--amber-bg); color:var(--amber); padding:0.5rem 0.75rem; border-radius:6px; margin:0.5rem 0; font-size:0.9em; }
+.ve-warn.hidden { display:none; }
+#verdict-explainer ul { list-style:none; padding-left:0; }
+#verdict-explainer li { padding:0.3rem 0; border-bottom:1px dotted var(--rule); font-size:0.9em; }
+#verdict-explainer li:last-child { border-bottom:none; }
+.ve-tier-probs { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:0.5rem; }
+.ve-tier-probs .ve-prob { text-align:center; padding:8px; border-radius:6px; }
+.ve-prob.trusted { background:var(--green-bg); color:var(--green); }
+.ve-prob.suspicious { background:var(--amber-bg); color:var(--amber); }
+.ve-prob.high_risk { background:var(--red-bg); color:var(--red); }
+.ve-prob.fake { background:#dc2626; color:#fff; }
+.ve-prob .ve-prob-val { font-size:1.2em; font-weight:700; }
+.ve-prob .ve-prob-label { font-size:0.8em; }

@@ -1,8 +1,9 @@
 """
-scripts/fit_weights.py — Capability Weight Fitting (v13 Phase 2)
+scripts/fit_weights.py — Capability Weight Fitting (v13 Phase 2 + v16 Phase 3)
 
-Fits capability dimension weights via Non-Negative Least Squares (NNLS)
-against a reference dataset of known model scores.
+Fits capability dimension weights via:
+  - Non-Negative Least Squares (NNLS) against reference scores (v13)
+  - Bradley-Terry model from pairwise AB comparisons (v16 Phase 3)
 
 Data Sources (per SOURCES.yaml):
   Primary:   LMSYS Chatbot Arena Leaderboard (lmarena.ai)
@@ -15,12 +16,18 @@ Usage:
     # Use the built-in HELM/LMSYS mini snapshot (no network required):
     python scripts/fit_weights.py --from-helm
 
+    # v16 Phase 3: Bradley-Terry from pairwise AB results:
+    python scripts/fit_weights.py --from-bradley-terry --input data/ab_results.jsonl
+
 Output:
     backend/app/_data/weights/capability_weights.yaml
     backend/app/_data/weights/fitting_report.md
 
 References:
     - Lawson & Hanson (1974) Solving Least Squares Problems, SIAM
+    - Bradley & Terry (1952) "Rank Analysis of Incomplete Block Designs"
+      DOI: 10.1093/biomet/39.3-4.324
+    - Hunter (2004) MM algorithm for Bradley-Terry
     - scipy.optimize.nnls
       https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.nnls.html
     - HELM: https://crfm.stanford.edu/helm/v1.10/
@@ -54,6 +61,12 @@ try:
 except Exception:  # pragma: no cover
     print("ERROR: scipy is required (scipy.optimize.nnls)", file=sys.stderr)
     raise
+
+import json
+from collections import defaultdict
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Target dimensions, in fixed order — aligned with capability.weight.*.default
@@ -181,7 +194,9 @@ def write_yaml_fragment(
     source_label: str,
     n_rows: int,
     out_dir: pathlib.Path,
+    dims: list[str] | None = None,
 ) -> tuple[pathlib.Path, pathlib.Path]:
+    _dims = dims or DIMS
     out_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = out_dir / "capability_weights.yaml"
     report_path = out_dir / "fitting_report.md"
@@ -192,7 +207,7 @@ def write_yaml_fragment(
         f"# source: {source_label}  rows={n_rows}  R^2={r2:.4f}",
         "",
     ]
-    for dim, w in zip(DIMS, weights):
+    for dim, w in zip(_dims, weights):
         lines.append(f"- id: capability.weight.{dim}.default")
         lines.append(f"  value: {float(w):.4f}")
         lines.append("  unit: weight_fraction")
@@ -220,7 +235,7 @@ def write_yaml_fragment(
         "| Dimension | Weight |",
         "| --- | ---: |",
     ]
-    for dim, w in zip(DIMS, weights):
+    for dim, w in zip(_dims, weights):
         report.append(f"| {dim} | {float(w):.4f} |")
     report.append("")
     report.append("## Method")
@@ -230,6 +245,103 @@ def write_yaml_fragment(
     report_path.write_text("\n".join(report), encoding="utf-8")
 
     return yaml_path, report_path
+
+
+# ---------------------------------------------------------------------------
+# v16 Phase 3: Bradley-Terry model
+# ---------------------------------------------------------------------------
+
+def _load_ab_results(path: str) -> list[dict]:
+    """Load pairwise AB comparison results from JSONL."""
+    results = []
+    p = pathlib.Path(path)
+    if not p.exists():
+        logger.warning("AB results file not found", path=path)
+        return results
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return results
+
+
+def fit_bradley_terry(
+    dimensions: list[str],
+    pairwise_data: list[dict],
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> tuple[np.ndarray, float]:
+    """
+    v16 Phase 3: Fit Bradley-Terry model to pairwise comparison data.
+
+    Uses the MM algorithm (Hunter 2004) for maximum likelihood estimation.
+
+    Args:
+        dimensions: List of dimension names.
+        pairwise_data: List of {dim_a, dim_b, wins_a, wins_b} dicts.
+        max_iter: Maximum iterations.
+        tol: Convergence tolerance.
+
+    Returns:
+        (weights_array, convergence_delta) — weights normalized to sum=1.
+    """
+    n = len(dimensions)
+    if n == 0 or not pairwise_data:
+        return np.array([], dtype=float), 0.0
+    dim_idx = {d: i for i, d in enumerate(dimensions)}
+
+    # Initialize abilities uniformly
+    gamma = np.ones(n, dtype=float)
+
+    # Aggregate pairwise data: wins[i][j] = times i beat j
+    wins = np.zeros((n, n), dtype=float)
+
+    for item in pairwise_data:
+        a = item.get("dim_a", "")
+        b = item.get("dim_b", "")
+        if a in dim_idx and b in dim_idx:
+            wins[dim_idx[a]][dim_idx[b]] += item.get("wins_a", 0)
+            wins[dim_idx[b]][dim_idx[a]] += item.get("wins_b", 0)
+
+    # MM algorithm (Hunter 2004)
+    for iteration in range(max_iter):
+        old_gamma = gamma.copy()
+        for d in range(n):
+            numerator = 0.0
+            denominator = 0.0
+            for opp in range(n):
+                if opp == d:
+                    continue
+                total = wins[d][opp] + wins[opp][d]
+                if total == 0:
+                    continue
+                numerator += wins[d][opp]
+                denominator += total / (gamma[d] + gamma[opp])
+            if denominator > 0:
+                gamma[d] = numerator / denominator
+
+        # Normalize to prevent overflow
+        max_g = gamma.max()
+        if max_g > 0:
+            gamma /= max_g
+
+        # Check convergence
+        delta = float(np.sum(np.abs(gamma - old_gamma)))
+        if delta < tol:
+            logger.info("Bradley-Terry converged", iteration=iteration, delta=delta)
+            break
+
+    # Normalize to sum to 1.0
+    total = gamma.sum()
+    if total > 0:
+        gamma /= total
+
+    return gamma, delta
 
 
 # ---------------------------------------------------------------------------
@@ -243,13 +355,41 @@ def main(argv: Iterable[str] | None = None) -> int:
                      help="Fit from local golden_baselines (SQLite).")
     src.add_argument("--from-helm", action="store_true",
                      help="Fit from built-in HELM/LMSYS snapshot.")
+    src.add_argument("--from-bradley-terry", action="store_true",
+                     help="v16 Phase 3: Fit from pairwise AB results (Bradley-Terry).")
+    parser.add_argument("--input", default="data/ab_results.jsonl",
+                        help="Path to pairwise AB results JSONL (for --from-bradley-terry)")
     parser.add_argument(
         "--out-dir", type=pathlib.Path,
         default=pathlib.Path(__file__).resolve().parents[1] / "app" / "_data" / "weights",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    if args.from_local:
+    # Active dimension list for this run (may differ from module-level DIMS)
+    active_dims = DIMS
+
+    if args.from_bradley_terry:
+        # v16 Phase 3: Bradley-Terry from pairwise data
+        pairwise = _load_ab_results(args.input)
+        if not pairwise:
+            print("[fit_weights] ERROR: No pairwise data found. "
+                  f"Create {args.input} with dim_a/dim_b/wins_a/wins_b entries.",
+                  file=sys.stderr)
+            return 1
+        dims_set = set()
+        for item in pairwise:
+            dims_set.add(item.get("dim_a", ""))
+            dims_set.add(item.get("dim_b", ""))
+        dims_set.discard("")
+        active_dims = [d for d in DIMS if d in dims_set] or list(dims_set)
+        weights_arr, delta = fit_bradley_terry(active_dims, pairwise)
+        r2 = 1.0 - delta  # Approximate: lower delta = better fit
+        label = f"bradley_terry:{args.input}"
+        names = active_dims
+        # Build X/y dummy for write_yaml_fragment compatibility
+        X = np.eye(len(active_dims))
+        y = weights_arr
+    elif args.from_local:
         X, y, names = load_local_baselines()
         label = "local:golden_baselines"
     else:
@@ -258,13 +398,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         label = "snapshot:HELM-v1.10+LMSYS"
 
     print(f"[fit_weights] source={label} rows={len(y)} models={names}")
-    weights, r2 = run_nnls(X, y)
-    print(f"[fit_weights] R^2={r2:.4f}")
-    for dim, w in zip(DIMS, weights):
+    if args.from_bradley_terry:
+        # Already have weights from Bradley-Terry fit
+        weights = weights_arr
+        print(f"[fit_weights] Bradley-Terry delta={delta:.6f}")
+    else:
+        weights, r2 = run_nnls(X, y)
+        print(f"[fit_weights] R^2={r2:.4f}")
+    for dim, w in zip(active_dims, weights):
         print(f"  {dim:<14s} {w:.4f}")
 
     yaml_path, report_path = write_yaml_fragment(
-        weights, r2, label, n_rows=len(y), out_dir=args.out_dir,
+        weights, r2 if not args.from_bradley_terry else (1.0 - delta),
+        label, n_rows=len(y), out_dir=args.out_dir, dims=active_dims,
     )
     print(f"[fit_weights] wrote {yaml_path}")
     print(f"[fit_weights] wrote {report_path}")

@@ -250,6 +250,43 @@ class VerdictEngine:
         )
         confidence_real = round(min(100.0, max(0.0, confidence_real)), 1)
 
+        # ── v16 Phase 1.5: Official Endpoint Fast-Path ──
+        # If the API endpoint was verified as official via TLS triple-consistency,
+        # this is strong evidence that the model is genuine. Boost confidence and
+        # relax hard-rule caps accordingly.
+        official_endpoint_info = None
+        if predetect and hasattr(predetect, 'routing_info') and predetect.routing_info:
+            official_endpoint_info = predetect.routing_info.get("official_endpoint")
+
+        official_verified = False
+        official_provider = None
+        official_confidence = 0.0
+        if official_endpoint_info and isinstance(official_endpoint_info, dict):
+            official_verified = official_endpoint_info.get("verified", False)
+            official_provider = official_endpoint_info.get("provider")
+            official_confidence = official_endpoint_info.get("confidence", 0.0)
+
+        if official_verified:
+            # Official endpoint verified: boost confidence_real
+            boost = official_confidence * 15  # max 15 points boost at confidence=1.0
+            confidence_real = min(100.0, confidence_real + boost)
+            signal_details["official_endpoint"] = {
+                "verified": True,
+                "provider": official_provider,
+                "confidence": round(official_confidence, 3),
+                "boost": round(boost, 1),
+            }
+            reasons.append(
+                f"✅ 官方API端点验证通过（{official_provider}，置信度 {official_confidence:.0%}），"
+                f"置信度提升 {boost:.1f} 分"
+            )
+        else:
+            signal_details["official_endpoint"] = {
+                "verified": False,
+                "provider": official_provider,
+                "confidence": round(official_confidence, 3),
+            }
+
         # ── 信号矛盾调和：预检测 vs 行为相似度 ──
         predetect_name = ""
         if predetect and predetect.success and predetect.identified_as:
@@ -316,11 +353,17 @@ class VerdictEngine:
         # ── 硬规则：行为不变性检测 ──
         beh_inv = scorecard.behavioral_invariant_score
         if beh_inv is not None and beh_inv < float(self._rule("behavioral_invariant_min")):
-            confidence_real = min(confidence_real, float(self._rule("behavioral_invariant_cap")))
+            # v16: Relax cap when official endpoint is verified — low invariance
+            # on an official API is more likely ability deficit than spoofing
+            inv_cap = float(self._rule("behavioral_invariant_cap"))
+            if official_verified:
+                inv_cap = min(100.0, inv_cap + 15.0)  # 55 → 70
+            confidence_real = min(confidence_real, inv_cap)
             _hard_rule_fired = True
+            cap_note = "（官方API已验证，cap放宽）" if official_verified else ""
             reasons.append(
                 f"行为不变性分 {beh_inv:.1f}：同构题换皮后结果不一致，"
-                f"疑似模板匹配而非真实推理"
+                f"疑似模板匹配而非真实推理{cap_note}"
             )
 
         # ── 硬规则：编程能力与声称等级不符 ──
@@ -350,9 +393,14 @@ class VerdictEngine:
             reasons.append("提取攻击暴露了与声称不同的真实模型身份，置信度强制下调")
         elif extraction_resistance < float(self._rule("extraction_weak_threshold")):
             # Very weak resistance but no identity mismatch — suspicious but not definitive
-            confidence_real = min(confidence_real, float(self._rule("extraction_weak_cap")))
+            # v16: Relax cap when official endpoint is verified
+            ext_cap = float(self._rule("extraction_weak_cap"))
+            if official_verified:
+                ext_cap = min(100.0, ext_cap + 15.0)  # 65 → 80
+            confidence_real = min(confidence_real, ext_cap)
             _hard_rule_fired = True
-            reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取")
+            cap_note = "（官方API已验证，cap放宽）" if official_verified else ""
+            reasons.append(f"提取攻击抵抗度极低（{extraction_resistance:.0f}分），系统提示词容易被提取{cap_note}")
 
         # ── v3 硬规则：tokenizer 指纹不匹配 ──
         # v15 fix: only apply when claimed model is in TOP_MODELS; for library-unknown models
@@ -411,3 +459,272 @@ class VerdictEngine:
             confidence_real=confidence_real,
             signal_details=signal_details,
         )
+
+
+# ── v16 Phase 11: Bayesian Evidence-Weighted Verdict Engine ──────────────────
+
+import math
+from dataclasses import dataclass, field as dc_field
+
+
+@dataclass
+class EvidenceItem:
+    """A single piece of evidence in the Bayesian log-odds model."""
+    rule_id: str
+    direction: str                        # "up" (toward real) | "down" (toward fake)
+    log_odds_delta: float
+    sources: list[str] = dc_field(default_factory=list)
+    confidence: float = 1.0
+    source_url: str = ""
+    fired: bool = False
+    corroboration_count: int = 0
+    corroboration_min: int = 2
+
+    def effective_delta(self) -> float:
+        if not self.fired:
+            return 0.0
+        corrob_factor = min(1.0, self.corroboration_count / max(1, self.corroboration_min))
+        sign = -1.0 if self.direction == "up" else 1.0
+        return sign * self.log_odds_delta * self.confidence * corrob_factor
+
+    def to_dict(self) -> dict:
+        return {
+            "rule_id": self.rule_id,
+            "direction": self.direction,
+            "log_odds_delta": self.log_odds_delta,
+            "effective_delta": round(self.effective_delta(), 4),
+            "sources": self.sources,
+            "confidence": round(self.confidence, 3),
+            "fired": self.fired,
+            "corroboration_count": self.corroboration_count,
+            "corroboration_min": self.corroboration_min,
+        }
+
+
+@dataclass
+class VerdictReport:
+    """v16 Phase 11: Probabilistic verdict with CI and evidence chain."""
+    tier: str
+    tier_probabilities: dict[str, float] = dc_field(default_factory=dict)
+    log_odds_fake: float = 0.0
+    log_odds_ci95: tuple[float, float] = (0.0, 0.0)
+    is_borderline: bool = False
+    dominant_evidence: list[EvidenceItem] = dc_field(default_factory=list)
+    coverage: float = 1.0
+    p_fake: float = 0.5
+    sample_count: int = 0
+    test_mode: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "tier": self.tier,
+            "tier_probabilities": {k: round(v, 4) for k, v in self.tier_probabilities.items()},
+            "log_odds_fake": round(self.log_odds_fake, 4),
+            "log_odds_ci95": [round(self.log_odds_ci95[0], 4), round(self.log_odds_ci95[1], 4)],
+            "is_borderline": self.is_borderline,
+            "p_fake": round(self.p_fake, 4),
+            "coverage": round(self.coverage, 4),
+            "sample_count": self.sample_count,
+            "test_mode": self.test_mode,
+            "dominant_evidence": [e.to_dict() for e in self.dominant_evidence],
+        }
+
+
+def _sigmoid(x: float) -> float:
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    else:
+        ex = math.exp(x)
+        return ex / (1.0 + ex)
+
+
+# v16 Symmetric rule set (up and down rules balanced)
+_V16_RULES: list[dict] = [
+    # ── UP rules (evidence toward REAL) ──
+    {"rule_id": "official_endpoint_match", "direction": "up", "log_odds_delta": 2.0,
+     "sources": ["tls", "url", "/v1/models"], "corroboration_min": 3,
+     "source_url": "RFC8446/RFC6125"},
+    {"rule_id": "tokenizer_fingerprint_match", "direction": "up", "log_odds_delta": 0.8,
+     "sources": ["L5"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:verdict.tokenizer_fingerprint"},
+    {"rule_id": "knowledge_cutoff_match_claimed", "direction": "up", "log_odds_delta": 0.5,
+     "sources": ["L3", "self_report"], "corroboration_min": 2,
+     "source_url": "SOURCES.yaml:verdict.cutoff_match"},
+    {"rule_id": "behavioral_invariant_high", "direction": "up", "log_odds_delta": 0.6,
+     "sources": ["L7", "L8"], "corroboration_min": 2,
+     "source_url": "SOURCES.yaml:verdict.behavioral_invariant"},
+    {"rule_id": "extraction_resistance_high", "direction": "up", "log_odds_delta": 0.5,
+     "sources": ["L9", "L22"], "corroboration_min": 2,
+     "source_url": "SOURCES.yaml:verdict.extraction_resistance"},
+    # ── DOWN rules (evidence toward FAKE) ──
+    {"rule_id": "difficulty_ceiling_low", "direction": "down", "log_odds_delta": 0.7,
+     "sources": ["capability"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:verdict.difficulty_ceiling"},
+    {"rule_id": "coding_score_low", "direction": "down", "log_odds_delta": 0.6,
+     "sources": ["coding"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:verdict.coding_zero"},
+    {"rule_id": "adversarial_spoof_rate_high", "direction": "down", "log_odds_delta": 0.8,
+     "sources": ["L13", "L23"], "corroboration_min": 2,
+     "source_url": "SOURCES.yaml:verdict.adv_spoof"},
+    {"rule_id": "extraction_leaked_real_identity", "direction": "down", "log_odds_delta": 1.5,
+     "sources": ["L17", "L22"], "corroboration_min": 2,
+     "source_url": "SOURCES.yaml:verdict.identity_exposed"},
+    {"rule_id": "fingerprint_mismatch", "direction": "down", "log_odds_delta": 0.5,
+     "sources": ["L5"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:verdict.fingerprint_mismatch"},
+]
+
+# Tier thresholds on P(fake)
+_TIER_THRESHOLDS = {"trusted": 0.15, "suspicious": 0.40, "high_risk": 0.70}
+
+
+class BayesianEvidenceVerdictEngine:
+    """
+    v16 Phase 11: Bayesian evidence-weighted verdict.
+
+    log-odds(fake) = log(prior/(1-prior)) + Σ effective_delta_i
+    P(fake) = sigmoid(log-odds)
+
+    Rule fires only if corroboration >= corroboration_min.
+    Prevents single-point false positives (root cause of user complaints).
+    """
+
+    PRIOR_LOG_ODDS = 0.0  # log(0.5/0.5) = 0 → uniform prior
+
+    def __init__(self, prior_log_odds: float = 0.0):
+        self.prior_log_odds = prior_log_odds
+        self.rules = [
+            EvidenceItem(
+                rule_id=r["rule_id"], direction=r["direction"],
+                log_odds_delta=r["log_odds_delta"], sources=list(r["sources"]),
+                source_url=r.get("source_url", ""),
+                corroboration_min=r.get("corroboration_min", 2),
+            ) for r in _V16_RULES
+        ]
+
+    def assess_evidence(
+        self,
+        fired_rules: list[dict],
+        coverage: float = 1.0,
+        sample_count: int = 0,
+        test_mode: str = "",
+    ) -> VerdictReport:
+        """
+        Assess verdict from fired rules using Bayesian log-odds stacking.
+
+        Args:
+            fired_rules: List of dicts with keys: rule_id, corroboration_count, confidence (optional)
+            coverage: Effective sample ratio (0-1).
+            sample_count: Number of test cases executed.
+            test_mode: "quick" / "standard" / "deep"
+        """
+        fired_map: dict[str, dict] = {fr["rule_id"]: fr for fr in fired_rules}
+
+        # Apply fired state to rules
+        for rule in self.rules:
+            fr = fired_map.get(rule.rule_id)
+            if fr and fr.get("corroboration_count", 0) >= rule.corroboration_min:
+                rule.fired = True
+                rule.corroboration_count = fr.get("corroboration_count", 0)
+                rule.confidence = fr.get("confidence", rule.confidence)
+            else:
+                rule.fired = False
+
+        # Small-sample protection: difficulty_ceiling_low needs >= 12 samples
+        for rule in self.rules:
+            if rule.rule_id == "difficulty_ceiling_low" and sample_count < 12:
+                rule.fired = False
+            if rule.rule_id == "coding_score_low" and sample_count < 5:
+                rule.fired = False
+
+        # Compute log-odds
+        log_odds = self.prior_log_odds + sum(r.effective_delta() for r in self.rules)
+        p_fake = _sigmoid(log_odds)
+
+        # Bootstrap CI (simplified: ±1.96 * SE via delta method)
+        fired_count = sum(1 for r in self.rules if r.fired)
+        se = math.sqrt(max(0.01, sum(r.effective_delta() ** 2 for r in self.rules if r.fired)))
+        ci_lo = log_odds - 1.96 * se
+        ci_hi = log_odds + 1.96 * se
+        p_lo = _sigmoid(ci_lo)
+        p_hi = _sigmoid(ci_hi)
+
+        # Determine tier
+        tier = self._p_to_tier(p_fake, test_mode, sample_count)
+
+        # Coverage gate: insufficient samples → inconclusive
+        if coverage < 0.7:
+            tier = "inconclusive"
+
+        # Borderline check: CI crosses any threshold
+        is_borderline = self._is_borderline(p_lo, p_hi)
+
+        # Tier probabilities
+        tier_probs = self._compute_tier_probabilities(p_lo, p_hi)
+
+        # Dominant evidence (top 5 by |effective_delta|)
+        dominant = sorted(
+            [r for r in self.rules if r.fired],
+            key=lambda r: abs(r.effective_delta()),
+            reverse=True,
+        )[:5]
+
+        return VerdictReport(
+            tier=tier,
+            tier_probabilities=tier_probs,
+            log_odds_fake=log_odds,
+            log_odds_ci95=(ci_lo, ci_hi),
+            is_borderline=is_borderline,
+            dominant_evidence=dominant,
+            coverage=coverage,
+            p_fake=p_fake,
+            sample_count=sample_count,
+            test_mode=test_mode,
+        )
+
+    def _p_to_tier(self, p_fake: float, test_mode: str, sample_count: int) -> str:
+        """Map P(fake) to tier with small-sample protection."""
+        # Quick mode: cap at suspicious (no high_risk/fake)
+        if test_mode == "quick" and sample_count < 18:
+            if p_fake >= _TIER_THRESHOLDS["suspicious"]:
+                return "suspicious"
+        if p_fake < _TIER_THRESHOLDS["trusted"]:
+            return "trusted"
+        elif p_fake < _TIER_THRESHOLDS["suspicious"]:
+            return "suspicious"
+        elif p_fake < _TIER_THRESHOLDS["high_risk"]:
+            return "high_risk"
+        else:
+            return "fake"
+
+    def _is_borderline(self, p_lo: float, p_hi: float) -> bool:
+        """Check if CI crosses any tier threshold."""
+        for threshold in _TIER_THRESHOLDS.values():
+            if p_lo < threshold < p_hi:
+                return True
+        return False
+
+    def _compute_tier_probabilities(self, p_lo: float, p_hi: float) -> dict[str, float]:
+        """Approximate tier probabilities from CI."""
+        p_mid = (p_lo + p_hi) / 2
+        probs = {}
+        probs["trusted"] = max(0, _TIER_THRESHOLDS["trusted"] - p_lo) / max(0.01, p_hi - p_lo)
+        probs["suspicious"] = max(0, min(_TIER_THRESHOLDS["suspicious"], p_hi) - max(_TIER_THRESHOLDS["trusted"], p_lo)) / max(0.01, p_hi - p_lo)
+        probs["high_risk"] = max(0, min(_TIER_THRESHOLDS["high_risk"], p_hi) - max(_TIER_THRESHOLDS["suspicious"], p_lo)) / max(0.01, p_hi - p_lo)
+        probs["fake"] = max(0, p_hi - _TIER_THRESHOLDS["high_risk"]) / max(0.01, p_hi - p_lo)
+        # Normalize
+        total = sum(probs.values())
+        if total > 0:
+            probs = {k: v / total for k, v in probs.items()}
+        return probs
+
+    def check_symmetry(self) -> dict:
+        """Verify up/down rule balance (Phase 11 validation)."""
+        up_count = sum(1 for r in self.rules if r.direction == "up")
+        down_count = sum(1 for r in self.rules if r.direction == "down")
+        return {
+            "up_rules": up_count,
+            "down_rules": down_count,
+            "difference": abs(up_count - down_count),
+            "is_balanced": abs(up_count - down_count) <= 1,
+        }

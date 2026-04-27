@@ -1,12 +1,19 @@
 """Wikidata API client for fact verification.
 
+v16 Phase 6: Upgraded with dual-source KG support, v16 User-Agent,
+graceful offline degradation, and kg_conflict flag.
+
 Reference: https://www.wikidata.org/wiki/Wikidata:Data_access
 License: CC0 (Public Domain)
 Rate limit: 5 requests per second recommended
+User-Agent policy: https://meta.wikimedia.org/wiki/User-Agent_policy
 """
 
 import re
 import time
+import json
+import urllib.request
+import urllib.error
 import requests
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -45,6 +52,8 @@ class VerificationResult:
     entity: Optional[WikidataEntity] = None
     query_time_ms: int = 0
     verified_by_consensus: bool = False  # v13 Phase 5: set True when DBpedia+Wikidata agree
+    kg_conflict: bool = False  # v16 Phase 6: True when DBpedia and Wikidata disagree
+    degraded: bool = False     # v16 Phase 6: True when offline/timeout fallback used
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +64,8 @@ class VerificationResult:
             "entity": self.entity.to_dict() if self.entity else None,
             "query_time_ms": self.query_time_ms,
             "verified_by_consensus": self.verified_by_consensus,
+            "kg_conflict": self.kg_conflict,
+            "degraded": self.degraded,
         }
 
 
@@ -88,7 +99,8 @@ class WikidataClient:
         self._last_request_time = 0.0
         self._session = requests.Session()
         self._session.headers.update({
-            "User-Agent": "LLM-Inspector/8.0 (research@example.com)",
+            # v16 Phase 6: Updated UA per Wikimedia policy
+            "User-Agent": "LLM-Inspector/16.0 (https://github.com/llm-inspector; research@llm-inspector.dev)",
             "Accept": "application/json",
         })
         
@@ -464,7 +476,7 @@ class WikidataClient:
         return result
     
     def is_available(self) -> bool:
-        """Check if Wikidata service is available."""
+        """Check if Wikidata service is available (v16: 5s timeout with graceful degradation)."""
         try:
             # Quick test query
             params = {
@@ -480,5 +492,24 @@ class WikidataClient:
                 timeout=5
             )
             return response.status_code == 200
-        except:
+        except Exception:
+            logger.warning("Wikidata unavailable — operating in degraded mode")
             return False
+
+    def verify_with_degradation(self, entity_name: str) -> VerificationResult:
+        """
+        v16 Phase 6: Verify entity with graceful offline degradation.
+
+        If Wikidata is unavailable, returns a degraded result instead of raising.
+        """
+        try:
+            return self.verify_entity_exists(entity_name)
+        except Exception as e:
+            logger.warning("Wikidata verification degraded", error=str(e))
+            return VerificationResult(
+                is_verified=False,
+                confidence=0.0,
+                source="wikidata",
+                evidence=[f"Service unavailable: {str(e)[:100]}"],
+                degraded=True,
+            )

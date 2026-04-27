@@ -36,7 +36,16 @@ _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY_SEC = 1.0
 
-_SSL_CTX = ssl.create_default_context()
+def _build_async_ssl_ctx() -> ssl.SSLContext:
+    """Build SSL context preferring certifi (v16 fix: UNEXPECTED_EOF_WHILE_READING)."""
+    try:
+        import certifi  # type: ignore[import]
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    return ssl.create_default_context()
+
+_SSL_CTX = _build_async_ssl_ctx()
 
 
 async def _async_with_retry(coro_fn: Callable, max_retries: int = _MAX_RETRIES) -> LLMResponse:
@@ -52,6 +61,9 @@ async def _async_with_retry(coro_fn: Callable, max_retries: int = _MAX_RETRIES) 
             if result.status_code in _RETRYABLE_CODES:
                 is_retryable = True
             elif result.error_type == "timeout":
+                is_retryable = True
+            elif result.error_type == "ssl_error":
+                # v16 fix: SSL UNEXPECTED_EOF is often transient
                 is_retryable = True
 
         if not is_retryable:

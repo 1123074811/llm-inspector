@@ -395,10 +395,28 @@ def upsert_test_case(case: dict) -> None:
 def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[dict]:
     conn = get_conn()
 
-    rows = conn.execute(
-        "SELECT * FROM test_cases WHERE suite_version=? AND enabled=1",
-        (suite_version,),
-    ).fetchall()
+    # v16 is a composite suite. The two test fixtures suite_v16_test_{comm,nc}.json
+    # were authored as stubs (user_prompt='GPQA #1' / 'LCB #1' / 'MMLU #1' / 'TQ #1'
+    # i.e. ID placeholders, NOT the real GPQA Diamond / LiveCodeBench / MMLU-Pro /
+    # TruthfulQA questions) and never had real prompts populated by the v16 Phase 5
+    # importer. Loading them caused 0% pass on coding/safety/knowledge/reasoning
+    # because the model receives uninterpretable text. Until they are repopulated
+    # from the real datasets (with proper licensing), v16 falls back to v10+v13+v15
+    # which contain real, validated prompts.
+    # KNOWN ISSUE: tracking under v16 acceptance audit (2026-04-27).
+    _V16_COMPONENT_SUITES = ("v10", "v13", "v15")
+
+    if suite_version == "v16":
+        placeholders = ",".join("?" * len(_V16_COMPONENT_SUITES))
+        rows = conn.execute(
+            f"SELECT * FROM test_cases WHERE suite_version IN ({placeholders}) AND enabled=1",
+            _V16_COMPONENT_SUITES,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM test_cases WHERE suite_version=? AND enabled=1",
+            (suite_version,),
+        ).fetchall()
 
     if not rows and suite_version != "v2":
         rows = conn.execute(
@@ -414,14 +432,24 @@ def load_cases(suite_version: str = "v1", test_mode: str = "standard") -> list[d
     allowed_levels = mode_filter.get(test_mode, ["quick", "standard"])
 
     cases = []
+    seen_ids = set()
     for row in rows:
         c = dict(row)
+        # Deduplicate by case_id (composite suites may overlap)
+        cid = c.get("id", "")
+        if cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+
         c["params"] = from_json_col(c.get("params")) or {}
         if c.get("difficulty") is None:
             c["difficulty"] = (c["params"].get("_meta") or {}).get("difficulty")
         mode_level = (c["params"].get("_meta") or {}).get("mode_level", "standard")
         if mode_level not in allowed_levels:
             continue
+        # Mark suite_version for composite
+        if suite_version == "v16":
+            c["suite_version"] = "v16"
         cases.append(c)
     return cases
 
