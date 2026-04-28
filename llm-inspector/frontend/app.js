@@ -2705,8 +2705,6 @@ function setNavStatus(status) {
 
 // Init
 restoreForm();
-// Re-apply after browser autocomplete finishes (which can overwrite JS-set values)
-setTimeout(restoreForm, 300);
 
 // ── v16 Phase 9: Real Model Card Rendering ──────────────────────────────────
 
