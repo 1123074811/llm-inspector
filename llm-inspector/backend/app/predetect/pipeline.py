@@ -621,10 +621,35 @@ class PreDetectionPipeline:
         if not results:
             return 0.0
 
-        # Aggregate evidence by candidate model
+        # Aggregate evidence by candidate model.
+        # NOTE (v17): the http layer reports identified_as = "OpenAI / OpenAI-compatible"
+        # whenever the wire protocol resembles OpenAI's — which is true for *every*
+        # OpenAI-compatible vendor (DeepSeek, Qwen, Moonshot, Together, Fireworks…).
+        # Treating it as a competing vendor candidate against the real model name
+        # falsely inflates 2nd-place uncertainty and crashes the merged confidence
+        # (e.g. DeepSeek 0.92 → 0.62 because http(0.65) is mis-tallied as "OpenAI").
+        # Filter out protocol-only labels — they're a wire-format family, not a vendor.
+        _PROTOCOL_ONLY_LABELS = {
+            "OpenAI / OpenAI-compatible",
+            "Anthropic-compatible",
+            "OpenAI-compatible",
+            # Lowercase family hints emitted by field_evidence layer.
+            # field_evidence says identified_as="openai" when the claimed-OpenAI
+            # API carries valid OpenAI-style fields — that supports the *protocol*
+            # claim, not the *vendor*. A DeepSeek model returning a valid
+            # ``fp_…`` + ``reasoning_tokens`` gets a (correctly) high field_evidence
+            # confidence with identified_as="openai", which would then compete
+            # against the real "DeepSeek" candidate from self_report/identity
+            # and tank the merged score (0.92 → 0.59 in observed runs).
+            "openai",
+            "anthropic",
+            "google",
+        }
         candidate_evidence: dict[str, list[float]] = {}
         for r in results:
             if r.identified_as and r.confidence > 0:
+                if r.identified_as in _PROTOCOL_ONLY_LABELS:
+                    continue
                 candidate_evidence.setdefault(r.identified_as, []).append(r.confidence)
 
         if not candidate_evidence:

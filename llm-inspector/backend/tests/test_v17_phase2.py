@@ -43,7 +43,9 @@ def test_field_evidence_malformed_fingerprint():
         has_system_fingerprint=True,
         system_fingerprint_valid=False,
     )
-    assert ev.score_delta == pytest.approx(-0.40, abs=1e-6)
+    # v17.1 softened: relaxed regex now covers vendor-extended formats, so
+    # the residual penalty for genuinely malformed fields is -0.20, not -0.40.
+    assert ev.score_delta == pytest.approx(-0.20, abs=1e-6)
 
 
 def test_field_evidence_anthropic_full():

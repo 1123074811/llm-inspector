@@ -41,9 +41,20 @@ logger = get_logger(__name__)
 
 # ── Field detectors (per family) ────────────────────────────────────────────
 
-# OpenAI ``system_fingerprint`` shape: lower-case hex, length ≥ 10.
+# OpenAI ``system_fingerprint`` shape.
+#
+# Strict OpenAI form: lower-case hex, length ≥ 10 — ``^fp_[a-f0-9]{10,}$``
 # https://platform.openai.com/docs/api-reference/chat/object#chat/object-system_fingerprint
-_OPENAI_FP_RE = re.compile(r"^fp_[a-f0-9]{10,}$")
+#
+# v17 relaxation: many legitimate OpenAI-compatible vendors (DeepSeek, Together,
+# Fireworks, Qwen…) reuse the ``fp_…`` prefix with vendor-specific suffixes,
+# e.g. DeepSeek emits ``fp_058df29938_prod0820_fp8_kvcache_20260402``. Treating
+# these as "active fakery" (-0.40 score) was unfair — they're a real fingerprint
+# from a real vendor that happens to extend the format. We accept any
+# ``fp_<≥10 hex>`` *core*, optionally followed by underscore-delimited
+# alphanumeric suffixes. Cargo-cult wrappers that hand back ``fp_xxxxx`` without
+# the ≥10-hex core still fail the check.
+_OPENAI_FP_RE = re.compile(r"^fp_[a-f0-9]{10,}(?:_[A-Za-z0-9]+)*$")
 
 
 @dataclass
@@ -83,7 +94,10 @@ class FieldEvidence:
         if self.system_fingerprint_valid is True:
             s += 0.35
         elif self.has_system_fingerprint is True and self.system_fingerprint_valid is False:
-            s -= 0.40                                              # malformed = active fakery
+            # v17: softened from -0.40 to -0.20. The relaxed regex already covers
+            # vendor-extended formats; remaining failures (non-string, missing hex
+            # core) still indicate fakery but at a lower confidence.
+            s -= 0.20
         if self.reasoning_tokens_seen is True:
             s += 0.30
         if self.cache_read_seen is True:
@@ -267,8 +281,12 @@ class Layer0_6FieldEvidence:
             evidence.append("thinking.signature present (Anthropic Sonnet 4+/Opus 4+)")
 
         # Map score_delta to confidence:
+        # v17.1: lowered the malformed-fp trigger from -0.30 to -0.15 in
+        # tandem with the softened malformed penalty (-0.20). The relaxed
+        # regex now passes vendor-extended formats, so any remaining failure
+        # genuinely indicates a wrapper.
         delta = ev.score_delta
-        if delta <= -0.3:
+        if delta <= -0.15:
             confidence = min(0.9, 0.4 - delta)
             identified = "wrapper/proxy (malformed vendor fields)"
         elif delta >= 0.25:

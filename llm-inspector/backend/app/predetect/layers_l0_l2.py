@@ -236,13 +236,24 @@ class Layer2Identity:
                     f"All probes agree on '{identified}' (confidence boost from cross-validation)"
                 )
             elif union:
-                # No consensus — use the most commonly indicated platform
+                # No consensus — use the most commonly indicated platform.
+                # v17: scale confidence by majority share rather than hardcoded
+                # 0.60. Three probes with 2/3 agreement on DeepSeek is much
+                # stronger evidence than 1/3 agreement, and the old fixed 0.60
+                # under-counted strong-majority cases (causing genuine DeepSeek
+                # APIs to merge to 0.62 instead of 0.85+).
                 flat = [p for families in all_families for p in families]
                 if flat:
-                    top_family, _ = Counter(flat).most_common(1)[0]
+                    top_family, top_count = Counter(flat).most_common(1)[0]
+                    n_probes = max(len(probe_answers), 1)
+                    share = top_count / n_probes  # 1/3..1.0
+                    # share=1/3 → 0.45, share=2/3 → 0.70, share=1.0 → 0.85
+                    confidence = round(0.30 + 0.55 * share, 3)
                     identified = top_family
-                    confidence = 0.60
-                    evidence.append(f"Probes disagree; most common answer: '{top_family}'")
+                    evidence.append(
+                        f"Probes disagree; most common answer: '{top_family}' "
+                        f"({top_count}/{n_probes} probes)"
+                    )
 
             if conflict:
                 extra["identity_conflict"] = True
