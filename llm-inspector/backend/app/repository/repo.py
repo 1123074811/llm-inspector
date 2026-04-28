@@ -715,6 +715,90 @@ def save_similarities(run_id: str, results: list[dict]) -> None:
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 def save_report(run_id: str, report: dict) -> None:
+    """Persist the full report dict (`details`) plus a flat key-value
+    `summary` JSON for quick listing / preview without needing to parse
+    the multi-MB details blob.
+
+    The summary contains three groups of fields:
+
+    1. Identity / authenticity verdict (the most important conclusion):
+       ``verdict_level`` / ``verdict_label`` / ``confidence_real`` /
+       ``identified_as`` / ``identification_strength``.
+       NB: ``risk_level`` is kept for backwards compatibility but is also
+       mirrored as ``identification_strength`` because "risk" was being
+       misread as "the model is risky" — its actual semantic is "how
+       strong is the signal that this server is the claimed model".
+    2. Top-line scores: ``total_score`` / ``capability_score`` /
+       ``authenticity_score`` / ``performance_score`` plus the most
+       commonly previewed sub-dimensions (reasoning / instruction /
+       coding / safety / protocol).
+    3. Theta global score + percentile (cross-model comparable scale).
+    """
+    risk = report.get("risk") or {}
+    pre = report.get("predetection") or {}
+    scores = report.get("scores") or {}
+    scorecard = report.get("scorecard") or {}
+    verdict = report.get("verdict") or {}
+    theta = report.get("theta") or {}
+
+    # Theta percentile lives on the global theta entry of the dimensions list
+    theta_pct = None
+    for d in (theta.get("dimensions") or []):
+        if d.get("dimension") in ("global", "overall"):
+            theta_pct = d.get("percentile")
+            break
+    if theta_pct is None:
+        theta_pct = theta.get("global_percentile")
+
+    summary = {
+        # ── Identity / verdict (primary conclusion) ──
+        "verdict_level": verdict.get("level"),
+        "verdict_label": verdict.get("label"),
+        "confidence_real": verdict.get("confidence_real"),
+        "identified_as": pre.get("identified_as"),
+        "predetect_confidence": pre.get("confidence"),
+        # risk_level kept for back-compat; identification_strength is the
+        # less-misleading alias because the value semantically means
+        # "strength of the signal that the server matches the claimed
+        # model", not "the model is risky".
+        "risk_level": risk.get("level"),
+        "identification_strength": risk.get("level"),
+
+        # ── Top-line scores ──
+        "total_score": scorecard.get("total_score"),
+        "capability_score": scorecard.get("capability_score"),
+        "authenticity_score": scorecard.get("authenticity_score"),
+        "performance_score": scorecard.get("performance_score"),
+
+        # ── Capability sub-dimensions ──
+        "reasoning_score": scorecard.get("reasoning_score"),
+        "instruction_score": (
+            scorecard.get("instruction_score")
+            or scores.get("instruction_score")
+        ),
+        "coding_score": scorecard.get("coding_score"),
+        "safety_score": scorecard.get("safety_score"),
+        "protocol_score": (
+            scorecard.get("protocol_score")
+            or scores.get("protocol_score")
+        ),
+
+        # ── Theta (cross-model scale) ──
+        "theta_global": theta.get("global_theta"),
+        "theta_percentile": theta_pct,
+        "calibration_version": (
+            theta.get("calibration_version")
+            or report.get("scoring_profile_version")
+        ),
+
+        # ── Test execution context ──
+        "test_mode": (report.get("target") or {}).get("test_mode"),
+        "model_name": (report.get("target") or {}).get("model"),
+    }
+    # Drop None values so the summary blob stays compact and clients can
+    # treat missing keys as "not measured" without ambiguity.
+    summary = {k: v for k, v in summary.items() if v is not None}
+
     conn = get_conn()
     conn.execute(
         """INSERT OR REPLACE INTO reports
@@ -722,12 +806,7 @@ def save_report(run_id: str, report: dict) -> None:
            VALUES (?,?,?,?,?)""",
         (
             new_id(), run_id,
-            json_col({
-                "risk_level": report.get("risk", {}).get("level"),
-                "identified_as": (report.get("predetection") or {}).get("identified_as"),
-                "protocol_score": report.get("scores", {}).get("protocol_score"),
-                "instruction_score": report.get("scores", {}).get("instruction_score"),
-            }),
+            json_col(summary),
             json_col(report),
             now_iso(),
         ),

@@ -225,9 +225,15 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             # tell whether the model would have eventually produced the
             # correct answer. This prevents truncation from unfairly
             # penalising verbose-thinking models like reasoning-pro tiers.
+            #
+            # ``constraint_reasoning`` derives ``passed`` purely from
+            # ``re.search(target_pattern, text)``, so a truncated response
+            # that hasn't reached the answer yet hard-fails just like the
+            # format-strict judges — treat it the same way.
             _FORMAT_STRICT_JUDGES = {
                 "exact_match", "regex_match", "json_schema", "line_count",
                 "text_constraints", "tokenizer_fingerprint",
+                "constraint_reasoning",
             }
             partial_passed, partial_detail = judge(
                 case.judge_method, resp.content, case.params
