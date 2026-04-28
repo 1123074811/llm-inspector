@@ -227,6 +227,31 @@ def handle_retry_run(path, _qs, _body) -> tuple:
     return _json({"run_id": run_id, "status": "queued"})
 
 
+_CONTINUE_ALLOWED = ("pre_detected", "cancelled")
+_SKIP_TESTING_ALLOWED = ("pre_detected",)
+
+
+def _state_rejection(run: dict, allowed: tuple[str, ...], action: str) -> tuple:
+    """Build a structured 4xx response when a run is in the wrong state
+    for the requested action. Includes the current status + a hint
+    string so the frontend can render an actionable message instead of
+    the previous opaque "Run cannot be continued" 400.
+
+    Returns ``(status_code, body_bytes, content_type)`` matching the
+    rest of the handler return contract.
+    """
+    cur = run.get("status")
+    err_msg = (run.get("error_message") or "")[:200]
+    payload = {
+        "error": f"Run cannot {action} (current status: {cur})",
+        "current_status": cur,
+        "allowed_statuses": list(allowed),
+        "action": action,
+        "error_message": err_msg or None,
+    }
+    return _json(payload, 400)
+
+
 def handle_continue_run(path, _qs, _body) -> tuple:
     run_id = _extract_id(path, r"/api/v1/runs/([^/]+)/continue$")
     if not run_id:
@@ -234,8 +259,8 @@ def handle_continue_run(path, _qs, _body) -> tuple:
     run = repo.get_run(run_id)
     if not run:
         return _error("Run not found", 404)
-    if run["status"] not in ("pre_detected", "cancelled"):
-        return _error("Run cannot be continued", 400)
+    if run["status"] not in _CONTINUE_ALLOWED:
+        return _state_rejection(run, _CONTINUE_ALLOWED, "be continued")
     submit_continue(run_id)
     return _json({"run_id": run_id, "status": "running"})
 
@@ -247,7 +272,7 @@ def handle_skip_testing(path, _qs, _body) -> tuple:
     run = repo.get_run(run_id)
     if not run:
         return _error("Run not found", 404)
-    if run["status"] not in ("pre_detected",):
-        return _error("Run cannot skip testing", 400)
+    if run["status"] not in _SKIP_TESTING_ALLOWED:
+        return _state_rejection(run, _SKIP_TESTING_ALLOWED, "skip testing")
     submit_skip_testing(run_id)
     return _json({"run_id": run_id, "status": "running"})

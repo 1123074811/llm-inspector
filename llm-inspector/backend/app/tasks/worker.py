@@ -80,7 +80,13 @@ def submit_run(run_id: str) -> None:
         except Exception as e:
             logger.error("Pipeline exception", run_id=run_id, error=str(e))
             from app.repository import repo
-            repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
+            # v17 fix: don't overwrite a legitimate resting state
+            # (pre_detected / suspended / any terminal) with 'failed' just
+            # because a stray exception escaped the lifecycle manager.
+            cur = repo.get_run(run_id)
+            cur_status = cur.get("status") if cur else None
+            if cur_status and not repo.is_resting(cur_status):
+                repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
         finally:
             with _local_lock:
                 _local_running.pop(run_id, None)
@@ -153,7 +159,10 @@ def submit_continue(run_id: str) -> None:
         except Exception as e:
             logger.error("Continue pipeline exception", run_id=run_id, error=str(e))
             from app.repository import repo
-            repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
+            cur = repo.get_run(run_id)
+            cur_status = cur.get("status") if cur else None
+            if cur_status and not repo.is_resting(cur_status):
+                repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
         finally:
             with _local_lock:
                 _local_running.pop(run_id, None)
@@ -174,7 +183,10 @@ def submit_skip_testing(run_id: str) -> None:
         except Exception as e:
             logger.error("Skip testing pipeline exception", run_id=run_id, error=str(e))
             from app.repository import repo
-            repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
+            cur = repo.get_run(run_id)
+            cur_status = cur.get("status") if cur else None
+            if cur_status and not repo.is_resting(cur_status):
+                repo.update_run_status(run_id, "failed", error_message=str(e)[:500])
         finally:
             with _local_lock:
                 _local_running.pop(run_id, None)

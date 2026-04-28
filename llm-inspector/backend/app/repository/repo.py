@@ -104,6 +104,30 @@ def is_terminal(state: str) -> bool:
     return state in _TERMINAL_STATES
 
 
+# States in which a run is at a legitimate resting point and an exception
+# bubbling up to a top-level except handler must NOT clobber the state to
+# "failed". This includes the terminal states plus paused/idle states the
+# user/scheduler is expected to advance manually:
+#   - pre_detected: paused after pre-detect awaiting user "continue"/"skip"
+#   - suspended:    circuit-breaker pause awaiting recovery
+# Why: ``save_predetect_result`` writes ``status='pre_detected'`` via raw
+# SQL before the orchestrator's explicit ``update_run_status(*, 'pre_detected')``
+# call. Pre-v17, that explicit call raised "X → X" which bubbled up to the
+# pipeline's top-level except, which then overwrote the legitimate
+# pre_detected state with failed — breaking the "继续测试" button and
+# corrupting the run's history. The X → X transition is now an idempotent
+# no-op, but the broader hardening is to teach exception handlers that a
+# run at a resting state should NOT be marked failed just because some
+# bookkeeping code raised after the fact.
+_RESTING_STATES = _TERMINAL_STATES | {"pre_detected", "suspended"}
+
+
+def is_resting(state: str | None) -> bool:
+    """Return True if the run is at a legitimate paused/terminal state
+    that an exception handler must NOT overwrite with 'failed'."""
+    return state in _RESTING_STATES
+
+
 def repo_transition_state(run_id: str, to_state: str) -> None:
     """Directly set a run state (no validation). Internal use."""
     conn = get_conn()

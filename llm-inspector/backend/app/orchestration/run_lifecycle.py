@@ -67,10 +67,20 @@ class RunLifecycleManager:
             logger.error("Unhandled exception in execute_full", run_id=self.run_id, error=str(exc))
             try:
                 current = repo.get_run(self.run_id)
-                if current and current.get("status") not in ("completed", "failed", "partial_failed", "cancelled"):
+                cur_status = current.get("status") if current else None
+                # v17 fix: don't clobber a legitimate resting state
+                # (pre_detected paused / suspended / any terminal) with
+                # 'failed' just because some bookkeeping code raised after
+                # the pipeline had already reached a sensible stop.
+                if cur_status and not repo.is_resting(cur_status):
                     repo.update_run_status(self.run_id, "failed",
                         error_message=f"Unhandled error: {exc}",
                         error_code="E_UNHANDLED")
+                else:
+                    logger.info(
+                        "execute_full: exception ignored — run already at resting state",
+                        run_id=self.run_id, status=cur_status, error=str(exc),
+                    )
             except Exception:
                 pass
             emit(self.run_id, EventKind.RUN_FAILED, error=str(exc))
@@ -109,10 +119,17 @@ class RunLifecycleManager:
             logger.error("Unhandled exception in execute_continue", run_id=self.run_id, error=str(exc))
             try:
                 current = repo.get_run(self.run_id)
-                if current and current.get("status") not in ("completed", "failed", "partial_failed", "cancelled"):
+                cur_status = current.get("status") if current else None
+                # v17 fix: see execute_full for rationale.
+                if cur_status and not repo.is_resting(cur_status):
                     repo.update_run_status(self.run_id, "failed",
                         error_message=f"Unhandled error: {exc}",
                         error_code="E_UNHANDLED")
+                else:
+                    logger.info(
+                        "execute_continue: exception ignored — run already at resting state",
+                        run_id=self.run_id, status=cur_status, error=str(exc),
+                    )
             except Exception:
                 pass
             emit(self.run_id, EventKind.RUN_FAILED, error=str(exc))
