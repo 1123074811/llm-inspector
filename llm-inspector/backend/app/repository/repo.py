@@ -80,7 +80,16 @@ def transition_state(run_id: str, from_state: str, to_state: str) -> None:
     """Validate and execute a run state transition.
 
     Raises ValueError if the transition is illegal.
+
+    Idempotency: ``from_state == to_state`` is silently treated as a
+    no-op. This is required because some upstream code paths (e.g.
+    ``save_predetect_result``) write the status directly via raw SQL
+    and bypass this validator; a subsequent ``update_run_status`` /
+    ``transition_state`` call on the now-already-target state would
+    otherwise blow up with "Illegal state transition: X → X".
     """
+    if from_state == to_state:
+        return
     allowed = _RUN_STATE_TRANSITIONS.get(from_state, set())
     if to_state not in allowed:
         raise ValueError(
@@ -123,6 +132,12 @@ def update_run_status(run_id: str, status: str, **kwargs) -> None:
     from_state = current["status"] if current else None
 
     if from_state in _RUN_STATE_TRANSITIONS:
+        # Idempotency: setting the run to the state it's already in is a
+        # silent no-op. Required for paths that already wrote the target
+        # state via raw SQL (e.g. save_predetect_result) and a subsequent
+        # explicit update_run_status would otherwise raise "X → X".
+        if from_state == status:
+            return
         allowed = _RUN_STATE_TRANSITIONS[from_state]
         if status not in allowed:
             raise ValueError(
