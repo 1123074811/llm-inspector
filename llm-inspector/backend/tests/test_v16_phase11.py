@@ -147,8 +147,10 @@ class TestSymmetryCheck:
         engine = BayesianEvidenceVerdictEngine()
         result = engine.check_symmetry()
         assert result["is_balanced"] is True
-        assert result["up_rules"] == 5
-        assert result["down_rules"] == 5
+        # v17 fix: pricing evidence added as Bayesian rules
+        # (1 UP: at_official_match; 2 DOWN: below_30pct, below_60pct)
+        assert result["up_rules"] == 6
+        assert result["down_rules"] == 7
 
 
 class TestVerdictReport:

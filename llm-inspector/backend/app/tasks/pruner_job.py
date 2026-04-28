@@ -51,6 +51,11 @@ EXHAUSTION_PASS_RATE_THRESHOLD = 0.95
 EXHAUSTION_MIN_SAMPLES = 20
 RECENT_WINDOW_DAYS = 30
 
+# Minimum responses before a case's pass-rate is statistically meaningful.
+# Below this, we hand SuitePruner ``pass_rate=None`` so it does not flag
+# floor/ceiling on noise (e.g. fresh deployment with 3 responses all-pass).
+MIN_N_FOR_PRUNING = 5
+
 
 # ── Aggregation helpers ─────────────────────────────────────────────────────
 
@@ -294,6 +299,10 @@ def run_pruner_job(now: int | None = None) -> PrunerJobReport:
         stat = pass_rates.get(case["id"]) or {}
         pr = stat.get("pass_rate")
         n_resp = int(stat.get("n_responses") or 0)
+        # Suppress small-sample pass-rate so fresh deployments don't get
+        # every case flagged after 3 random hits.
+        if n_resp < MIN_N_FOR_PRUNING:
+            pr = None
 
         try:
             metric = pruner.analyze_case(

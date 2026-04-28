@@ -68,8 +68,17 @@ def _build_ssl_ctx() -> ssl.SSLContext:
 _SSL_CTX = _build_ssl_ctx()
 
 
+def _redact_url(url: str) -> str:
+    """Strip query string so secrets (legacy ?key= callers) never reach logs."""
+    try:
+        return urllib.parse.urlsplit(url)._replace(query="").geturl()
+    except Exception:
+        return url.split("?", 1)[0]
+
+
 def _http_get_json(url: str, headers: dict[str, str], timeout: int = 20) -> Any | None:
     """GET ``url`` and return parsed JSON, or None on any failure."""
+    safe_url = _redact_url(url)
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, context=_SSL_CTX, timeout=timeout) as resp:
@@ -78,14 +87,14 @@ def _http_get_json(url: str, headers: dict[str, str], timeout: int = 20) -> Any 
     except urllib.error.HTTPError as e:
         logger.warning(
             "model_registry_sync: HTTP error",
-            url=url, status=e.code, reason=str(e.reason),
+            url=safe_url, status=e.code, reason=str(e.reason),
         )
         return None
     except urllib.error.URLError as e:
-        logger.warning("model_registry_sync: URL error", url=url, error=str(e.reason))
+        logger.warning("model_registry_sync: URL error", url=safe_url, error=str(e.reason))
         return None
     except Exception as e:
-        logger.warning("model_registry_sync: parse error", url=url, error=str(e)[:200])
+        logger.warning("model_registry_sync: parse error", url=safe_url, error=str(e)[:200])
         return None
 
 
@@ -253,9 +262,12 @@ def _sync_anthropic(api_key: str) -> SyncResult:
 
 def _sync_google(api_key: str) -> SyncResult:
     res = SyncResult(source="google_api")
+    # Google supports x-goog-api-key header — preferred over ?key= query
+    # so the key never enters request URLs (and thus never enters logs).
     payload = _http_get_json(
-        f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(api_key)}",
+        "https://generativelanguage.googleapis.com/v1beta/models",
         headers={
+            "x-goog-api-key": api_key,
             "Accept": "application/json",
             "User-Agent": "LLMInspector/17.0 RegistrySync",
         },

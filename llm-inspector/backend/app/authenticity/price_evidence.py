@@ -156,6 +156,7 @@ def evaluate_pricing(
     model_id: str,
     claimed_input_usd_per_mtok: float | None,
     claimed_output_usd_per_mtok: float | None,
+    currency: str = "USD",
 ) -> PriceEvidence:
     """Compare a user-supplied claimed price against the official rate.
 
@@ -173,6 +174,26 @@ def evaluate_pricing(
         claimed_input_usd_per_mtok is not None
         or claimed_output_usd_per_mtok is not None
     )
+
+    # Currency safety: official prices are denominated in USD. A user who
+    # supplies CNY 1.4 / Mtok would otherwise be compared against USD 1.4
+    # and falsely trigger the <30% cap. Refuse non-USD claims rather than
+    # silently misinterpret them.
+    cur = (currency or "USD").upper()
+    if has_claim and cur != "USD":
+        ev = PriceEvidence(
+            model_id=model_id,
+            has_claim=has_claim,
+            has_official=False,
+            claimed_input_usd_per_mtok=claimed_input_usd_per_mtok,
+            claimed_output_usd_per_mtok=claimed_output_usd_per_mtok,
+            reasons=[
+                f"声明价格币种为 {cur}，价格证据仅支持 USD（官方价基准为 USD/Mtok）；"
+                f"请将报价折算为 USD 后重新提交"
+            ],
+        )
+        ev.severity = "none"
+        return ev
 
     official = get_official_price(model_id) if model_id else None
     has_official = official is not None

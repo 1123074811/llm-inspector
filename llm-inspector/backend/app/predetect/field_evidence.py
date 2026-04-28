@@ -129,7 +129,9 @@ def _extract_openai_fields(raw: dict, ev: FieldEvidence) -> None:
         ev.has_system_fingerprint = True
         if isinstance(fp, str):
             ev.system_fingerprint_value = fp[:64]
-            ev.system_fingerprint_valid = bool(_OPENAI_FP_RE.match(fp))
+            # fullmatch + strip: re.match with $ allows a trailing newline,
+            # so wrappers returning "fp_a1b2c3d4e5\n" would slip through.
+            ev.system_fingerprint_valid = bool(_OPENAI_FP_RE.fullmatch(fp.strip()))
             if not ev.system_fingerprint_valid:
                 ev.contradictions.append(
                     f"system_fingerprint value {fp!r} fails ^fp_[a-f0-9]{{10,}}$"

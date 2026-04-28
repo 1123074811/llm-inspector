@@ -93,8 +93,23 @@ def filter_eligible_baselines(
 
     Cold-start fallback: when the registry knows zero eligible models we
     pass the full list through unchanged so the system remains usable
-    on a fresh deployment.  Callers can detect this case via
-    ``baseline_pool_summary()['active_count']``.
+    on a fresh deployment. Callers wanting to surface that fallback in
+    the report can use :func:`filter_eligible_baselines_with_status`
+    instead.
+    """
+    out, _ = filter_eligible_baselines_with_status(baselines, now=now)
+    return out
+
+
+def filter_eligible_baselines_with_status(
+    baselines: Iterable[dict],
+    now: int | None = None,
+) -> tuple[list[dict], bool]:
+    """Same as :func:`filter_eligible_baselines` but also returns
+    ``is_fallback``: True when the registry was empty and the input list
+    was passed through unchanged. Reports should display a
+    ``baseline pool not yet initialized — comparing against legacy
+    reference embeddings`` notice when this is True.
     """
     baselines = list(baselines or [])
     eligible = list_eligible_model_ids(now=now)
@@ -104,7 +119,7 @@ def filter_eligible_baselines(
                 "baseline_pool: registry empty, passing baselines through unchanged",
                 input_count=len(baselines),
             )
-        return baselines
+        return baselines, True
 
     out: list[dict] = []
     dropped: list[str] = []
@@ -122,7 +137,7 @@ def filter_eligible_baselines(
             dropped=len(dropped),
             sample_dropped=dropped[:5],
         )
-    return out
+    return out, False
 
 
 def baseline_pool_summary(now: int | None = None) -> dict[str, Any]:
@@ -176,6 +191,7 @@ def _list_recently_deprecated(now: int) -> list[str]:
 
 __all__ = [
     "filter_eligible_baselines",
+    "filter_eligible_baselines_with_status",
     "list_eligible_model_ids",
     "baseline_pool_summary",
 ]

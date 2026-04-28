@@ -134,6 +134,20 @@ def upsert_model(record: dict[str, Any]) -> dict[str, Any]:
     rec["last_synced_at"] = now
 
     conn = get_conn()
+    # Concurrent maintenance jobs (registry_sync + changelog_harvester +
+    # dataset_sync) can race on the same model_id. SQLite's deferred default
+    # would let two SELECT-then-INSERT sequences both see "no row" and both
+    # try to INSERT, with the second one hitting the UNIQUE constraint.
+    # BEGIN IMMEDIATE acquires the write lock up front so the read side of
+    # the upsert sees a consistent view. ON CONFLICT(model_id) is not used
+    # here because the priority-aware merge below needs the existing row
+    # values, which an UPSERT clause cannot easily express in pure SQL.
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except Exception:
+        # If a transaction is already open (nested call) just continue —
+        # the outer caller owns the lock.
+        pass
     existing_row = conn.execute(
         "SELECT * FROM model_registry WHERE model_id = ?", (model_id,)
     ).fetchone()

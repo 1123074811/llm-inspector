@@ -143,21 +143,40 @@ def _pruner_job() -> object:
     return run_pruner_job()
 
 
+def _harvester_enabled() -> bool:
+    """``changelog_harvester`` calls ``JUDGE_API_URL`` (a paid LLM) once a
+    day. Personal users can run for a week before noticing the bill, so
+    the harvester is opt-in via its own env var even when the umbrella
+    ``MAINTENANCE_JOBS_ENABLED`` is on.
+    """
+    raw = os.environ.get("MAINTENANCE_HARVESTER_ENABLED", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def default_jobs() -> list[MaintenanceJob]:
     """Production job set."""
-    return [
+    jobs = [
         MaintenanceJob(
             name="model_registry_sync",
             interval_sec=_REGISTRY_SYNC_INTERVAL_SEC,
             run_fn=_registry_sync_job,
             initial_delay_sec=60,            # let server warm up first
         ),
-        MaintenanceJob(
+    ]
+    if _harvester_enabled():
+        jobs.append(MaintenanceJob(
             name="changelog_harvester",
             interval_sec=_CHANGELOG_HARVEST_INTERVAL_SEC,
             run_fn=_changelog_harvest_job,
             initial_delay_sec=300,           # 5min
-        ),
+        ))
+    else:
+        logger.info(
+            "maintenance jobs: changelog_harvester skipped "
+            "(set MAINTENANCE_HARVESTER_ENABLED=1 to enable; "
+            "this job calls JUDGE_API_URL once per day, which incurs LLM cost)"
+        )
+    jobs.extend([
         MaintenanceJob(
             name="dataset_sync",
             interval_sec=_DATASET_SYNC_INTERVAL_SEC,
@@ -170,7 +189,8 @@ def default_jobs() -> list[MaintenanceJob]:
             run_fn=_pruner_job,
             initial_delay_sec=120,           # 2min
         ),
-    ]
+    ])
+    return jobs
 
 
 # ── Daemon thread ──────────────────────────────────────────────────────────

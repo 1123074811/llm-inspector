@@ -434,16 +434,25 @@ class VerdictEngine:
                     pricing.to_dict() if hasattr(pricing, "to_dict") else {}
                 )
                 sev = getattr(pricing, "severity", "none")
+                # v17 fix: pricing no longer applies a unilateral cap that
+                # crushes a model trusted on every other axis. The cap only
+                # fires when corroborating evidence has already pulled
+                # confidence into borderline territory; otherwise the
+                # price-layer signal is recorded as a "reason" only and the
+                # Bayesian rule (`price_below_30pct` / `price_below_60pct`)
+                # carries the down-weight.
                 if sev == "fake_high_confidence":
                     cap = float(self._rule("price_below_30pct_cap"))
-                    confidence_real = min(confidence_real, cap)
-                    _hard_rule_fired = True
+                    if confidence_real <= 65.0:
+                        confidence_real = min(confidence_real, cap)
+                        _hard_rule_fired = True
                     for _r in (getattr(pricing, "reasons", []) or []):
                         reasons.append(f"价格层证据：{_r}")
                 elif sev == "suspicious":
                     cap = float(self._rule("price_below_60pct_cap"))
-                    confidence_real = min(confidence_real, cap)
-                    _hard_rule_fired = True
+                    if confidence_real <= 70.0:
+                        confidence_real = min(confidence_real, cap)
+                        _hard_rule_fired = True
                     for _r in (getattr(pricing, "reasons", []) or []):
                         reasons.append(f"价格层证据：{_r}")
             except Exception:
@@ -665,6 +674,12 @@ _V16_RULES: list[dict] = [
     {"rule_id": "extraction_resistance_high", "direction": "up", "log_odds_delta": 0.5,
      "sources": ["L9", "L22"], "corroboration_min": 2,
      "source_url": "SOURCES.yaml:verdict.extraction_resistance"},
+    # Pricing within ±5% of official: a wrapper has no margin to charge
+    # the official price and stay in business, so an exact match is
+    # genuine (if circumstantial) authenticity evidence.
+    {"rule_id": "price_at_official_match", "direction": "up", "log_odds_delta": 0.4,
+     "sources": ["pricing"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:pricing.at_official_match"},
     # ── DOWN rules (evidence toward FAKE) ──
     {"rule_id": "difficulty_ceiling_low", "direction": "down", "log_odds_delta": 0.7,
      "sources": ["capability"], "corroboration_min": 1,
@@ -681,6 +696,15 @@ _V16_RULES: list[dict] = [
     {"rule_id": "fingerprint_mismatch", "direction": "down", "log_odds_delta": 0.5,
      "sources": ["L5"], "corroboration_min": 1,
      "source_url": "SOURCES.yaml:verdict.fingerprint_mismatch"},
+    # ── Pricing evidence (v17 Phase 11 fix): no longer a bare cap; participates
+    # in the Bayesian log-odds chain so a model that's "trusted" on every other
+    # axis isn't carried down by pricing alone — and isn't promoted by it either.
+    {"rule_id": "price_below_30pct", "direction": "down", "log_odds_delta": 1.5,
+     "sources": ["pricing"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:pricing.below_official_30pct"},
+    {"rule_id": "price_below_60pct", "direction": "down", "log_odds_delta": 0.6,
+     "sources": ["pricing"], "corroboration_min": 1,
+     "source_url": "SOURCES.yaml:pricing.below_official_60pct"},
 ]
 
 # Tier thresholds on P(fake)

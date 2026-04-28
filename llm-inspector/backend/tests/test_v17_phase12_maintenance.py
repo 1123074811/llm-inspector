@@ -234,7 +234,10 @@ def test_v17_maintenance_status_endpoint(monkeypatch):
     assert isinstance(data["jobs"], list)
 
 
-def test_default_jobs_lists_four_production_tasks():
+def test_default_jobs_lists_four_production_tasks(monkeypatch):
+    # changelog_harvester is now opt-in via MAINTENANCE_HARVESTER_ENABLED to
+    # avoid silent JUDGE_API_URL costs (v17 fix). Force-enable for this test.
+    monkeypatch.setenv("MAINTENANCE_HARVESTER_ENABLED", "1")
     from app.tasks.maintenance_jobs import default_jobs
     jobs = default_jobs()
     names = [j.name for j in jobs]
@@ -253,3 +256,11 @@ def test_default_jobs_lists_four_production_tasks():
     # Initial delays prevent thundering-herd at startup
     for j in jobs:
         assert j.initial_delay_sec >= 0
+
+
+def test_default_jobs_skips_harvester_when_unset(monkeypatch):
+    monkeypatch.delenv("MAINTENANCE_HARVESTER_ENABLED", raising=False)
+    from app.tasks.maintenance_jobs import default_jobs
+    names = [j.name for j in default_jobs()]
+    assert "changelog_harvester" not in names
+    assert names == ["model_registry_sync", "dataset_sync", "pruner_job"]

@@ -27,8 +27,42 @@ start_background_watchdog(interval_sec=300)
 # Controlled by env var MAINTENANCE_JOBS_ENABLED — start.bat / start.sh set
 # it to 1 by default, but existing deployments stay opt-in.
 try:
-    from app.tasks.maintenance_jobs import start_maintenance_jobs
+    from app.tasks.maintenance_jobs import (
+        start_maintenance_jobs,
+        stop_maintenance_jobs,
+    )
     start_maintenance_jobs()
+
+    # Without an explicit signal handler, the daemon's 30s polling loop
+    # delays SIGTERM/SIGINT response — Ctrl+C can hang the process for
+    # up to half a minute. Register handlers so shutdown is prompt.
+    # signal.signal must be called from the main thread; guard for
+    # non-main-thread imports (e.g. test harnesses).
+    import signal as _signal
+    if threading.current_thread() is threading.main_thread():
+        try:
+            _prev_term = _signal.getsignal(_signal.SIGTERM)
+            _prev_int = _signal.getsignal(_signal.SIGINT)
+
+            def _shutdown_handler(signum, frame):  # type: ignore[no-untyped-def]
+                try:
+                    stop_maintenance_jobs()
+                finally:
+                    prev = _prev_term if signum == _signal.SIGTERM else _prev_int
+                    if callable(prev) and prev not in (_signal.SIG_DFL, _signal.SIG_IGN):
+                        prev(signum, frame)
+                    else:
+                        # Default behaviour: re-raise the signal so the
+                        # interpreter exits as the user expects.
+                        _signal.signal(signum, _signal.SIG_DFL)
+                        import os as _os
+                        _os.kill(_os.getpid(), signum)
+
+            _signal.signal(_signal.SIGTERM, _shutdown_handler)
+            _signal.signal(_signal.SIGINT, _shutdown_handler)
+        except (ValueError, OSError) as _sig_exc:
+            # ValueError: not in main thread; OSError: signal unsupported on platform
+            logger.debug("maintenance shutdown signal handlers skipped", error=str(_sig_exc))
 except Exception as _maint_exc:
     logger.warning("maintenance jobs failed to start", error=str(_maint_exc))
 

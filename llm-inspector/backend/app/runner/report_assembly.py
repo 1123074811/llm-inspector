@@ -48,14 +48,21 @@ def _build_and_save_report(
 
     # Similarity (allow checkpoint cache injection)
     similarities = precomputed_similarities
+    baseline_pool_is_fallback = False
     if similarities is None:
         from app.runner.orchestrator import _load_benchmarks
-        from app.analysis.baseline_pool import filter_eligible_baselines
+        from app.analysis.baseline_pool import filter_eligible_baselines_with_status
         benchmarks = _load_benchmarks(suite_version)
         # v17 Phase 11: prune deprecated/sunset/self-probed/stale models
         # from the comparison pool using the model_registry filter.
-        # Cold-start fallback (registry empty) passes the list through.
-        benchmarks = filter_eligible_baselines(benchmarks)
+        # Cold-start fallback (registry empty) passes the list through and
+        # surfaces a notice in the report.
+        benchmarks, baseline_pool_is_fallback = filter_eligible_baselines_with_status(benchmarks)
+        if baseline_pool_is_fallback:
+            logger.warning(
+                "baseline_pool not yet initialized — comparing against legacy reference embeddings",
+                run_id=run_id,
+            )
         similarity_engine = SimilarityEngine()
         similarities = similarity_engine.compare(features, benchmarks)
     if similarities:
@@ -337,6 +344,16 @@ def _build_and_save_report(
         scoring_profile_version=scoring_profile_version,
         calibration_tag=calibration_tag,
     )
+
+    if baseline_pool_is_fallback:
+        report.setdefault("notices", []).append({
+            "code": "baseline_pool_fallback",
+            "level": "warning",
+            "message": (
+                "baseline pool not yet initialized — "
+                "comparing against legacy reference embeddings"
+            ),
+        })
 
     # v11: Append CDM and Shapley reports to the final report
     if cdm_report is not None:
