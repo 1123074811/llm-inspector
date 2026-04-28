@@ -203,7 +203,20 @@ def _exact_match(text: str, params: dict) -> tuple[bool, dict]:
     }
 
 
-def _regex_match(text: str, params: dict) -> tuple[bool, dict]:
+# ASCII-only word boundary — replacement for \b that doesn't treat CJK
+# characters as word characters. The default Python \b uses [A-Za-z0-9_]
+# as the "word" class, so a digit between two CJK characters (e.g.
+# "A是28岁") never matches \b28\b. By substituting an explicit lookaround
+# that only treats ASCII word chars as boundaries, "28" surrounded by
+# CJK is recognized as a token boundary on both sides.
+_ASCII_WORD_BOUNDARY = (
+    r"(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|"
+    r"(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))"
+)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]")
+
+
+def _regex_match(text: str, params: dict) -> tuple[bool | None, dict]:
     match_means_fail = params.get("match_means_fail", False)
     match_means_pass = params.get("match_means_pass", False)
 
@@ -214,14 +227,40 @@ def _regex_match(text: str, params: dict) -> tuple[bool, dict]:
         passed = cjk_count <= int(max_cjk)
         return passed, {"cjk_count": cjk_count, "max_allowed": max_cjk}
 
-    pattern = params.get("pattern") or params.get("forbidden_pattern")
+    # Suite cases sometimes use "regex" instead of "pattern"; also accept
+    # "target_pattern" used by reasoning cases. (v17 fix: previously only
+    # "pattern"/"forbidden_pattern" were honored, silently failing all
+    # multilingual regex_match cases that used "regex".)
+    pattern = (
+        params.get("pattern")
+        or params.get("regex")
+        or params.get("target_pattern")
+        or params.get("forbidden_pattern")
+    )
     if not pattern:
-        return False, {"error": "no pattern specified"}
+        # Misconfigured case — return None (inconclusive) instead of False
+        # so a missing pattern doesn't unfairly drag down the model's score.
+        return None, {"error": "no pattern specified — case misconfigured"}
 
     try:
         found = bool(re.search(pattern, text, re.MULTILINE))
     except re.error as e:
         return False, {"error": f"invalid regex: {e}"}
+
+    # CJK-aware fallback: \b in Python re only sees ASCII word boundaries.
+    # If the original pattern uses \b, the response contains CJK, and the
+    # initial match failed, retry once with \b replaced by an ASCII-only
+    # word-boundary lookaround. This recovers cases like "A是28岁" against
+    # \b28\b without changing pure-ASCII semantics.
+    cjk_fallback = False
+    if not found and "\\b" in pattern and _CJK_RE.search(text):
+        relaxed = re.sub(r"(?<!\\)\\b", _ASCII_WORD_BOUNDARY, pattern)
+        try:
+            if re.search(relaxed, text, re.MULTILINE):
+                found = True
+                cjk_fallback = True
+        except re.error:
+            pass
 
     if match_means_fail:
         passed = not found
@@ -230,11 +269,14 @@ def _regex_match(text: str, params: dict) -> tuple[bool, dict]:
     else:
         passed = found  # default: match = pass
 
-    return passed, {
+    detail = {
         "pattern": pattern,
         "found": found,
         "match_means_fail": match_means_fail,
     }
+    if cjk_fallback:
+        detail["cjk_boundary_fallback"] = True
+    return passed, detail
 
 
 def _json_schema(text: str, params: dict) -> tuple[bool, dict]:
@@ -292,11 +334,89 @@ def _validate_schema(value, schema: dict) -> list[str]:
     return errors
 
 
-def _line_count(text: str, params: dict) -> tuple[bool, dict]:
+def _line_count(text: str, params: dict) -> tuple[bool | None, dict]:
+    """Count non-empty lines and compare to expected.
+
+    Improvements over the naive ``len(lines) == expected``:
+    - ``tolerance`` (default 0): allow ±N line discrepancy, so a model that
+      adds a single intro line ("Here you go:") is not penalised on a task
+      that's really about format compliance.
+    - ``ignore_intro_lines`` (default True): strip leading non-numeric/
+      non-bullet "wrapper" lines (e.g. ``Here is the list:``) before the
+      first content line that looks like an item.
+    - Reports the first/last 3 lines in detail so reviewers can see why a
+      perfectly-correct numeric list was rejected.
+    - Protocol-dimension truncation probes (e.g. ``max_tokens_truncation``):
+      when the case lives in the ``protocol`` dimension and the actual
+      line count vastly exceeds ``expected_lines`` (default ratio: 3×),
+      this is the upstream API failing to honour ``max_tokens`` — a
+      protocol-layer signal, not a capability defect. Return ``None``
+      (inconclusive) so it doesn't drag the model's capability score.
+    """
     expected = int(params.get("expected_lines", 3))
-    lines = [l for l in text.splitlines() if l.strip()]
-    passed = len(lines) == expected
-    return passed, {"expected_lines": expected, "actual_lines": len(lines)}
+    tolerance = int(params.get("tolerance", 0))
+    ignore_intro = bool(params.get("ignore_intro_lines", True))
+    meta = params.get("_meta") or {}
+    is_protocol_probe = (meta.get("dimension") == "protocol")
+
+    raw_lines = [l for l in text.splitlines() if l.strip()]
+    # Protocol-dimension early exit: vastly more lines than expected means
+    # the API didn't truncate as the probe intended. That's the protocol
+    # signal we wanted to capture, not a capability failure.
+    if is_protocol_probe and expected > 0 and len(raw_lines) >= max(expected * 3, expected + 5):
+        return None, {
+            "expected_lines": expected,
+            "actual_lines": len(raw_lines),
+            "reason": (
+                "protocol-dimension truncation probe: API returned "
+                f"{len(raw_lines)} lines (>= {max(expected * 3, expected + 5)}), "
+                "indicating max_tokens was not honoured — "
+                "marked inconclusive (excluded from capability scoring)"
+            ),
+            "protocol_signal": "max_tokens_not_honoured",
+        }
+    lines = list(raw_lines)
+    stripped_intro = 0
+    stripped_outro = 0
+
+    if ignore_intro and lines:
+        # An "item line" is heuristically: starts with a digit, bullet, or
+        # short label (1 char + .) — anything that looks like list content.
+        item_re = re.compile(r"^\s*(?:[\-\*\u2022]|\d+[\.\)、]?|[A-Za-z][\.\)])\s+|^\s*\d+\s*$")
+        # Strip leading wrapper lines until we hit something that looks like
+        # an item — but only if doing so brings us closer to expected.
+        first_item = next((i for i, l in enumerate(lines) if item_re.match(l)), None)
+        if first_item is not None and first_item > 0:
+            candidate = lines[first_item:]
+            if abs(len(candidate) - expected) < abs(len(lines) - expected):
+                stripped_intro = first_item
+                lines = candidate
+        # And trailing wrapper lines (e.g. "Hope that helps!").
+        last_item = next((len(lines) - 1 - i for i, l in enumerate(reversed(lines))
+                          if item_re.match(l)), None)
+        if last_item is not None and last_item < len(lines) - 1:
+            candidate = lines[: last_item + 1]
+            if abs(len(candidate) - expected) < abs(len(lines) - expected):
+                stripped_outro = len(lines) - last_item - 1
+                lines = candidate
+
+    actual = len(lines)
+    delta = abs(actual - expected)
+    passed = delta <= tolerance
+
+    detail = {
+        "expected_lines": expected,
+        "actual_lines": actual,
+        "raw_line_count": len(raw_lines),
+        "tolerance": tolerance,
+        "delta": delta,
+        "first_lines": [l[:80] for l in lines[:3]],
+        "last_lines": [l[:80] for l in lines[-3:]] if len(lines) > 3 else [],
+    }
+    if stripped_intro or stripped_outro:
+        detail["stripped_intro_lines"] = stripped_intro
+        detail["stripped_outro_lines"] = stripped_outro
+    return passed, detail
 
 
 def _constraint_reasoning(text: str, params: dict) -> tuple[bool | None, dict]:

@@ -215,35 +215,64 @@ def execute_case(adapter, model_name: str, case: TestCase) -> CaseResult:
             # and return more tokens than requested, then mark finish_reason=length.
             # For content-rich judge methods, the response may still contain
             # enough information to judge. Only skip for format-strict methods.
+            #
+            # v17 fix: Even for format-strict judges, the partial output may
+            # already contain the target answer (e.g. "无解" appears at the
+            # very start of a 1000-token response that got truncated). Try
+            # the judge anyway. If the partial output passes, accept the
+            # pass; if it fails, mark the sample as inconclusive
+            # (judge_passed=None) instead of a hard False, since we cannot
+            # tell whether the model would have eventually produced the
+            # correct answer. This prevents truncation from unfairly
+            # penalising verbose-thinking models like reasoning-pro tiers.
             _FORMAT_STRICT_JUDGES = {
                 "exact_match", "regex_match", "json_schema", "line_count",
                 "text_constraints", "tokenizer_fingerprint",
             }
+            partial_passed, partial_detail = judge(
+                case.judge_method, resp.content, case.params
+            )
+            if partial_detail is None:
+                partial_detail = {}
+            partial_detail["truncated"] = True
+            partial_detail["max_tokens"] = case.max_tokens
+
             if case.judge_method in _FORMAT_STRICT_JUDGES:
-                # Format-strict: truncation likely invalidates the result
-                result.samples.append(SampleResult(
-                    sample_index=i,
-                    response=resp,
-                    judge_passed=False,
-                    judge_detail={
-                        "truncated": True,
-                        "reason": "response truncated (finish_reason=length), "
-                                  "format-strict judge skipped",
-                        "max_tokens": case.max_tokens,
-                    },
-                ))
+                if partial_passed is True:
+                    # Partial output already satisfied the format-strict
+                    # judge — accept the pass.
+                    partial_detail["partial_pass_on_truncation"] = True
+                    result.samples.append(SampleResult(
+                        sample_index=i,
+                        response=resp,
+                        judge_passed=True,
+                        judge_detail=partial_detail,
+                    ))
+                else:
+                    # Partial output didn't pass; treat as inconclusive
+                    # rather than a hard False (judge_passed=None is
+                    # excluded from pass_rate denominators across the
+                    # scoring/IRT/feature pipeline).
+                    partial_detail["reason"] = (
+                        "response truncated (finish_reason=length); partial "
+                        "output did not satisfy format-strict judge — "
+                        "marked inconclusive"
+                    )
+                    result.samples.append(SampleResult(
+                        sample_index=i,
+                        response=resp,
+                        judge_passed=None,
+                        judge_detail=partial_detail,
+                    ))
             else:
-                # Content-rich: still attempt judging with truncation note
-                passed, detail = judge(case.judge_method, resp.content, case.params)
-                if detail is None:
-                    detail = {}
-                detail["truncated"] = True
-                detail["max_tokens"] = case.max_tokens
+                # Content-rich: keep judging with truncation note (existing
+                # behaviour), since these judges (semantic, refusal etc.)
+                # can usually still render a verdict from partial output.
                 result.samples.append(SampleResult(
                     sample_index=i,
                     response=resp,
-                    judge_passed=passed,
-                    judge_detail=detail,
+                    judge_passed=partial_passed,
+                    judge_detail=partial_detail,
                 ))
         else:
             consecutive_truncations = 0
