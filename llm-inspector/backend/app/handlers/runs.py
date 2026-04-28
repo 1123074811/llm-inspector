@@ -259,6 +259,22 @@ def handle_continue_run(path, _qs, _body) -> tuple:
     run = repo.get_run(run_id)
     if not run:
         return _error("Run not found", 404)
+
+    # v17 hardening: auto-revive runs that were falsely marked failed by
+    # the pre-v17 X→X state-machine bug. Pre-detect actually completed
+    # for these runs; only the bookkeeping ``update_run_status(*, 'pre_detected')``
+    # raised and got swallowed by the lifecycle except handler, which
+    # then overwrote pre_detected with failed. The data is intact, so
+    # we can safely flip the status back to pre_detected and continue.
+    if repo.is_falsely_failed_predetected_run(run):
+        recovered = repo.recover_falsely_failed_to_pre_detected(run_id)
+        if recovered:
+            logger.info(
+                "Auto-recovered falsely-failed run for /continue",
+                run_id=run_id,
+            )
+            run = repo.get_run(run_id)  # re-read with new status
+
     if run["status"] not in _CONTINUE_ALLOWED:
         return _state_rejection(run, _CONTINUE_ALLOWED, "be continued")
     submit_continue(run_id)
@@ -272,6 +288,16 @@ def handle_skip_testing(path, _qs, _body) -> tuple:
     run = repo.get_run(run_id)
     if not run:
         return _error("Run not found", 404)
+
+    # Same auto-recovery as /continue (see handle_continue_run for rationale)
+    if repo.is_falsely_failed_predetected_run(run):
+        if repo.recover_falsely_failed_to_pre_detected(run_id):
+            logger.info(
+                "Auto-recovered falsely-failed run for /skip-testing",
+                run_id=run_id,
+            )
+            run = repo.get_run(run_id)
+
     if run["status"] not in _SKIP_TESTING_ALLOWED:
         return _state_rejection(run, _SKIP_TESTING_ALLOWED, "skip testing")
     submit_skip_testing(run_id)

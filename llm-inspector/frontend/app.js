@@ -500,10 +500,8 @@ async function continueFullTest(runId) {
     showToast('继续测试失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
-  // Restart polling
-  if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(() => pollTask(runId), 2000);
-  pollTask(runId);
+  // Switch to task view and start polling (same pattern as retryRun)
+  openTask(runId);
 }
 
 async function unmarkAsBaseline(runId, baselineId) {
@@ -526,10 +524,8 @@ async function skipTesting(runId) {
     showToast('跳过失败: ' + (data.error || 'unknown error'), 'error');
     return;
   }
-  // Restart polling to catch completion
-  if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(() => pollTask(runId), 2000);
-  pollTask(runId);
+  // Switch to task view and start polling (same pattern as retryRun)
+  openTask(runId);
 }
 
 function exportReportPdf(runId) {

@@ -128,6 +128,55 @@ def is_resting(state: str | None) -> bool:
     return state in _RESTING_STATES
 
 
+def is_falsely_failed_predetected_run(run: dict) -> bool:
+    """Return True if this run's ``status='failed'`` is the result of the
+    pre-v17 state-machine bug (X→X transition validator raising) rather
+    than a real failure.
+
+    The signature is:
+      - ``status == 'failed'``
+      - ``error_code == 'E_UNHANDLED'``
+      - ``error_message`` mentions the illegal state-transition error
+      - ``predetect_result`` was successfully written (predetect actually
+        completed before the bookkeeping code raised)
+
+    These runs are functionally equivalent to ``pre_detected`` and can be
+    safely revived by ``recover_falsely_failed_to_pre_detected()``.
+    """
+    if not run:
+        return False
+    if run.get("status") != "failed":
+        return False
+    if run.get("error_code") != "E_UNHANDLED":
+        return False
+    err = (run.get("error_message") or "").lower()
+    if "illegal state transition" not in err:
+        return False
+    pre = run.get("predetect_result")
+    return bool(pre)
+
+
+def recover_falsely_failed_to_pre_detected(run_id: str) -> bool:
+    """Forcibly transition a falsely-failed run back to ``pre_detected``.
+
+    ``failed`` is normally a terminal state (no outgoing transitions), so
+    this bypasses the state-machine validator on purpose. Caller MUST
+    have verified eligibility via ``is_falsely_failed_predetected_run``.
+
+    Returns True iff the row was updated.
+    """
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE test_runs SET status='pre_detected', "
+        "completed_at=NULL, error_code=NULL, "
+        "error_message='[v17 recovered from spurious X\u2192X failure]' "
+        "WHERE id=? AND status='failed'",
+        (run_id,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def repo_transition_state(run_id: str, to_state: str) -> None:
     """Directly set a run state (no validation). Internal use."""
     conn = get_conn()

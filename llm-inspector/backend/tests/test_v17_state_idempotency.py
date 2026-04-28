@@ -177,6 +177,89 @@ class TestContinueRunErrorPayload:
         assert "Run cannot" in payload["error"]
         assert "failed" in payload["error"]  # current status surfaces in message
 
+    def test_continue_auto_recovers_falsely_failed_run(self, create_run):
+        """v17 self-healing: a run that was marked failed by the pre-v17
+        X→X state-machine bug should be auto-revived on the next
+        /continue click, since pre-detect actually completed and the
+        data is intact. This is the user-visible fix for runs left
+        unrecoverable in the production DB after a previous bug-affected
+        session.
+        """
+        import json as _json
+        from app.handlers.runs import handle_continue_run
+
+        run_id = create_run()
+        # Walk to a real pre_detected and persist a predetect_result
+        repo.update_run_status(run_id, "preflight_running")
+        repo.update_run_status(run_id, "pre_detecting")
+        repo.save_predetect_result(run_id, {
+            "success": True, "identified_as": "DeepSeek", "confidence": 0.85,
+        })
+        # Simulate the old bug: pipeline got marked failed with E_UNHANDLED
+        # despite predetect having completed. update_run_status legitimately
+        # transitions pre_detected → failed.
+        repo.update_run_status(
+            run_id, "failed",
+            error_message="Unhandled error: Illegal state transition: pre_detected → pre_detected",
+            error_code="E_UNHANDLED",
+        )
+        assert repo.get_run(run_id)["status"] == "failed"
+        assert repo.is_falsely_failed_predetected_run(repo.get_run(run_id))
+
+        status, body, _ct = handle_continue_run(
+            f"/api/v1/runs/{run_id}/continue", {}, {}
+        )
+        assert status == 200, body
+        payload = _json.loads(body)
+        assert payload["status"] == "running"
+        # Status was forcibly transitioned through 'pre_detected' before
+        # submit_continue scheduled the task.
+        cur = repo.get_run(run_id)
+        assert cur["status"] in ("pre_detected", "running")
+        # error_message was overwritten with the recovery marker
+        assert "v17 recovered" in (cur["error_message"] or "").lower() or \
+               cur["status"] == "running"
+
+    def test_continue_does_NOT_recover_legitimately_failed_run(self, create_run):
+        """A run that failed for real reasons (e.g. SSL error) must NOT
+        be auto-revived — the data may be incomplete and the user/admin
+        should investigate."""
+        import json as _json
+        from app.handlers.runs import handle_continue_run
+
+        run_id = create_run()
+        repo.update_run_status(run_id, "running")
+        repo.update_run_status(
+            run_id, "failed",
+            error_message="API 连接故障: SSL UNEXPECTED_EOF_WHILE_READING",
+            error_code="E_NETWORK",
+        )
+
+        status, body, _ct = handle_continue_run(
+            f"/api/v1/runs/{run_id}/continue", {}, {}
+        )
+        # Genuine failure → still 400, not auto-revived
+        assert status == 400
+        payload = _json.loads(body)
+        assert payload["current_status"] == "failed"
+        # Run is still failed in DB (not silently revived)
+        assert repo.get_run(run_id)["status"] == "failed"
+
+    def test_continue_does_NOT_recover_failed_run_without_predetect(self, create_run):
+        """Even a state-machine-error message shouldn't trigger recovery
+        if predetect_result is empty — that means predetect itself never
+        completed."""
+        run_id = create_run()
+        repo.update_run_status(run_id, "running")
+        repo.update_run_status(
+            run_id, "failed",
+            error_message="Unhandled error: Illegal state transition: queued → completed",
+            error_code="E_UNHANDLED",
+        )
+        # No save_predetect_result call → predetect_result is None
+        run = repo.get_run(run_id)
+        assert not repo.is_falsely_failed_predetected_run(run)
+
     def test_continue_accepts_pre_detected_run(self, create_run):
         import json as _json
         from app.handlers.runs import handle_continue_run
