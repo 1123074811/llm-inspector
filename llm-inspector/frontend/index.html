@@ -75,23 +75,23 @@
     <p class="subtitle">利用统计学指纹与测试矩阵验证模型真实身份。系统将依据预检测置信度自动分配算力资源。</p>
   </div>
 
-  <form id="run-form" onsubmit="return submitForm(event)">
+  <form id="run-form" onsubmit="return submitForm(event)" autocomplete="off">
   <div class="card">
     <div class="form-group">
       <label>Base URL</label>
       <input type="text" id="f-url" name="url" placeholder="https://api.example.com/v1"
-             oninput="validateUrl(this)">
+             oninput="validateUrl(this)" autocomplete="off">
       <div class="form-hint" id="url-hint">仅支持 http/https，不允许内网地址</div>
     </div>
     <div class="form-group">
       <label>API Key</label>
-      <input type="password" id="f-key" name="api_key" placeholder="sk-...">
+      <input type="password" id="f-key" name="api_key" placeholder="sk-..." autocomplete="off">
       <div class="form-hint">密钥在服务端使用 AES-256-GCM 加密存储，72小时后自动清除</div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Model Name</label>
-        <input type="text" id="f-model" name="model" placeholder="gpt-4o / custom-chat-v1">
+        <input type="text" id="f-model" name="model" placeholder="gpt-4o / custom-chat-v1" autocomplete="off">
       </div>
       <div class="form-group">
         <label>测试模式</label>
