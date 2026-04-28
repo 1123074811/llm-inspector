@@ -46,7 +46,13 @@ CORE_DEPENDENCIES = [
     Dependency("scipy", "scipy", "1.10.0", description="Scientific computing (optimization, stats)"),
     Dependency("cryptography", "cryptography", "41.0.0", description="AES-GCM encryption for API keys"),
     Dependency("PyYAML", "yaml", "6.0", description="SOURCES.yaml provenance registry"),
+    # certifi: TLS root CA bundle. Stale bundles cause CERTIFICATE_VERIFY_FAILED
+    # when upstream APIs rotate certs. We additionally check bundle freshness below.
+    Dependency("certifi", "certifi", "2024.2.2", description="TLS root CA bundle for HTTPS calls"),
 ]
+
+# certifi bundle is considered stale after this many days and will be upgraded
+CERTIFI_MAX_AGE_DAYS = 180
 
 # ============================================================
 # Recommended Dependencies (used in main code paths, with fallbacks)
@@ -179,6 +185,20 @@ def version_satisfies(installed: str, required_min: str, required_max: Optional[
         return False
 
 
+def _certifi_bundle_age_days() -> Optional[float]:
+    """Return age of the certifi CA bundle file in days, or None if unavailable."""
+    try:
+        import os
+        import time
+        import certifi  # type: ignore
+        bundle = certifi.where()
+        if not bundle or not os.path.exists(bundle):
+            return None
+        return (time.time() - os.path.getmtime(bundle)) / 86400.0
+    except Exception:
+        return None
+
+
 def check_dependency(dep: Dependency) -> Tuple[bool, str]:
     """
     Check if dependency is satisfied.
@@ -192,6 +212,14 @@ def check_dependency(dep: Dependency) -> Tuple[bool, str]:
         return False, "Not installed"
 
     if version_satisfies(installed_version, dep.min_version, dep.max_version):
+        # Special-case certifi: also enforce CA bundle freshness.
+        if dep.name == "certifi":
+            age = _certifi_bundle_age_days()
+            if age is not None and age > CERTIFI_MAX_AGE_DAYS:
+                return False, (
+                    f"CA bundle stale (v{installed_version}, age {age:.0f}d > "
+                    f"{CERTIFI_MAX_AGE_DAYS}d) - will upgrade"
+                )
         status = f"OK (v{installed_version})"
         if dep.optional:
             status += " [optional]"
@@ -282,7 +310,12 @@ def check_and_install(
         print("=" * 60)
 
         for dep in to_install:
-            if install_package(dep, upgrade):
+            # Force --upgrade for stale certifi bundles even when global upgrade=False
+            force_upgrade = upgrade or (
+                dep.name == "certifi"
+                and get_installed_version("certifi") is not None
+            )
+            if install_package(dep, force_upgrade):
                 results[dep.name] = True
             else:
                 results[dep.name] = False
@@ -304,6 +337,8 @@ def generate_requirements_txt(output_path: str = "requirements.txt"):
         "numpy>=1.24.0",
         "scipy>=1.10.0",
         "cryptography>=41.0.0",
+        "PyYAML>=6.0",
+        "certifi>=2024.2.2",
         "",
         "# === Recommended (used with fallbacks) ===",
         "requests>=2.28.0",
