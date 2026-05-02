@@ -148,3 +148,95 @@ def test_layer18_uses_real_baseline_when_any_sampled(monkeypatch):
     assert out["skipped"] is False
     assert out["confidence"] > 0.0
     assert out["closest_family"] == "gpt"
+
+
+# ── _build_request / _parse_response auth dispatch (2026-05-01 fix) ─────────
+
+
+def test_build_request_bearer_uses_chat_completions():
+    req, protocol = srt._build_request(
+        "https://api.openai.com/v1", "sk-key", "gpt-4o-mini", "bearer",
+    )
+    assert protocol == "openai"
+    assert req.full_url == "https://api.openai.com/v1/chat/completions"
+    assert req.headers["Authorization"] == "Bearer sk-key"
+    body = json.loads(req.data.decode())
+    assert body["model"] == "gpt-4o-mini"
+    assert body["messages"][0]["role"] == "user"
+
+
+def test_build_request_x_api_key_uses_anthropic_messages():
+    req, protocol = srt._build_request(
+        "https://api.anthropic.com/v1", "sk-ant-x", "claude-3-5-haiku", "x-api-key",
+    )
+    assert protocol == "anthropic"
+    assert req.full_url == "https://api.anthropic.com/v1/messages"
+    # urllib lowercases header keys; check case-insensitively
+    headers = {k.lower(): v for k, v in req.headers.items()}
+    assert headers["x-api-key"] == "sk-ant-x"
+    assert headers["anthropic-version"] == "2023-06-01"
+    assert "authorization" not in headers
+    body = json.loads(req.data.decode())
+    assert body["model"] == "claude-3-5-haiku"
+    assert body["max_tokens"] == 100
+
+
+def test_build_request_google_key_uses_generate_content():
+    req, protocol = srt._build_request(
+        "https://generativelanguage.googleapis.com/v1beta",
+        "AIza-secret",
+        "gemini-2.0-flash",
+        "google-key",
+    )
+    assert protocol == "google"
+    assert ":generateContent" in req.full_url
+    assert "key=AIza-secret" in req.full_url
+    headers = {k.lower(): v for k, v in req.headers.items()}
+    assert "authorization" not in headers and "x-api-key" not in headers
+    body = json.loads(req.data.decode())
+    assert body["contents"][0]["parts"][0]["text"]
+
+
+def test_parse_response_anthropic_extracts_content_blocks():
+    body = {
+        "content": [
+            {"type": "text", "text": "An LLM is "},
+            {"type": "text", "text": "a model."},
+        ],
+        "usage": {"output_tokens": 7},
+    }
+    text, tokens = srt._parse_response(body, "anthropic")
+    assert text == "An LLM is a model."
+    assert tokens == 7
+
+
+def test_parse_response_google_extracts_parts():
+    body = {
+        "candidates": [{"content": {"parts": [{"text": "An LLM is a model."}]}}],
+        "usageMetadata": {"candidatesTokenCount": 7},
+    }
+    text, tokens = srt._parse_response(body, "google")
+    assert text == "An LLM is a model."
+    assert tokens == 7
+
+
+def test_parse_response_openai_extracts_choices():
+    body = {
+        "choices": [{"message": {"content": "An LLM is a model."}}],
+        "usage": {"completion_tokens": 7},
+    }
+    text, tokens = srt._parse_response(body, "openai")
+    assert text == "An LLM is a model."
+    assert tokens == 7
+
+
+def test_default_family_targets_have_consistent_auth_styles():
+    """Each family in DEFAULT_FAMILY_TARGETS must declare a supported auth
+    style so the --all batch mode does not silently fall back to bearer.
+    Regression guard for the 2026-05-01 fix."""
+    valid = {"bearer", "x-api-key", "google-key"}
+    for family, target in srt.DEFAULT_FAMILY_TARGETS.items():
+        assert target.get("auth") in valid, (
+            f"family={family} declares unsupported auth={target.get('auth')!r}; "
+            f"must be one of {valid}"
+        )

@@ -114,28 +114,100 @@ def _sha256_of_records(records: list[dict]) -> str:
 PROBE_PROMPT = "Explain briefly what a large language model is. Be concise."
 
 
-def send_probe(base_url: str, api_key: str, model: str, timeout: float = 30) -> dict | None:
-    """Send one timing probe request and return timing stats."""
+def _build_request(base_url: str, api_key: str, model: str, auth: str):
+    """Construct an HTTP request matching the family's auth/protocol style.
+
+    Three protocols are supported:
+      - "bearer"     → OpenAI-compatible /chat/completions with Authorization: Bearer
+      - "x-api-key"  → Anthropic Messages API (/v1/messages, x-api-key + anthropic-version)
+      - "google-key" → Gemini generateContent (?key=… in URL, no auth header)
+    """
+    auth = (auth or "bearer").lower()
+
+    if auth == "x-api-key":
+        url = base_url.rstrip("/") + "/messages"
+        body = {
+            "model": model,
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": PROBE_PROMPT}],
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+        return urllib.request.Request(
+            url, data=json.dumps(body).encode("utf-8"),
+            method="POST", headers=headers,
+        ), "anthropic"
+
+    if auth == "google-key":
+        # Google uses URL-embedded key and a different schema
+        url = (
+            base_url.rstrip("/")
+            + f"/models/{urllib.parse.quote(model)}:generateContent"
+            + f"?key={urllib.parse.quote(api_key)}"
+        )
+        body = {
+            "contents": [{"parts": [{"text": PROBE_PROMPT}]}],
+            "generationConfig": {"maxOutputTokens": 100},
+        }
+        return urllib.request.Request(
+            url, data=json.dumps(body).encode("utf-8"),
+            method="POST", headers={"Content-Type": "application/json"},
+        ), "google"
+
+    # Default: OpenAI-compatible
     url = base_url.rstrip("/") + "/chat/completions"
-    payload = json.dumps({
+    body = {
         "model": model,
         "messages": [{"role": "user", "content": PROBE_PROMPT}],
         "max_tokens": 100,
         "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=payload, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"},
-    )
+    }
+    return urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    ), "openai"
+
+
+def _parse_response(body: dict, protocol: str) -> tuple[str, int]:
+    """Extract (content_text, completion_tokens) for the protocol's schema."""
+    if protocol == "anthropic":
+        # Anthropic Messages API: content is a list of {type, text} blocks
+        blocks = body.get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+        usage = body.get("usage") or {}
+        return text, int(usage.get("output_tokens", 0))
+
+    if protocol == "google":
+        # Gemini: candidates[0].content.parts[*].text
+        candidates = body.get("candidates") or [{}]
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        usage = body.get("usageMetadata") or {}
+        return text, int(usage.get("candidatesTokenCount", 0))
+
+    # OpenAI-compatible
+    text = body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    return text, int((body.get("usage") or {}).get("completion_tokens", 0))
+
+
+def send_probe(base_url: str, api_key: str, model: str, timeout: float = 30,
+               auth: str = "bearer") -> dict | None:
+    """Send one timing probe request and return timing stats."""
+    req, protocol = _build_request(base_url, api_key, model, auth)
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             t_first_byte = time.time()
             body = json.loads(resp.read())
             t_done = time.time()
-        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
-        completion_tokens = body.get("usage", {}).get("completion_tokens", 0)
+        content, completion_tokens = _parse_response(body, protocol)
         ttft_ms = (t_first_byte - t0) * 1000
         total_s = t_done - t0
         tps = completion_tokens / total_s if total_s > 0 else 0
@@ -161,13 +233,14 @@ def compute_4gram_repetition(texts: list[str]) -> float:
 
 
 def _sample_one_family(family: str, base_url: str, api_key: str,
-                       model: str, samples: int) -> dict | None:
+                       model: str, samples: int,
+                       auth: str = "bearer") -> dict | None:
     """Run ``samples`` probes against one family.  Returns family_data dict."""
-    print(f"Sampling {samples} probes for family={family} model={model}")
+    print(f"Sampling {samples} probes for family={family} model={model} auth={auth}")
     results = []
     for i in range(samples):
         print(f"  Probe {i+1}/{samples}...", end=" ", flush=True)
-        r = send_probe(base_url, api_key, model)
+        r = send_probe(base_url, api_key, model, auth=auth)
         if r:
             results.append(r)
             print(f"TTFT={r['ttft_ms']:.0f}ms TPS={r['tps']:.1f}")
@@ -255,6 +328,12 @@ def main():
     parser.add_argument("--model")
     parser.add_argument("--samples", type=int, default=50)
     parser.add_argument("--output", default="backend/app/_data/timing_refs.json")
+    parser.add_argument(
+        "--auth", default="bearer",
+        choices=["bearer", "x-api-key", "google-key"],
+        help="Auth/protocol style: bearer (OpenAI-compatible), x-api-key "
+             "(Anthropic Messages API), google-key (Gemini generateContent).",
+    )
     parser.add_argument("--all", action="store_true",
                         help="Batch mode: sample every family from DEFAULT_FAMILY_TARGETS "
                              "using API keys read from environment variables.")
@@ -269,7 +348,8 @@ def main():
                 print(f"  - skip family={family}: env var {target['env_key']} unset")
                 continue
             data = _sample_one_family(
-                family, target["base_url"], key, target["model"], args.samples
+                family, target["base_url"], key, target["model"], args.samples,
+                auth=target.get("auth", "bearer"),
             )
             if data:
                 updates[family] = data
@@ -279,7 +359,7 @@ def main():
             parser.error("--base-url, --api-key, --family, --model are required "
                          "unless --all is given")
         data = _sample_one_family(args.family, args.base_url, args.api_key,
-                                  args.model, args.samples)
+                                  args.model, args.samples, auth=args.auth)
         if data:
             updates[args.family] = data
             _print_summary(args.family, data)

@@ -116,11 +116,17 @@ class EvidenceItem:
 
 @dataclass
 class FamilyHit:
-    """Aggregated score + evidence for one model family."""
+    """Aggregated score + evidence for one model family.
+
+    ``score_by_source`` decomposes ``raw_score`` by the originating layer
+    or case_id so a downstream reader can answer "which layer pushed this
+    family to the top": e.g. {"Layer1/SelfReport": 6.0, "Layer13/Adversarial": 2.5}.
+    """
     family: str
     raw_score: float = 0.0
     posterior: float = 0.0
     evidence: list[EvidenceItem] = field(default_factory=list)
+    score_by_source: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -147,6 +153,7 @@ class IdentityExposureReport:
                     "family": h.family,
                     "raw_score": round(h.raw_score, 2),
                     "posterior": round(h.posterior, 3),
+                    "score_by_source": {k: round(v, 2) for k, v in h.score_by_source.items()},
                     "evidence": [
                         {
                             "signal_type": e.signal_type,
@@ -198,8 +205,16 @@ def _scan_text(
     taxonomy: dict,
     family_scores: dict,
     family_evidence: dict,
+    family_source_scores: dict | None = None,
 ) -> None:
-    """Scan one response text and accumulate scores + evidence."""
+    """Scan one response text and accumulate scores + evidence.
+
+    ``family_source_scores`` (optional) records per-source contributions in
+    the shape ``{family: {source_label: cumulative_weight}}`` so the report
+    can decompose a family's total back to the layers/cases that produced it.
+    The source label uses ``case_id`` as-is (e.g. "Layer1/SelfReport" for
+    predetect probes, or the test case name for suite responses).
+    """
     if not text:
         return
     text_lower = text.lower()
@@ -218,6 +233,9 @@ def _scan_text(
                     if pos == -1:
                         break
                     family_scores[family] += weight
+                    if family_source_scores is not None:
+                        bucket = family_source_scores.setdefault(family, {})
+                        bucket[case_id] = bucket.get(case_id, 0.0) + weight
                     snippet = _extract_snippet(text, pos, pos + len(kw))
                     family_evidence[family].append(EvidenceItem(
                         family=family,
@@ -233,11 +251,15 @@ def _scan_text(
 
 def _bayesian_posterior(scores: dict[str, float]) -> dict[str, float]:
     """
-    Convert raw scores to Bayesian posteriors.
+    Convert accumulated keyword-match scores to a posterior distribution.
 
-    Prior: uniform (1/N for each family).
-    Likelihood: proportional to exp(score).
-    Posterior: softmax(scores).
+    Model: under the (admittedly strong) assumption that each matched
+    keyword contributes an *independent* additive log-likelihood, the raw
+    score is exactly Σ log P(evidence_i | family).  With a uniform prior,
+    Bayes' rule then collapses to softmax(scores).  This is single-pass
+    and does not perform per-layer marginal inference — see the
+    ``score_by_source`` field on FamilyHit for the per-source decomposition
+    a downstream reader can use to audit which layer drove the verdict.
     """
     import math
     if not scores or all(v == 0 for v in scores.values()):
@@ -278,6 +300,7 @@ def analyze_responses(
 
     family_scores: dict[str, float] = defaultdict(float)
     family_evidence: dict[str, list[EvidenceItem]] = defaultdict(list)
+    family_source_scores: dict[str, dict[str, float]] = {}
 
     # Initialise all families with 0 score (ensures they appear in posteriors)
     for family in taxonomy:
@@ -285,7 +308,8 @@ def analyze_responses(
 
     # Scan all responses
     for text, case_id in response_texts:
-        _scan_text(text, case_id, taxonomy, family_scores, family_evidence)
+        _scan_text(text, case_id, taxonomy, family_scores, family_evidence,
+                   family_source_scores)
 
     # Compute posteriors
     posteriors = _bayesian_posterior(dict(family_scores))
@@ -297,6 +321,7 @@ def analyze_responses(
             raw_score=family_scores[family],
             posterior=posteriors.get(family, 0.0),
             evidence=family_evidence.get(family, []),
+            score_by_source=family_source_scores.get(family, {}),
         )
         for family in taxonomy
     ]

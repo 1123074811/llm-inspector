@@ -1,9 +1,14 @@
-# LLM Inspector v15.0 — LLM 套壳检测与能力评估工具（v15.0.0 全部 14 阶段完成）
+# LLM Inspector — LLM 套壳检测与能力评估工具
+
+**当前版本**: `v17.0.0`（见 `backend/app/_data/version.json`）
+**已完成阶段**: v15 14 phase + v16 11 phase + v17 12 phase = 37 phase（外加 v15 phase4-bugs / v16 phase1.5 等微版本）
+**状态**: 代码完成度 ~95%，**数据完成度 ~50%**（L18/L19 timing 参考分布、suite IRT 参数仍是 placeholder，详见末尾 "Known Data Limitations"）
 
 ## Quick Start
 - `cd llm-inspector && python -m backend.app.main` — 启动服务（默认 :8000）
 - `cd llm-inspector && pytest backend/tests/` — 运行测试
 - `python backend/scripts/setup_dependencies.py` — 检查/安装依赖
+- `python backend/scripts/sample_timing_references.py --all --samples 100` — 采样真实 timing 数据（L18/L19 启用前必跑，详见 [docs/DATA_CALIBRATION_GUIDE.md](docs/DATA_CALIBRATION_GUIDE.md)）
 
 ## Tech Stack
 - **后端**: Python stdlib（http.server + urllib + sqlite3 + dataclasses），零 Web 框架
@@ -32,8 +37,9 @@ backend/app/
 │   ├── theta_scoring.py   # Theta 标准分(均值500, SD100)
 │   ├── similarity_engine.py # 加权余弦相似度 + bootstrap CI
 │   ├── neural_similarity.py # 神经相似度
-│   ├── verdict_engine.py   # 硬规则判定引擎
+│   ├── verdicts.py         # VerdictEngine：硬规则判定引擎；v16 重构为贝叶斯证据加权（5 升+5 降对称规则），输出 P(fake)/CI/borderline/inconclusive
 │   ├── attribution.py      # Shapley Value 归因
+│   ├── discrimination_audit.py # v16 区分度审计（Spearman / kappa / discrimination_index）
 │   ├── cdm_engine.py       # v11 DINA 认知诊断模型（微技能掌握概率估计）
 │   ├── shapley_attribution.py # v11 Shapley Value 评分归因（KernelSHAP 近似）
 │   ├── suite_pruner.py  # v11 Phase 3 IIF 数据提纯 + GPQA 题库适配
@@ -85,8 +91,11 @@ backend/app/
 │   └── builtin_plugins.py   # 内置插件
 ├── knowledge/        # 知识图谱客户端（DBpedia/Wikidata SPARQL，已实现双源交叉验证）
 │   └── dbpedia_client.py    # v13 DBpedia SPARQL 客户端（并发fan-out，冲突标记）
-├── predetect/        # 预检测管道（v15：24层 L0-L23）
-│   ├── pipeline.py   # 预检测主管线（452行）
+├── predetect/        # 预检测管道（v17：24 层，L0/L0.5/L0.6/L1-L23）
+│   ├── pipeline.py   # 预检测主管线
+│   ├── protocol_validator.py # v17 Layer 0.5 协议层硬证据（跨家族字段污染）
+│   ├── field_evidence.py    # v17 Layer 0.6 字段级硬证据（fingerprint/reasoning_tokens/cache_read）
+│   ├── model_discovery.py   # v17 /v1/models 探针，发现真实可用模型清单
 │   ├── bayesian_fusion.py   # 贝叶斯置信度融合
 │   ├── adversarial_analysis.py # 对抗性分析
 │   ├── semantic_fingerprint.py # 语义指纹
@@ -95,9 +104,9 @@ backend/app/
 │   ├── multilingual_attack.py # v11 Phase 3 多语言翻译攻击（Layer 14，13种语言）
 │   ├── ascii_art_attack.py  # v13 Layer 15 ASCII艺术视觉注入（Jiang et al. 2024）
 │   ├── indirect_injection.py # v13 Layer 16 间接提示注入（Greshake et al. 2023）
-│   ├── identity_exposure.py # v14 Layer 17 真实模型暴露引擎（贝叶斯后验+16家族分类）
-│   ├── system_prompt_harvester.py # v14 系统提示词抽取与脱敏（Tier1/2双级检测）
-│   ├── layers_l18_l19.py   # v14 Layer 18（时序侧信道，TTFT/TPS KL散度）+ Layer 19（Token分布，Wasserstein距离）
+│   ├── identity_exposure.py # v14 Layer 17 模型家族暴露引擎；v17.0.x 加 score_by_source 让 per-layer 贡献可追溯
+│   ├── system_prompt_harvester.py # v14 系统提示词抽取与脱敏（Tier1/2双级检测）+ v16 Phase 4 Repeat-back/JSON-mode/Token-economy/Multi-turn 多策略
+│   ├── layers_l18_l19.py   # v14 Layer 18（时序侧信道，TTFT/TPS KL散度）+ Layer 19（Token分布，Wasserstein距离）⚠️ 参考分布 placeholder，需先跑 sample_timing_references.py
 │   ├── layer_l20_self_paradox.py  # v15 Layer 20 自我矛盾探针（Deep专属，Phase 6）
 │   ├── layer_l21_multistep_drift.py # v15 Layer 21 多步漂移检测（Deep专属，Phase 6）
 │   ├── layer_l22_prompt_reconstruct.py # v15 Layer 22 提示词重构（Deep专属，Phase 6）
@@ -160,8 +169,10 @@ Deep     = Standard全部 + PreDetect(L6-7) + 高阶能力(10题) + 身份L3 + �
 
 向后兼容：API 发送 `test_mode: "full"` 或 `"extraction"` 自动映射为 `"deep"`。
 
-## PreDetect Pipeline (16 layers)
+## PreDetect Pipeline (24 layers — L0/L0.5/L0.6/L1–L23)
 - L0: HTTP Header Analysis (zero token)
+- **L0.5: Protocol Validator** (zero token) [v17 Phase 1] — 协议层硬证据，跨家族响应字段污染检测（声称 GPT 但响应里出现 `anthropic-version` 等）
+- **L0.6: Field Evidence** (zero token) [v17 Phase 2] — 字段级硬证据：`fingerprint` 签名、`reasoning_tokens`、`cache_read_tokens`、prompt caching usage 字段
 - L1: Self-Report & Model Card (~5 tokens)
 - L2: Identity Probe Matrix (~20 tokens)
 - L3: Knowledge Cutoff Verification (~10 tokens)
@@ -178,9 +189,13 @@ Deep     = Standard全部 + PreDetect(L6-7) + 高阶能力(10题) + 身份L3 + �
 - L14: Multilingual Translation Attack (~500 tokens) [v11 Phase 3]
 - L15: ASCII Art / Visual Prompt Injection (~150 tokens) [v13 Phase 3]
 - L16: Indirect Injection via RAG-like Markdown (~150 tokens) [v13 Phase 3]
-- L17: Identity Exposure Engine (0 tokens) [v14 Phase 3] — 重分析前层证据，贝叶斯后验推断实际模型家族
-- L18: Response Timing Side-Channel (0 tokens) [v14 Phase 5] — TTFT/TPS KL 散度对比 6 家族参考分布（Yu et al. 2024）
-- L19: Token Distribution Side-Channel (0 tokens) [v14 Phase 5] — 响应长度 Wasserstein 距离 + 4-gram 重复率（Carlini et al. 2023）
+- L17: Identity Exposure Engine (0 tokens) [v14 Phase 3] — 跨层证据 softmax 融合（独立加性对数似然 + 均匀先验，等价贝叶斯）；v17.0.x 新增 `score_by_source` 让贡献按 layer 可追溯
+- L18: Response Timing Side-Channel (0 tokens) [v14 Phase 5] — TTFT/TPS KL 散度对比 6 家族参考分布（Yu et al. 2024）⚠️ 当前参考分布是 placeholder，会自动返回 `confidence: 0.0`
+- L19: Token Distribution Side-Channel (0 tokens) [v14 Phase 5] — 响应长度 Wasserstein 距离 + 4-gram 重复率（Carlini et al. 2023）⚠️ 同上
+- L20: Self-Paradox Probe (~50 tokens, Deep only) [v15 Phase 6]
+- L21: Multi-step Identity Drift (~200 tokens, Deep only) [v15 Phase 6]
+- L22: System Prompt Reconstruction (0 tokens, Deep only) [v15 Phase 6] — 从 SystemPromptHarvester 输出被动重建，不发新请求
+- L23: Adversarial Tool-call Injection (~100 tokens, Deep only) [v15 Phase 6]
 
 | 层级 | 检测内容 | Token 消耗 |
 |------|----------|-----------|
@@ -520,3 +535,19 @@ GET    /api/v10/runs/{id}/logs/stream
 - v15 L20-L23 仅在 Deep 模式运行；`layer_l23_adversarial_tools.py` 使用 `extra_params={"tool_choice":"auto"}` 传递非标准字段（`LLMRequest` 无该字段）
 - v15 judge_registry.py 使用 PyYAML 加载 `_data/judge_registry.yaml`，无 PyYAML 时自动 fallback 到 stdlib 解析器
 - v15 DatasetImporter 的 `SUITE_DIR` 是类变量，测试通过 `monkeypatch.setattr(DatasetImporter, "SUITE_DIR", tmp_path)` 隔离
+- v17 OfficialEndpoint 三因子（URL+TLS+响应头）通过时给 `confidence_real` 加分，硬规则 cap 放宽（behavioral_invariant 55→70、extraction_weak 65→80）；TLS handshake latency 阈值 v16 acceptance 已从 500ms 调到 2000ms，避免跨大陆网络误判
+- v17 `analyze_responses()` 现在输出 `score_by_source: {layer/case_id → cumulative_weight}`，让"GPT 这族 60 分里有多少来自 L1 自报告、多少来自 L13 对抗"可被审计；`_bayesian_posterior` 注释如实说明这是 softmax(累加权重)（独立加性对数似然 + 均匀先验下等价贝叶斯），不是真正的多层边际推断
+
+## Known Data Limitations（重要）
+
+代码完成度 ~95%，但有两块**生产数据待采集**才能让对应能力真正生效：
+
+### 1. L18/L19 timing 参考分布（PLACEHOLDER）
+- `backend/app/_data/timing_refs.json` 与 `token_dist_refs.json` 标记为 `version: "v15.0-placeholder"`，每个家族 `sampled: false`
+- L18/L19 检测到此情况会**主动**返回 `confidence: 0.0` + `reason: all_baselines_placeholder`，等价于这两层目前不参与 verdict
+- **修复**：跑 `python backend/scripts/sample_timing_references.py --all --samples 100`（需要 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` 等环境变量），详见 [docs/DATA_CALIBRATION_GUIDE.md](docs/DATA_CALIBRATION_GUIDE.md)
+
+### 2. Suite IRT 参数（preliminary）
+- `suite_v13.json` / `suite_v15.json` / `suite_v16_*.json` 的 `irt_a` / `irt_b` / `irt_c` 是预填初值，`calibrated: false`
+- Theta 标准分（500/100）能算出数值，但相对尺度的统计语义未经真实通过率拟合
+- **修复**：用多家模型批量跑题（`backend/scripts/mass_model_test.py`）→ `irt_data_collection.py` → `fit_weights_v14.py` 拟合，详见 DATA_CALIBRATION_GUIDE

@@ -99,9 +99,12 @@ class Layer21MultiStepDrift:
             if ans:
                 evidence.append(f"Turn {turn}: self-reported as '{ans[:40]}'")
 
-        # Find the most frequently reported identity
+        # Find the most frequently reported identity (count by answer string,
+        # not by (turn, answer) tuple — the tuple form turned identified_as
+        # into a 2-tuple instead of a string).
         from collections import Counter
-        counts = Counter(identity_answers)
+        answer_strings = [a for _, a in identity_answers if a]
+        counts = Counter(answer_strings)
         most_common = counts.most_common(1)[0][0] if counts else None
 
         # More changes = higher confidence of wrapper

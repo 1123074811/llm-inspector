@@ -2,6 +2,75 @@
 
 All notable changes to LLM Inspector are documented here.
 
+## [Unreleased] — 2026-05-01 — Reliability sweep
+
+### Fixed
+- **L21 `MultiStepDrift` `Counter` 维度错误**：`Counter(identity_answers)` 在 `(turn_idx, answer)` 元组上计数，导致 `most_common()` 返回 tuple，进而把 `LayerResult.identified_as` 设成 `(int, str)` 而非 `str`。改为 `Counter([a for _, a in identity_answers if a])`。文件：[layer_l21_multistep_drift.py](llm-inspector/backend/app/predetect/layer_l21_multistep_drift.py)。
+- **`scripts/sample_timing_references.py` `--all` 模式只能跑 OpenAI 兼容**：`DEFAULT_FAMILY_TARGETS` 声明了 `auth: x-api-key`（Anthropic）和 `google-key`（Gemini），但 `send_probe()` 写死 `Authorization: Bearer` 头并只走 `/chat/completions` 路径，跑 Anthropic/Google 100% 失败。新增 `_build_request()` 按 auth 类型分发：`x-api-key` 走 `/v1/messages` + `anthropic-version` 头，`google-key` 走 `models/{m}:generateContent?key=…`。新增 `--auth` CLI 参数支持单家族模式。
+- **L17 `IdentityExposure` 算法注释失实**：`_bayesian_posterior` 注释自称"Bayesian posterior"，但实际是 softmax(累加权重)；这在"独立加性对数似然 + 均匀先验"假设下确实等价于贝叶斯，只是注释没说清楚。改注释如实描述假设，并新增 `FamilyHit.score_by_source` 字段把每个 family 的总分按 source（layer 标签 / case_id）拆开，让"GPT 这族 60 分里有多少来自 L1 自报告、多少来自 L13 对抗"可被审计。`to_dict()` 同步暴露 `score_by_source`。文件：[identity_exposure.py](llm-inspector/backend/app/predetect/identity_exposure.py)。
+
+### Documentation
+- 新增 [docs/DATA_CALIBRATION_GUIDE.md](docs/DATA_CALIBRATION_GUIDE.md) — L18/L19 timing 参考分布采样 + suite IRT 参数校准的操作指引；明确"placeholder 数据下 L18/L19 自动返回 confidence=0.0"的当前行为。
+- CLAUDE.md 同步到 v17 实际状态（version.json 显示 v17.0.0，41 个 phase 完成）；补上 v17 新增的 Layer 0.5（ProtocolValidator）、Layer 0.6（FieldEvidence）、ModelDiscovery、OfficialEndpoint 等模块。
+
+### Known Limitations (carried from v15-v17)
+- `backend/app/_data/timing_refs.json` 与 `token_dist_refs.json` 仍是 `v15.0-placeholder` 数据（每个家族 `sampled: false`）。L18/L19 检测到此情况会返回 `confidence: 0.0` + `reason: all_baselines_placeholder`，**等价于这两层目前不参与判定**。修复方法见 DATA_CALIBRATION_GUIDE。
+- `suite_v13.json` / `suite_v15.json` 的 IRT 参数 `calibrated: false`（preliminary 初值）。Theta 标准分（500/100）在数值上能算出来，但相对尺度的统计语义未经真实通过率拟合。修复方法见 DATA_CALIBRATION_GUIDE。
+
+---
+
+## [v17.0.0] — 2026-04-27
+
+> 详细 phase 记录见 `backend/app/_data/version.json`（`phases_complete` 字段）和各 phase 提交日志。本节列出对外可观察的能力变化。
+
+### Added
+- **Layer 0.5 ProtocolValidator** ([predetect/protocol_validator.py](llm-inspector/backend/app/predetect/protocol_validator.py))：协议层硬证据，跨家族响应字段污染检测（如声称 GPT-4 但响应包含 `anthropic-version` header）。
+- **Layer 0.6 FieldEvidence** ([predetect/field_evidence.py](llm-inspector/backend/app/predetect/field_evidence.py))：字段级硬证据（fingerprint 签名、reasoning_tokens、cache_read_tokens、prompt_caching usage 字段）。
+- **ModelDiscovery** ([predetect/model_discovery.py](llm-inspector/backend/app/predetect/model_discovery.py))：通过 `/v1/models` 探针发现真实可用模型清单。
+- **SystemPromptHarvester** 加强：Repeat-back / JSON-mode / Token-economy / Multi-turn 多策略提取，`_SECRET_PATTERNS` 二次脱敏。
+- **OfficialEndpoint 三因子验证**（v16 引入 / v17 加固）：URL 匹配 + TLS 证书校验 + 响应头检查；通过时给 `confidence_real` 加分，硬规则 cap 放宽（behavioral_invariant 55→70、extraction_weak 65→80）。
+
+### Changed
+- 预检测从 16 层（L0–L17）扩展到 24 层（L0、L0.5、L0.6、L1–L23）；L20–L23 仅 Deep 模式启用。
+- VerdictEngine 接入 OfficialEndpoint，硬规则可基于"已验证官方端点"动态放宽。
+
+---
+
+## [v16.0.0] — 2026-04-26
+
+> 完整 changelog 见 [backend/app/_data/CHANGELOG.md](llm-inspector/backend/app/_data/CHANGELOG.md)。本节为根目录摘要。
+
+### Added
+- **Phase 1 Preflight error taxonomy**：9 个新 `ErrorCode` + LLMResponse 增加 `error_payload` / `http_status` 字段透传上游错误。
+- **Phase 1.5 OfficialEndpoint 三因子检查**（URL + TLS + 响应头）。
+- **Phase 2 分层重试**：5xx / 截断 / JSON 解码失败分级，case 级 remediation rounds，新增 `excluded_from_scoring` 标志。
+- **Phase 3 Weighted ECE + Bradley-Terry 权重拟合**；ScoreCard 新增 `coverage` / `weight_provenance_trace` / `weighted_ece` / `excluded_case_count` 字段。
+- **Phase 4 ModelDiscovery + Real Model Card + Evidence**。
+- **Phase 5 IRT 冷启动先验表**（6 类 × 4 难度）+ 数据集许可证校验 + GPQA / AIME / LiveCodeBench / HumanEval+ / MMLU-Pro / TruthfulQA 入库。
+- **Phase 6 双源 KG 验证**（Wikidata + DBpedia）+ `kg_conflict` / `degraded` 字段。
+- **Phase 7 Prompt 压缩**（LLMLingua-2 轻量版）+ cache key 含 model_name + TokenAuditTracker（JSONL）。
+- **Phase 8 8 种 SSE event** + TraceWriter 标准化 JSONL（preflight / predetect / judge_chain / errors / token_audit）。
+- **Phase 9** Real Model Card UI、toast 多级、移动端断点、risk-badge 样式。
+- **Phase 11 贝叶斯证据加权 VerdictEngine**：5 升 + 5 降对称规则、VerdictReport 输出 `P(fake)` / CI / borderline / inconclusive；`discrimination_audit.py`（Spearman / kappa / discrimination_index）；EWMA 参考更新（stale_after_days=90、discard=180）。
+
+### Fixed (highlights)
+- `fit_weights.py` BT 空输入边界 + `global DIMS` 语法错误。
+- **SSL UNEXPECTED_EOF_WHILE_READING**：adapters 改用 `certifi` CA bundle；`ssl.SSLError` 和 URLError-wrapped SSL 错误归类为 `ssl_error` 并重试。
+- **v16 suite 缺失用例**：`load_cases()` 把 v16 改为复合套件 (v10 + v13 + v15 + v16_test_*)，standard 模式从 39 → 177 cases。
+- **截断响应被判题跳过**：`finish_reason=length` 不再对内容判题方法（constraint_reasoning / semantic 等）自动跳过；只有格式严格判题（exact_match / regex_match）会跳。
+- **DB 路径 CWD 依赖**：`DATABASE_URL` 默认从相对 `./llm_inspector.db` 改为锚定 `backend/_data/` 的绝对路径。
+- **identity_consistency 双重转义**：`r'\\b'`（字面反斜杠 b）→ `r'\b'`（词边界）；之前所有 "Jupiter" / "4" 等 case 一律失败。
+- **identity_consistency 否定检测**：`"I'm not Claude"` 不再被判 `expected='claude'` pass；新增中英文否定模式匹配。
+- **OfficialEndpoint 未接入 VerdictEngine** → 已接入。
+- **PreDetect 异常吞掉 official_endpoint 结果** → 异常路径也保存 fallback 结果。
+
+### Critical regression mitigation
+- **v16 Phase 5 stub-prompt 回归（110 cases）**：`suite_v16_test_comm.json` / `suite_v16_test_nc.json` 当时上线时是占位 prompt（`"GPQA #1"` / `"LCB #1"` 等）而非真题，导致 coding/safety/knowledge/reasoning 全 0% pass。三重缓解：(1) `repo.load_cases("v16")` 复合套件硬钉到 `("v10","v13","v15")`；(2) `seeder._seed_test_cases` 强制 `enabled=False` 禁用任何 stub suite 文件；(3) DB 中已 seed 的 60 行 `v16_test_nc` 全部 `enabled=0`。
+- 回归守卫测试：`backend/tests/test_v16_no_stub_prompts.py`（4 tests，全过）。
+- **Follow-up**：真实 importer（network-aware + license-aware）尚未实现，`v16_test_*` 套件在重启用前必须先重建。
+
+---
+
 ## [v15.0.0] — 2026-04-25
 
 ### Added
